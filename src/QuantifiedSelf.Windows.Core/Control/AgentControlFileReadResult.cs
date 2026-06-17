@@ -7,4 +7,6 @@ public sealed class AgentControlFileReadResult
     public bool WasMalformed { get; init; }
 
     public string? ErrorMessage { get; init; }
+
+    public string? RawText { get; init; }
 }

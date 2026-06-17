@@ -34,19 +34,25 @@ public sealed class DataFlowTests
         Assert.Contains("\"command\": \"Pause\"", raw);
         Assert.Contains("\"desiredState\": \"Paused\"", raw);
 
-        var readResult = await store.ReadAsync(controlPath);
+        var readResult = await store.PeekAsync(controlPath);
         Assert.False(readResult.WasMalformed);
         Assert.NotNull(readResult.Command);
         Assert.Equal(AgentCommandType.Pause, readResult.Command!.Command);
         Assert.Equal(AgentDesiredState.Paused, readResult.Command.DesiredState);
 
         await File.WriteAllTextAsync(controlPath, "{ not json");
-        var malformedResult = await store.ReadAsync(controlPath);
+        var peekResult = await store.PeekAsync(controlPath);
 
-        Assert.True(malformedResult.WasMalformed);
-        Assert.Null(malformedResult.Command);
-        Assert.True(File.Exists(controlPath + ".bad"));
+        Assert.True(peekResult.WasMalformed);
+        Assert.Null(peekResult.Command);
+        Assert.True(File.Exists(controlPath));
+        Assert.False(File.Exists(controlPath + ".bad"));
+
+        var agentReadResult = await store.ReadForAgentAsync(controlPath);
+        Assert.True(agentReadResult.WasMalformed);
+        Assert.Null(agentReadResult.Command);
         Assert.False(File.Exists(controlPath));
+        Assert.True(File.Exists(controlPath + ".bad"));
     }
 
     [Fact]
@@ -71,6 +77,7 @@ public sealed class DataFlowTests
 
         Assert.False(excludedProcessDecision.ShouldWriteSample);
         Assert.True(excludedProcessDecision.ShouldCloseOpenSession);
+        Assert.Contains("process privacy rule", excludedProcessDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
         var maskedDecision = filter.Apply(
             new ForegroundSample
@@ -96,6 +103,8 @@ public sealed class DataFlowTests
 
         Assert.False(excludedTitleDecision.ShouldWriteSample);
         Assert.True(excludedTitleDecision.ShouldCloseOpenSession);
+        Assert.Contains("title privacy rule", excludedTitleDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Secret", excludedTitleDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -111,7 +120,7 @@ public sealed class DataFlowTests
                 SamplingIntervalSeconds = 1,
                 HeartbeatIntervalSeconds = 1,
                 MaskWindowTitles = true,
-                ExcludedProcesses = ["KeePass"],
+                ExcludedProcesses = [],
                 ExcludedTitlePatterns = ["*Secret*"]
             });
 
@@ -121,8 +130,8 @@ public sealed class DataFlowTests
                 new ForegroundSample
                 {
                     SampleTimeUtc = DateTime.UtcNow,
-                    ProcessName = "KeePass",
-                    WindowTitle = "Secret Vault",
+                    ProcessName = "Code",
+                    WindowTitle = "My Secret Notes",
                     ActivityState = "Active"
                 }
             ]));
@@ -136,6 +145,12 @@ public sealed class DataFlowTests
         await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+
+        var healthJson = await File.ReadAllTextAsync(paths.HealthStatePath);
+        var runtimeJson = await File.ReadAllTextAsync(paths.RuntimeStatePath);
+        Assert.DoesNotContain("My Secret Notes", healthJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("My Secret Notes", runtimeJson, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("title privacy rule", healthJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

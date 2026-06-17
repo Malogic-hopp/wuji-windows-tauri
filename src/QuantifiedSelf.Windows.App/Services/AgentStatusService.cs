@@ -76,10 +76,9 @@ public sealed class AgentStatusService
         return DateTime.UtcNow - runtimeState.LastHeartbeatUtc <= staleThreshold;
     }
 
-    public async Task<AgentControlCommand?> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
+    public async Task<AgentControlFileReadResult> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
     {
-        var result = await _controlFileStore.ReadAsync(_paths.AgentControlPath, cancellationToken);
-        return result.Command;
+        return await _controlFileStore.PeekAsync(_paths.AgentControlPath, cancellationToken);
     }
 
     public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -127,7 +126,21 @@ public sealed class AgentStatusService
                 : $"PID {runtimeState.ProcessId}",
             RuntimeState = runtimeState,
             HealthState = healthState,
-            CurrentControlCommandText = currentCommand is null ? null : JsonSerializer.Serialize(currentCommand, JsonSerializationOptions.Default)
+            CurrentControlCommandText = FormatCurrentControlCommand(currentCommand)
         };
+    }
+
+    private static string? FormatCurrentControlCommand(AgentControlFileReadResult result)
+    {
+        if (result.WasMalformed)
+        {
+            return string.IsNullOrWhiteSpace(result.ErrorMessage)
+                ? result.RawText
+                : $"Malformed control file: {result.ErrorMessage}\n{result.RawText}";
+        }
+
+        return result.Command is null
+            ? null
+            : JsonSerializer.Serialize(result.Command, JsonSerializationOptions.Default);
     }
 }

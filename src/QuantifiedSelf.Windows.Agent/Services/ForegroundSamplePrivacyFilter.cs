@@ -13,12 +13,12 @@ public sealed class ForegroundSamplePrivacyFilter
 
         if (IsExcludedProcess(sample.ProcessName, options.ExcludedProcesses))
         {
-            return Excluded($"Excluded process: {sample.ProcessName}");
+            return Excluded($"Excluded by process privacy rule: {sample.ProcessName}", true);
         }
 
         if (IsExcludedTitle(sample.WindowTitle, options.ExcludedTitlePatterns))
         {
-            return Excluded($"Excluded title: {sample.WindowTitle}");
+            return Excluded("Excluded by title privacy rule");
         }
 
         return new ForegroundSamplePrivacyDecision
@@ -37,11 +37,11 @@ public sealed class ForegroundSamplePrivacyFilter
         };
     }
 
-    private static ForegroundSamplePrivacyDecision Excluded(string reason)
+    private static ForegroundSamplePrivacyDecision Excluded(string reason, bool closeOpenSession = true)
     {
         return new ForegroundSamplePrivacyDecision
         {
-            ShouldCloseOpenSession = true,
+            ShouldCloseOpenSession = closeOpenSession,
             Reason = reason
         };
     }

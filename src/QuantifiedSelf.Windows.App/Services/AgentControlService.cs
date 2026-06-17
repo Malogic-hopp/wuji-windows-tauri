@@ -48,10 +48,9 @@ public sealed class AgentControlService
     public Task<AgentCommandResult> ClearHistoryAsync(CancellationToken cancellationToken = default)
         => IssueCommandAsync(AgentCommandType.ClearHistory, null, cancellationToken);
 
-    public async Task<AgentControlCommand?> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
+    public async Task<AgentControlFileReadResult> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
     {
-        var result = await _controlFileStore.ReadAsync(_paths.AgentControlPath, cancellationToken);
-        return result.Command;
+        return await _controlFileStore.PeekAsync(_paths.AgentControlPath, cancellationToken);
     }
 
     private async Task<AgentCommandResult> IssueCommandAsync(

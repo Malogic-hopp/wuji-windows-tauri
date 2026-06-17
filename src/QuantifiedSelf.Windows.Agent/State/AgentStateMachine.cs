@@ -92,7 +92,7 @@ public sealed class AgentStateMachine
 
     public async Task<bool> TickAsync(CancellationToken cancellationToken)
     {
-        var commandRead = await _controlFileStore.ReadAsync(_paths.AgentControlPath, cancellationToken);
+        var commandRead = await _controlFileStore.ReadForAgentAsync(_paths.AgentControlPath, cancellationToken);
         if (commandRead.WasMalformed)
         {
             _logger.LogWarning(

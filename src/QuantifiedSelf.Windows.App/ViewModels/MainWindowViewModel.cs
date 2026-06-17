@@ -279,7 +279,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var processInfo = await _processService.GetAgentProcessInfoAsync(cancellationToken);
             var appSettings = await _settingsService.ReadAppSettingsAsync(cancellationToken);
             var agentOptions = await _settingsService.ReadAgentOptionsAsync(cancellationToken);
-            var currentCommand = await _controlService.ReadCurrentCommandAsync(cancellationToken);
             var dashboardSummary = await _overviewDataService.GetDashboardSummaryAsync(cancellationToken);
             var topApps = await _overviewDataService.GetTopAppsTodayAsync(5, cancellationToken);
             var recentSessions = await _overviewDataService.GetRecentSessionsAsync(5, cancellationToken);
@@ -304,7 +303,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             RuntimeStateJson = Serialize(status.RuntimeState);
             HealthStateJson = Serialize(status.HealthState);
-            ControlCommandJson = currentCommand is null ? "{}" : Serialize(currentCommand);
+            ControlCommandJson = string.IsNullOrWhiteSpace(status.CurrentControlCommandText)
+                ? "{}"
+                : status.CurrentControlCommandText;
             AppSettingsJson = Serialize(appSettings);
             AgentOptionsJson = Serialize(agentOptions);
             StatusMessage = status.IsStale ? "Agent heartbeat is stale" : status.StatusText;

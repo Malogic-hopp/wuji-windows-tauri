@@ -275,21 +275,21 @@
                             <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
                                 <StackPanel>
                                     <TextBlock Text="runtime_state.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding RuntimeStateJson}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
+                                    <TextBox Text="{Binding RuntimeStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
                                 </StackPanel>
                             </Border>
 
                             <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
                                 <StackPanel>
                                     <TextBlock Text="health_state.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding HealthStateJson}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
+                                    <TextBox Text="{Binding HealthStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
                                 </StackPanel>
                             </Border>
 
                             <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
                                 <StackPanel>
                                     <TextBlock Text="agent_control.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding ControlCommandJson}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
+                                    <TextBox Text="{Binding ControlCommandJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
                                 </StackPanel>
                             </Border>
                         </Grid>
@@ -322,14 +322,14 @@
                             <Border Style="{StaticResource CardBorderStyle}" Grid.Row="1" Margin="0,0,12,0">
                                 <StackPanel>
                                     <TextBlock Text="app-settings.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding AppSettingsJson}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="360" />
+                                    <TextBox Text="{Binding AppSettingsJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="360" />
                                 </StackPanel>
                             </Border>
 
                             <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                                 <StackPanel>
                                     <TextBlock Text="windows-agent.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding AgentOptionsJson}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="360" />
+                                    <TextBox Text="{Binding AgentOptionsJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="360" />
                                 </StackPanel>
                             </Border>
                         </Grid>
