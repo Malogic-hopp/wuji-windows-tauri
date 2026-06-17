@@ -1,0 +1,38 @@
+using System.Windows;
+using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Core.Paths;
+using QuantifiedSelf.Windows.Infrastructure.Control;
+using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
+using QuantifiedSelf.Windows.Infrastructure.Settings;
+
+namespace QuantifiedSelf.Windows.App;
+
+public partial class App : Application
+{
+    protected override void OnStartup(StartupEventArgs e)
+    {
+        base.OnStartup(e);
+
+        var paths = new WindowsAgentPaths();
+        paths.EnsureDirectories();
+        var runtimeStateStore = new RuntimeStateStore();
+        var healthStateStore = new AgentHealthStateStore();
+        var controlFileStore = new AgentControlFileStore();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var statusService = new AgentStatusService(paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore);
+        var processService = new AgentProcessService(paths, runtimeStateStore, controlFileStore, NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, controlFileStore, statusService);
+        var overviewDataService = new OverviewDataService(paths);
+        var viewModel = new MainWindowViewModel(processService, controlService, statusService, overviewDataService, settingsService, paths);
+
+        var window = new MainWindow(viewModel);
+        MainWindow = window;
+        window.Show();
+    }
+
+}
