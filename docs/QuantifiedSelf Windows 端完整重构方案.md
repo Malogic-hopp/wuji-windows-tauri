@@ -1876,8 +1876,8 @@ app-settings.json 是 WPF App 配置
 
 ```text
 1. QUANTIFIEDSELF_WINDOWS_AGENT_ROOT 环境变量
-2. %LocalAppData%\QuantifiedSelf\WindowsAgent
-3. Debug / Dev 模式下允许 D:\QuantifiedSelf\WindowsAgent
+2. %LocalAppData%\WUJI\WindowsAgent
+3. Debug / Dev 模式下允许 D:\WUJI\WindowsAgent
 ```
 
 目录结构：
