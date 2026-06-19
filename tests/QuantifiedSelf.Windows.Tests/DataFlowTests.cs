@@ -1,7 +1,9 @@
+using System.IO;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
 using QuantifiedSelf.Windows.Core.Capture;
@@ -224,7 +226,7 @@ public sealed class DataFlowTests
                     new ForegroundSample
                     {
                         SampleTimeUtc = DateTime.UtcNow,
-                        ProcessName = "Code",
+                        ProcessName = "QuantifiedSelf.Windows.App",
                         WindowTitle = "Secret Project Window",
                         IdleSeconds = 7,
                         ActivityState = "Active"
@@ -242,11 +244,19 @@ public sealed class DataFlowTests
         var combinedLogs = string.Join(Environment.NewLine, logger.Messages);
         Assert.Contains("采样成功", combinedLogs);
         Assert.Contains("状态=Running", combinedLogs);
-        Assert.Contains("前台=Code", combinedLogs);
+        Assert.Contains("前台=WUJI", combinedLogs);
+        Assert.DoesNotContain("processName=", combinedLogs, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("idle=7秒", combinedLogs);
         Assert.Contains("sampleId=1", combinedLogs);
         Assert.Contains("已写入数据库", combinedLogs);
         Assert.DoesNotContain("Secret Project Window", combinedLogs, StringComparison.OrdinalIgnoreCase);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT process_name FROM foreground_samples ORDER BY id DESC LIMIT 1;";
+        var storedProcessName = (string?)await command.ExecuteScalarAsync();
+
+        Assert.Equal("QuantifiedSelf.Windows.App", storedProcessName);
     }
 
     [Fact]
@@ -361,6 +371,32 @@ public sealed class DataFlowTests
 
         Assert.Equal("Idle", activityState);
         Assert.Equal(1, idleDurationSeconds);
+    }
+
+    [Fact]
+    public async Task OverviewDataService_MapsSelfAppNamesToProductDisplayNames()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var now = DateTime.Now;
+        await InsertSessionAsync(paths.DatabasePath, now.AddMinutes(-50), now.AddMinutes(-40), "Code", 600, 600, 0, 0, "Closed");
+        await InsertSessionAsync(paths.DatabasePath, now.AddMinutes(-35), now.AddMinutes(-25), "QuantifiedSelf.Windows.Agent", 1200, 1200, 0, 0, "Closed");
+        await InsertSessionAsync(paths.DatabasePath, now.AddMinutes(-20), now.AddMinutes(-10), "QuantifiedSelf.Windows.App", 1800, 1800, 0, 0, "Closed");
+
+        var overviewDataService = new OverviewDataService(paths);
+
+        var topApps = await overviewDataService.GetTopAppsTodayAsync(5);
+        Assert.Equal("WUJI", topApps[0].DisplayName);
+        Assert.Equal("WUJI Agent", topApps[1].DisplayName);
+        Assert.Equal("Code", topApps[2].DisplayName);
+
+        var recentSessions = await overviewDataService.GetRecentSessionsAsync(3);
+        Assert.Equal("WUJI", recentSessions[0].DisplayName);
+        Assert.Equal("WUJI Agent", recentSessions[1].DisplayName);
+        Assert.Equal("Code", recentSessions[2].DisplayName);
     }
 
     [Fact]
