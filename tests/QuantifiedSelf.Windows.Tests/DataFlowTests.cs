@@ -1,7 +1,10 @@
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
+using QuantifiedSelf.Windows.Core.Capture;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
@@ -10,6 +13,7 @@ using QuantifiedSelf.Windows.Infrastructure.Control;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
+using QuantifiedSelf.Windows.Infrastructure.Win32;
 
 namespace QuantifiedSelf.Windows.Tests;
 
@@ -120,21 +124,33 @@ public sealed class DataFlowTests
                 SamplingIntervalSeconds = 1,
                 HeartbeatIntervalSeconds = 1,
                 MaskWindowTitles = true,
+                UseMockCapture = true,
                 ExcludedProcesses = [],
                 ExcludedTitlePatterns = ["*Secret*"]
             });
 
         var stateMachine = CreateStateMachine(
             paths,
-            new QueueForegroundSampleProvider([
-                new ForegroundSample
-                {
-                    SampleTimeUtc = DateTime.UtcNow,
-                    ProcessName = "Code",
-                    WindowTitle = "My Secret Notes",
-                    ActivityState = "Active"
-                }
-            ]));
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Code",
+                        WindowTitle = "My Secret Notes",
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Win32App",
+                        WindowTitle = "Win32 Window",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ])));
 
         await stateMachine.InitializeAsync(CancellationToken.None);
         await Task.Delay(1100);
@@ -151,6 +167,236 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("My Secret Notes", healthJson, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("My Secret Notes", runtimeJson, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("title privacy rule", healthJson, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ForegroundSampleRepository_InsertAsync_SetsInsertedSampleId()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var repository = new ForegroundSampleRepository(paths.DatabasePath);
+        var sample = new ForegroundSample
+        {
+            SampleTimeUtc = DateTime.UtcNow,
+            ProcessName = "Code",
+            WindowTitle = "Window title should not matter here",
+            IdleSeconds = 5,
+            ActivityState = "Active"
+        };
+
+        await repository.InsertAsync(sample);
+
+        Assert.True(sample.Id > 0);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT id FROM foreground_samples ORDER BY id DESC LIMIT 1;";
+        var databaseId = Convert.ToInt64(await command.ExecuteScalarAsync());
+
+        Assert.Equal(databaseId, sample.Id);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_EmitsChineseTerminalSampleLogsWithoutWindowTitle()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                IdleThresholdSeconds = 60,
+                UseMockCapture = true,
+                MaskWindowTitles = false
+            });
+
+        var logger = new TestLogger<AgentStateMachine>();
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Code",
+                        WindowTitle = "Secret Project Window",
+                        IdleSeconds = 7,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            logger);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+
+        var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
+
+        Assert.True(keepRunning);
+        var combinedLogs = string.Join(Environment.NewLine, logger.Messages);
+        Assert.Contains("采样成功", combinedLogs);
+        Assert.Contains("状态=Running", combinedLogs);
+        Assert.Contains("前台=Code", combinedLogs);
+        Assert.Contains("idle=7秒", combinedLogs);
+        Assert.Contains("sampleId=1", combinedLogs);
+        Assert.Contains("已写入数据库", combinedLogs);
+        Assert.DoesNotContain("Secret Project Window", combinedLogs, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_UsesMockCaptureWhenConfigured()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                MaskWindowTitles = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "MockApp",
+                        WindowTitle = "Mock Window",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "RealApp",
+                        WindowTitle = "Real Window",
+                        IdleSeconds = 120,
+                        ActivityState = "Active"
+                    }
+                ])));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+
+        var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
+        Assert.True(keepRunning);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(paths.DatabasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT process_name FROM foreground_samples ORDER BY id DESC LIMIT 1;";
+        var processName = (string?)await command.ExecuteScalarAsync();
+
+        Assert.Equal("MockApp", processName);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_UsesWin32CaptureAndClassifiesIdleSamples()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                IdleThresholdSeconds = 60,
+                UseMockCapture = false,
+                MaskWindowTitles = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "MockApp",
+                        WindowTitle = "Mock Window",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "RealApp",
+                        WindowTitle = "Real Window",
+                        IdleSeconds = 120,
+                        ActivityState = "Active"
+                    }
+                ])));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+
+        var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
+        Assert.True(keepRunning);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(paths.DatabasePath);
+        await using var sampleCommand = connection.CreateCommand();
+        sampleCommand.CommandText = "SELECT activity_state FROM foreground_samples ORDER BY id DESC LIMIT 1;";
+        var activityState = (string?)await sampleCommand.ExecuteScalarAsync();
+
+        await using var sessionCommand = connection.CreateCommand();
+        sessionCommand.CommandText = "SELECT idle_duration_seconds FROM app_sessions ORDER BY id DESC LIMIT 1;";
+        var idleDurationSeconds = Convert.ToInt32(await sessionCommand.ExecuteScalarAsync());
+
+        Assert.Equal("Idle", activityState);
+        Assert.Equal(1, idleDurationSeconds);
+    }
+
+    [Fact]
+    public void AgentDi_CanResolveIdleDetectorAndCapturePipeline()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+
+        var services = new ServiceCollection();
+        services.AddSingleton(paths);
+        services.AddSingleton<RuntimeStateStore>();
+        services.AddSingleton<AgentHealthStateStore>();
+        services.AddSingleton<AgentControlFileStore>();
+        services.AddSingleton<WindowsAgentOptionsStore>();
+        services.AddSingleton<SqliteDatabaseInitializer>(sp => new SqliteDatabaseInitializer(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
+        services.AddSingleton<ForegroundSampleRepository>(sp => new ForegroundSampleRepository(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
+        services.AddSingleton<AppSessionRepository>(sp => new AppSessionRepository(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
+        services.AddSingleton<ForegroundSamplePrivacyFilter>();
+        services.AddSingleton<WindowsIdleDetector>();
+        services.AddSingleton<IIdleDetector, WindowsIdleDetector>();
+        services.AddSingleton<MockForegroundSampleProvider>();
+        services.AddSingleton<Win32ForegroundSampleProvider>();
+        services.AddSingleton<ConfiguredForegroundSampleProvider>();
+        services.AddSingleton<SessionAggregator>();
+        services.AddSingleton<Microsoft.Extensions.Logging.ILogger<AgentStateMachine>>(NullLogger<AgentStateMachine>.Instance);
+        services.AddSingleton<AgentStateMachine>();
+
+        using var provider = services.BuildServiceProvider();
+
+        var idleDetector = provider.GetRequiredService<IIdleDetector>();
+        var capturePipeline = provider.GetRequiredService<ConfiguredForegroundSampleProvider>();
+        var stateMachine = provider.GetRequiredService<AgentStateMachine>();
+
+        Assert.NotNull(idleDetector);
+        Assert.NotNull(capturePipeline);
+        Assert.NotNull(stateMachine);
     }
 
     [Fact]
@@ -190,9 +436,72 @@ public sealed class DataFlowTests
         Assert.Equal(900, topApps[1].ActiveDurationSeconds);
     }
 
+    [Fact]
+    public async Task SqliteDatabaseInitializer_ResetsLegacySchemaToCurrentShape()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+
+        await using (var connection = await SqliteConnectionFactory.OpenAsync(
+            paths.DatabasePath,
+            Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate))
+        {
+            await using var createLegacyForeground = connection.CreateCommand();
+            createLegacyForeground.CommandText =
+                """
+                CREATE TABLE foreground_samples (
+                    sample_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    captured_at TEXT NOT NULL,
+                    window_handle INTEGER NOT NULL,
+                    process_id INTEGER NOT NULL,
+                    process_name TEXT NOT NULL,
+                    executable_path TEXT,
+                    window_title TEXT,
+                    desktop_state TEXT,
+                    is_idle INTEGER NOT NULL,
+                    idle_state TEXT NOT NULL,
+                    idle_duration_ms INTEGER,
+                    capture_status TEXT NOT NULL,
+                    error_code TEXT,
+                    error_message TEXT
+                );
+
+                CREATE TABLE app_sessions (
+                    session_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    process_name TEXT NOT NULL,
+                    app_name TEXT,
+                    start_time TEXT NOT NULL,
+                    end_time TEXT NOT NULL,
+                    duration_ms INTEGER NOT NULL,
+                    active_duration_ms INTEGER NOT NULL DEFAULT 0,
+                    idle_duration_ms INTEGER NOT NULL DEFAULT 0,
+                    unknown_duration_ms INTEGER NOT NULL DEFAULT 0,
+                    is_idle_session INTEGER NOT NULL,
+                    merge_reason TEXT NOT NULL,
+                    session_end_reason TEXT
+                );
+                """;
+
+            await createLegacyForeground.ExecuteNonQueryAsync();
+        }
+
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        await using var verifyConnection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        var foregroundColumns = await GetColumnsAsync(verifyConnection, "foreground_samples");
+        var sessionColumns = await GetColumnsAsync(verifyConnection, "app_sessions");
+
+        Assert.Contains("id", foregroundColumns);
+        Assert.Contains("id", sessionColumns);
+        Assert.DoesNotContain("sample_id", foregroundColumns);
+        Assert.DoesNotContain("session_id", sessionColumns);
+    }
+
     private static AgentStateMachine CreateStateMachine(
         WindowsAgentPaths paths,
-        IForegroundSampleProvider sampleProvider)
+        ConfiguredForegroundSampleProvider sampleProvider,
+        ILogger<AgentStateMachine>? logger = null)
     {
         var runtimeStateStore = new RuntimeStateStore();
         var healthStateStore = new AgentHealthStateStore();
@@ -214,7 +523,7 @@ public sealed class DataFlowTests
             sessionAggregator,
             privacyFilter,
             sampleProvider,
-            NullLogger<AgentStateMachine>.Instance);
+            logger ?? NullLogger<AgentStateMachine>.Instance);
     }
 
     private static async Task InsertSessionAsync(
@@ -277,16 +586,31 @@ public sealed class DataFlowTests
         return Convert.ToInt32(value);
     }
 
-    private sealed class QueueForegroundSampleProvider : IForegroundSampleProvider
+    private static async Task<List<string>> GetColumnsAsync(SqliteConnection connection, string tableName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA table_info({tableName});";
+
+        var columns = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            columns.Add(reader.GetString(1));
+        }
+
+        return columns;
+    }
+
+    private sealed class QueueMockForegroundSampleProvider : MockForegroundSampleProvider
     {
         private readonly Queue<ForegroundSample> _samples;
 
-        public QueueForegroundSampleProvider(IEnumerable<ForegroundSample> samples)
+        public QueueMockForegroundSampleProvider(IEnumerable<ForegroundSample> samples)
         {
             _samples = new Queue<ForegroundSample>(samples);
         }
 
-        public ForegroundSample Capture()
+        public override ForegroundSample Capture()
         {
             if (_samples.Count == 0)
             {
@@ -294,6 +618,77 @@ public sealed class DataFlowTests
             }
 
             return _samples.Dequeue();
+        }
+    }
+
+    private sealed class QueueWin32ForegroundSampleProvider : Win32ForegroundSampleProvider
+    {
+        private readonly Queue<ForegroundSample> _samples;
+
+        public QueueWin32ForegroundSampleProvider(IEnumerable<ForegroundSample> samples)
+            : base(new FixedIdleDetector(0))
+        {
+            _samples = new Queue<ForegroundSample>(samples);
+        }
+
+        public override ForegroundSample Capture()
+        {
+            if (_samples.Count == 0)
+            {
+                throw new InvalidOperationException("No samples left.");
+            }
+
+            return _samples.Dequeue();
+        }
+    }
+
+    private sealed class FixedIdleDetector : IIdleDetector
+    {
+        private readonly int _idleSeconds;
+
+        public FixedIdleDetector(int idleSeconds)
+        {
+            _idleSeconds = idleSeconds;
+        }
+
+        public int GetIdleSeconds()
+        {
+            return _idleSeconds;
+        }
+    }
+
+    private sealed class TestLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state)
+            where TState : notnull
+        {
+            return NoopScope.Instance;
+        }
+
+        public bool IsEnabled(LogLevel logLevel)
+        {
+            return true;
+        }
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            Messages.Add(formatter(state, exception));
+        }
+
+        private sealed class NoopScope : IDisposable
+        {
+            public static NoopScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
         }
     }
 
