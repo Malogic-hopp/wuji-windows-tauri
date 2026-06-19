@@ -1,4 +1,5 @@
 using QuantifiedSelf.Windows.Core.Models;
+using QuantifiedSelf.Windows.Core.Display;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 
@@ -20,11 +21,32 @@ public sealed class OverviewDataService
 
     public Task<IReadOnlyList<AppUsageSummary>> GetTopAppsTodayAsync(int limit = 5, CancellationToken cancellationToken = default)
     {
-        return _queryService.GetTopAppsTodayAsync(limit, cancellationToken);
+        return MapDisplayNamesAsync(_queryService.GetTopAppsTodayAsync(limit, cancellationToken));
     }
 
     public Task<IReadOnlyList<AppSession>> GetRecentSessionsAsync(int limit = 5, CancellationToken cancellationToken = default)
     {
-        return _queryService.GetRecentSessionsAsync(limit, cancellationToken);
+        return MapDisplayNamesAsync(_queryService.GetRecentSessionsAsync(limit, cancellationToken));
+    }
+
+    private static async Task<IReadOnlyList<T>> MapDisplayNamesAsync<T>(Task<IReadOnlyList<T>> sourceTask)
+        where T : class
+    {
+        var items = await sourceTask;
+
+        foreach (var item in items)
+        {
+            switch (item)
+            {
+                case AppUsageSummary usageSummary:
+                    usageSummary.DisplayName = ProductDisplayNameResolver.Resolve(usageSummary.ProcessName);
+                    break;
+                case AppSession session:
+                    session.DisplayName = ProductDisplayNameResolver.Resolve(session.ProcessName);
+                    break;
+            }
+        }
+
+        return items;
     }
 }

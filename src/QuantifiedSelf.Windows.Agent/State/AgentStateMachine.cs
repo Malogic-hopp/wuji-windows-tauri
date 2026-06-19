@@ -1,5 +1,6 @@
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Display;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -386,10 +387,13 @@ public sealed class AgentStateMachine
 
     private void LogSampleCaptured(ForegroundSample sample)
     {
+        var processName = GetSafeProcessName(sample.ProcessName);
+        var displayName = ProductDisplayNameResolver.Resolve(processName);
+
         _logger.LogInformation(
-            "采样成功：状态={State}，前台={ProcessName}，idle={IdleSeconds}秒，sampleId={SampleId}，已写入数据库",
+            "采样成功：状态={State}，前台={DisplayName}，idle={IdleSeconds}秒，sampleId={SampleId}，已写入数据库",
             ActualState,
-            GetSafeProcessName(sample.ProcessName),
+            displayName,
             sample.IdleSeconds,
             sample.Id);
     }

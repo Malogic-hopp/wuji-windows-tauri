@@ -17,6 +17,11 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <AssemblyTitle>WUJI</AssemblyTitle>
+    <Product>WUJI</Product>
+    <Company>WUJI</Company>
+    <AssemblyDescription>WUJI Windows App</AssemblyDescription>
+    <Description>WUJI Windows App</Description>
   </PropertyGroup>
 
 </Project>

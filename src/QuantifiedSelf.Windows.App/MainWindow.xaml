@@ -4,7 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         mc:Ignorable="d"
-        Title="QuantifiedSelf Windows"
+        Title="WUJI 吾迹"
         Width="1280"
         Height="860"
         MinWidth="1100"
@@ -85,8 +85,8 @@
                     </Grid.ColumnDefinitions>
 
                     <StackPanel>
-                        <TextBlock Text="QuantifiedSelf Windows" FontSize="28" FontWeight="Bold" Foreground="White" />
-                        <TextBlock Text="Local agent control center" Margin="0,6,0,0" Foreground="#CBD5E1" FontSize="14" />
+                        <TextBlock Text="WUJI" FontSize="28" FontWeight="Bold" Foreground="White" />
+                        <TextBlock Text="吾迹" Margin="0,6,0,0" Foreground="#CBD5E1" FontSize="14" />
                     </StackPanel>
 
                     <StackPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
@@ -230,7 +230,7 @@
                                                         <DataTemplate>
                                                             <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
                                                                 <StackPanel>
-                                                                    <TextBlock Text="{Binding ProcessName}" FontWeight="SemiBold" />
+                                                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
                                                                     <TextBlock Text="{Binding StartedAtUtc, StringFormat=Start {0:yyyy-MM-dd HH:mm:ss}}" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0" />
                                                                     <TextBlock Text="{Binding TotalDurationSeconds, StringFormat=Total {0} sec}" Foreground="{StaticResource MutedTextBrush}" />
                                                                     <TextBlock Text="{Binding CloseReason, StringFormat=Reason {0}}" Foreground="{StaticResource MutedTextBrush}" />

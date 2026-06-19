@@ -10,6 +10,8 @@ public sealed class AppSession
 
     public string ProcessName { get; set; } = string.Empty;
 
+    public string DisplayName { get; set; } = string.Empty;
+
     public string? WindowTitle { get; set; }
 
     public int TotalDurationSeconds { get; set; }
