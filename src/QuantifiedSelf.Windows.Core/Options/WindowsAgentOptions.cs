@@ -14,6 +14,8 @@ public sealed class WindowsAgentOptions
 
     public int StaleThresholdSeconds { get; set; } = 15;
 
+    public bool UseMockCapture { get; set; }
+
     public bool EnableJsonlJournal { get; set; } = true;
 
     public bool EnableSessionMerge { get; set; } = true;

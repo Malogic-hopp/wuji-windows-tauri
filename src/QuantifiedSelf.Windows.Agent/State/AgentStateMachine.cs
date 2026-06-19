@@ -1,5 +1,6 @@
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
@@ -22,7 +23,7 @@ public sealed class AgentStateMachine
     private readonly ForegroundSampleRepository _foregroundSampleRepository;
     private readonly SessionAggregator _sessionAggregator;
     private readonly ForegroundSamplePrivacyFilter _privacyFilter;
-    private readonly IForegroundSampleProvider _foregroundSampleProvider;
+    private readonly ConfiguredForegroundSampleProvider _foregroundSampleProvider;
     private readonly ILogger<AgentStateMachine> _logger;
 
     private WindowsAgentOptions _options = new();
@@ -43,7 +44,7 @@ public sealed class AgentStateMachine
         ForegroundSampleRepository foregroundSampleRepository,
         SessionAggregator sessionAggregator,
         ForegroundSamplePrivacyFilter privacyFilter,
-        IForegroundSampleProvider foregroundSampleProvider,
+        ConfiguredForegroundSampleProvider foregroundSampleProvider,
         ILogger<AgentStateMachine> logger)
     {
         _paths = paths;
@@ -96,7 +97,7 @@ public sealed class AgentStateMachine
         if (commandRead.WasMalformed)
         {
             _logger.LogWarning(
-                "Malformed control file {ControlPath}: {Error}",
+                "控制文件格式错误：errorCode=MalformedControlFile，path={ControlPath}，message={ErrorMessage}",
                 _paths.AgentControlPath,
                 commandRead.ErrorMessage);
             await PersistAsync(
@@ -117,7 +118,7 @@ public sealed class AgentStateMachine
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to delete control file {ControlPath}", _paths.AgentControlPath);
+                _logger.LogWarning(ex, "删除控制文件失败：path={ControlPath}", _paths.AgentControlPath);
             }
         }
 
@@ -129,7 +130,7 @@ public sealed class AgentStateMachine
         {
             try
             {
-                var sample = _foregroundSampleProvider.Capture();
+                var sample = NormalizeActivityState(_foregroundSampleProvider.Capture(_options), _options);
                 var privacyDecision = _privacyFilter.Apply(sample, _options);
 
                 if (!privacyDecision.ShouldWriteSample)
@@ -140,6 +141,7 @@ public sealed class AgentStateMachine
                     }
 
                     _lastSampleAtUtc = now;
+                    LogPrivacyFiltered(privacyDecision);
                     await PersistAsync(
                         $"Sample excluded: {privacyDecision.Reason ?? sample.ProcessName}",
                         cancellationToken);
@@ -154,14 +156,14 @@ public sealed class AgentStateMachine
                 _lastSampleAtUtc = filteredSample.SampleTimeUtc;
                 _sampleCountSinceStart++;
                 await PersistAsync("Sample captured", cancellationToken);
-                _logger.LogInformation("Sample tick at {Time}", filteredSample.SampleTimeUtc);
+                LogSampleCaptured(filteredSample);
             }
             catch (Exception ex)
             {
                 _captureErrorCount++;
                 _databaseWriteErrorCount++;
                 await PersistAsync($"Sample capture failed: {ex.Message}", cancellationToken, "SampleCaptureFailed");
-                _logger.LogWarning(ex, "Sample capture failed");
+                LogSampleFailed(ex);
             }
         }
 
@@ -333,10 +335,121 @@ public sealed class AgentStateMachine
         await _runtimeStateStore.WriteAsync(_paths.RuntimeStatePath, runtimeState, cancellationToken);
         await _healthStateStore.WriteAsync(_paths.HealthStatePath, healthState, cancellationToken);
 
+        LogPersistedState(message, errorCode);
+    }
+
+    private void LogPersistedState(string message, string? errorCode)
+    {
+        var terminalMessage = GetTerminalStateMessage(message);
+        if (terminalMessage is null)
+        {
+            return;
+        }
+
+        if (errorCode is null)
+        {
+            _logger.LogInformation("{Message}：状态={State}", terminalMessage, ActualState);
+            return;
+        }
+
+        _logger.LogWarning("{Message}：状态={State}，errorCode={ErrorCode}", terminalMessage, ActualState, errorCode);
+    }
+
+    private string? GetTerminalStateMessage(string message)
+    {
+        if (message.StartsWith("Sample excluded:", StringComparison.Ordinal)
+            || message.StartsWith("Sample capture failed:", StringComparison.Ordinal)
+            || string.Equals(message, "Sample captured", StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return message switch
+        {
+            "Agent starting" => "Agent 正在启动",
+            "Agent initialized" => "Agent 已启动",
+            "Heartbeat" or "Paused heartbeat" => "心跳已更新",
+            "Collection paused" when ActualState == AgentActualState.Paused => "已暂停采集：当前窗口不再写入样本，心跳仍继续",
+            "Collection paused" => "正在暂停采集",
+            "Collection resumed" when ActualState == AgentActualState.Running => "已恢复采集：继续写入前台样本",
+            "Collection resumed" => "正在恢复采集",
+            "Agent stopping" when ActualState == AgentActualState.Stopped => "已停止：open session 已关闭",
+            "Agent stopping" => "正在停止：正在关闭 open session",
+            "Agent stopped" => "已停止：open session 已关闭",
+            "Status requested" => "状态查询已处理",
+            "Config reloaded" => "配置已重新加载",
+            _ when message.EndsWith(" accepted", StringComparison.Ordinal) => "命令已接受",
+            _ when message.StartsWith("Malformed control file:", StringComparison.Ordinal) => "控制文件格式错误",
+            _ => "状态已更新"
+        };
+    }
+
+    private void LogSampleCaptured(ForegroundSample sample)
+    {
         _logger.LogInformation(
-            "Persisted state {State} at {Heartbeat} ({Message})",
+            "采样成功：状态={State}，前台={ProcessName}，idle={IdleSeconds}秒，sampleId={SampleId}，已写入数据库",
             ActualState,
-            LastHeartbeatUtc,
-            message);
+            GetSafeProcessName(sample.ProcessName),
+            sample.IdleSeconds,
+            sample.Id);
+    }
+
+    private void LogPrivacyFiltered(ForegroundSamplePrivacyDecision decision)
+    {
+        var reason = decision.Reason ?? string.Empty;
+        if (reason.Contains("title", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("已跳过采样：命中标题隐私规则");
+            return;
+        }
+
+        if (reason.Contains("process", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("已跳过采样：命中进程隐私规则");
+            return;
+        }
+
+        _logger.LogInformation("已跳过采样：命中隐私规则");
+    }
+
+    private void LogSampleFailed(Exception exception)
+    {
+        _logger.LogWarning(
+            "采样失败：采集或写入数据库失败，errorCode=SampleCaptureFailed，message={ErrorMessage}",
+            exception.Message);
+    }
+
+    private static string GetSafeProcessName(string processName)
+    {
+        return string.IsNullOrWhiteSpace(processName) ? "Unknown" : processName.Trim();
+    }
+
+    private static ForegroundSample NormalizeActivityState(ForegroundSample sample, WindowsAgentOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(sample);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (string.Equals(sample.ActivityState, "Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            return sample;
+        }
+
+        var thresholdSeconds = Math.Max(0, options.IdleThresholdSeconds);
+        var normalizedState = sample.IdleSeconds >= thresholdSeconds ? "Idle" : "Active";
+        if (string.Equals(sample.ActivityState, normalizedState, StringComparison.OrdinalIgnoreCase))
+        {
+            return sample;
+        }
+
+        return new ForegroundSample
+        {
+            Id = sample.Id,
+            SampleTimeUtc = sample.SampleTimeUtc,
+            ProcessName = sample.ProcessName,
+            WindowTitle = sample.WindowTitle,
+            ExecutablePath = sample.ExecutablePath,
+            IdleSeconds = sample.IdleSeconds,
+            ActivityState = normalizedState
+        };
     }
 }

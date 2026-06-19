@@ -27,13 +27,13 @@ public sealed class WindowsAgentPaths
         Root = root
             ?? Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_ROOT")
 #if DEBUG
-            ?? (Directory.Exists(@"D:\QuantifiedSelf\WindowsAgent")
-                ? @"D:\QuantifiedSelf\WindowsAgent"
+            ?? (Directory.Exists(@"D:\WUJI\WindowsAgent")
+                ? @"D:\WUJI\WindowsAgent"
                 : null)
 #endif
             ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "QuantifiedSelf",
+                "WUJI",
                 "WindowsAgent");
     }
 

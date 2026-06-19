@@ -2,10 +2,12 @@ using System.Security.Principal;
 using QuantifiedSelf.Windows.Agent;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
+using QuantifiedSelf.Windows.Core.Capture;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 using QuantifiedSelf.Windows.Infrastructure.Control;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
+using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
 
 var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
@@ -23,7 +25,7 @@ catch (AbandonedMutexException)
 
 if (!mutexAcquired)
 {
-    Console.Error.WriteLine("Another QuantifiedSelf.Windows.Agent instance is already running.");
+    Console.Error.WriteLine("Agent 已在运行：当前用户下已有一个 QuantifiedSelf.Windows.Agent 实例。");
     return;
 }
 
@@ -49,7 +51,11 @@ builder.Services.AddSingleton<AppSessionRepository>(sp =>
     return new AppSessionRepository(paths.DatabasePath);
 });
 builder.Services.AddSingleton<ForegroundSamplePrivacyFilter>();
-builder.Services.AddSingleton<IForegroundSampleProvider, MockForegroundSampleProvider>();
+builder.Services.AddSingleton<WindowsIdleDetector>();
+builder.Services.AddSingleton<IIdleDetector, WindowsIdleDetector>();
+builder.Services.AddSingleton<MockForegroundSampleProvider>();
+builder.Services.AddSingleton<Win32ForegroundSampleProvider>();
+builder.Services.AddSingleton<ConfiguredForegroundSampleProvider>();
 builder.Services.AddSingleton<SessionAggregator>();
 builder.Services.AddSingleton<AgentStateMachine>();
 builder.Services.AddHostedService<Worker>();

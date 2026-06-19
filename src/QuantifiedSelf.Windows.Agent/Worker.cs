@@ -16,7 +16,7 @@ public sealed class Worker : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("Agent worker starting");
+        _logger.LogInformation("Agent 进程已启动：开始监听控制命令和采样节拍");
 
         await _stateMachine.InitializeAsync(stoppingToken);
 
@@ -27,7 +27,7 @@ public sealed class Worker : BackgroundService
             var keepRunning = await _stateMachine.TickAsync(stoppingToken);
             if (!keepRunning)
             {
-                _logger.LogInformation("Agent worker stopping after state transition");
+                _logger.LogInformation("Agent 进程已退出：状态机已停止");
                 return;
             }
         }

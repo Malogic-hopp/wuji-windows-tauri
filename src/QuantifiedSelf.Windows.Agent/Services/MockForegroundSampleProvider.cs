@@ -2,12 +2,12 @@ using QuantifiedSelf.Windows.Core.Models;
 
 namespace QuantifiedSelf.Windows.Agent.Services;
 
-public sealed class MockForegroundSampleProvider : IForegroundSampleProvider
+public class MockForegroundSampleProvider : IForegroundSampleProvider
 {
     private readonly string[] _processes = ["Code", "chrome", "devenv", "explorer"];
     private int _index;
 
-    public ForegroundSample Capture()
+    public virtual ForegroundSample Capture()
     {
         var process = _processes[_index / 5 % _processes.Length];
         _index++;

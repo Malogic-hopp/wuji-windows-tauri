@@ -27,6 +27,15 @@ public static class SqliteConnectionFactory
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
 
+        if (mode == SqliteOpenMode.ReadWriteCreate)
+        {
+            var directory = Path.GetDirectoryName(databasePath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+        }
+
         var connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,

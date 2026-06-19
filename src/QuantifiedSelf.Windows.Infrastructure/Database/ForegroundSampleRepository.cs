@@ -47,6 +47,14 @@ public sealed class ForegroundSampleRepository
         command.Parameters.AddWithValue("$activity_state", sample.ActivityState);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var idCommand = connection.CreateCommand();
+        idCommand.CommandText = "SELECT last_insert_rowid();";
+        var sampleId = await idCommand.ExecuteScalarAsync(cancellationToken);
+        if (sampleId is long id)
+        {
+            sample.Id = id;
+        }
     }
 
     private static string ToDbDateTime(DateTime value)
