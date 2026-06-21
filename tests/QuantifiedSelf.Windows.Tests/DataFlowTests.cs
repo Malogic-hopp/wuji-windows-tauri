@@ -1,18 +1,22 @@
+using System.Globalization;
 using System.IO;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Agent.Events;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
 using QuantifiedSelf.Windows.Core.Capture;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Control;
 using QuantifiedSelf.Windows.Infrastructure.Database;
+using QuantifiedSelf.Windows.Infrastructure.Events;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
@@ -111,6 +115,46 @@ public sealed class DataFlowTests
         Assert.True(excludedTitleDecision.ShouldCloseOpenSession);
         Assert.Contains("title privacy rule", excludedTitleDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Secret", excludedTitleDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DiagnosticMessageSanitizer_RedactsWindowsAndUncPaths()
+    {
+        var exception = new InvalidOperationException(
+            @"Failed to open C:\Users\Alice\secrets\db.sqlite and \\server\share\logs\agent.log");
+
+        var message = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(exception);
+
+        Assert.DoesNotContain(@"C:\Users\Alice\secrets\db.sqlite", message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share\logs\agent.log", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<path>", message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentEventPayloadSanitizer_RemovesForbiddenKeys_AndRedactsStringValues()
+    {
+        var payloadJson = AgentEventPayloadSanitizer.CreatePayloadJson(
+            new Dictionary<string, object?>
+            {
+                ["errorCode"] = "SampleWriteFailed",
+                ["exceptionType"] = "InvalidOperationException",
+                ["shortMessage"] = @"Failed at C:\Users\Alice\secrets\db.sqlite",
+                ["windowTitle"] = "Secret Bank Account",
+                ["rawJson"] = "{ secret: true }",
+                ["executablePath"] = @"C:\Users\Alice\AppData\Local\app.exe"
+            },
+            "errorCode",
+            "exceptionType",
+            "shortMessage");
+
+        Assert.NotNull(payloadJson);
+        Assert.Contains("\"errorCode\": \"SampleWriteFailed\"", payloadJson);
+        Assert.Contains("\"exceptionType\": \"InvalidOperationException\"", payloadJson);
+        Assert.Contains("\\u003Cpath\\u003E", payloadJson);
+        Assert.DoesNotContain("Secret Bank Account", payloadJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("rawJson", payloadJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("executablePath", payloadJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"C:\Users\Alice", payloadJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -381,22 +425,834 @@ public sealed class DataFlowTests
         var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
         await initializer.InitializeAsync();
 
-        var now = DateTime.Now;
-        await InsertSessionAsync(paths.DatabasePath, now.AddMinutes(-50), now.AddMinutes(-40), "Code", 600, 600, 0, 0, "Closed");
-        await InsertSessionAsync(paths.DatabasePath, now.AddMinutes(-35), now.AddMinutes(-25), "QuantifiedSelf.Windows.Agent", 1200, 1200, 0, 0, "Closed");
-        await InsertSessionAsync(paths.DatabasePath, now.AddMinutes(-20), now.AddMinutes(-10), "QuantifiedSelf.Windows.App", 1800, 1800, 0, 0, "Closed");
+        var dayStart = DateTime.Now.Date;
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(9), dayStart.AddHours(9).AddMinutes(10), "Code", 600, 600, 0, 0, "Closed");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(10), dayStart.AddHours(10).AddMinutes(20), "QuantifiedSelf.Windows.Agent", 1200, 1200, 0, 0, "Closed");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(11), dayStart.AddHours(11).AddMinutes(30), "QuantifiedSelf.Windows.App", 1800, 1800, 0, 0, "Closed");
 
         var overviewDataService = new OverviewDataService(paths);
 
         var topApps = await overviewDataService.GetTopAppsTodayAsync(5);
+        Assert.Equal(3, topApps.Count);
         Assert.Equal("WUJI", topApps[0].DisplayName);
         Assert.Equal("WUJI Agent", topApps[1].DisplayName);
         Assert.Equal("Code", topApps[2].DisplayName);
 
         var recentSessions = await overviewDataService.GetRecentSessionsAsync(3);
+        Assert.Equal(3, recentSessions.Count);
         Assert.Equal("WUJI", recentSessions[0].DisplayName);
         Assert.Equal("WUJI Agent", recentSessions[1].DisplayName);
         Assert.Equal("Code", recentSessions[2].DisplayName);
+    }
+
+    [Fact]
+    public async Task SqliteDatabaseInitializer_CreatesAgentEventsTableAndIndexes()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+
+        await initializer.InitializeAsync();
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        var columns = await GetColumnsAsync(connection, "agent_events");
+        Assert.Contains("id", columns);
+        Assert.Contains("event_time_utc", columns);
+        Assert.Contains("event_type", columns);
+        Assert.Contains("event_level", columns);
+        Assert.Contains("message", columns);
+        Assert.Contains("payload_json", columns);
+
+        var indexNames = await GetIndexNamesAsync(connection, "agent_events");
+        Assert.Contains("idx_agent_events_time", indexNames);
+        Assert.Contains("idx_agent_events_type", indexNames);
+        Assert.Contains("idx_agent_events_level_time", indexNames);
+    }
+
+    [Fact]
+    public async Task AgentEventRepository_InsertAndGetRecentAsync_UsesStableOrdering()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var repository = new AgentEventRepository(paths.DatabasePath);
+        var eventTime = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc);
+
+        var first = new AgentEvent
+        {
+            EventTimeUtc = eventTime,
+            EventType = AgentEventType.AgentStarted,
+            EventLevel = AgentEventLevel.Info,
+            Message = "First event"
+        };
+
+        var second = new AgentEvent
+        {
+            EventTimeUtc = eventTime,
+            EventType = AgentEventType.AgentStopped,
+            EventLevel = AgentEventLevel.Warning,
+            Message = "Second event"
+        };
+
+        await repository.InsertAsync(first);
+        await repository.InsertAsync(second);
+
+        var recent = await repository.GetRecentAsync(10);
+        Assert.Equal(2, recent.Count);
+        Assert.Equal(second.Id, recent[0].Id);
+        Assert.Equal(first.Id, recent[1].Id);
+        Assert.Equal("Second event", recent[0].Message);
+        Assert.Equal("First event", recent[1].Message);
+    }
+
+    [Fact]
+    public async Task AgentEventRepository_GetRecentErrorsAsync_FiltersToWarningAndAbove()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var repository = new AgentEventRepository(paths.DatabasePath);
+        var eventTime = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc);
+
+        await repository.InsertAsync(new AgentEvent
+        {
+            EventTimeUtc = eventTime.AddMinutes(-3),
+            EventType = AgentEventType.AgentStarted,
+            EventLevel = AgentEventLevel.Info,
+            Message = "Info event"
+        });
+        await repository.InsertAsync(new AgentEvent
+        {
+            EventTimeUtc = eventTime.AddMinutes(-2),
+            EventType = AgentEventType.CaptureFailed,
+            EventLevel = AgentEventLevel.Warning,
+            Message = "Warning event"
+        });
+        await repository.InsertAsync(new AgentEvent
+        {
+            EventTimeUtc = eventTime.AddMinutes(-1),
+            EventType = AgentEventType.CommandFailed,
+            EventLevel = AgentEventLevel.Error,
+            Message = "Error event"
+        });
+
+        var recentErrors = await repository.GetRecentErrorsAsync(10);
+        Assert.Equal(2, recentErrors.Count);
+        Assert.DoesNotContain(recentErrors, x => x.EventLevel == AgentEventLevel.Info);
+        Assert.Equal("Error event", recentErrors[0].Message);
+        Assert.Equal("Warning event", recentErrors[1].Message);
+    }
+
+    [Fact]
+    public async Task DiagnosticsQueryService_ReturnsEmptyListsWhenAgentEventsTableIsEmpty()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var queryService = new DiagnosticsQueryService(paths.DatabasePath);
+        var recentEvents = await queryService.GetRecentEventsAsync();
+        var recentErrors = await queryService.GetRecentErrorsAsync();
+
+        Assert.Empty(recentEvents);
+        Assert.Empty(recentErrors);
+    }
+
+    [Fact]
+    public async Task AgentEventRepository_ReturnsEmptyListsWhenAgentEventsTableIsMissing()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        await using (var connection = await SqliteConnectionFactory.OpenAsync(paths.DatabasePath, Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText = "CREATE TABLE legacy_state (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL);";
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var repository = new AgentEventRepository(paths.DatabasePath);
+        var recentEvents = await repository.GetRecentAsync();
+        var recentErrors = await repository.GetRecentErrorsAsync();
+
+        Assert.Empty(recentEvents);
+        Assert.Empty(recentErrors);
+    }
+
+    [Fact]
+    public async Task AgentEventJournal_WritesJsonLineWithStringEnums()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var journal = new AgentEventJournal(paths);
+        var agentEvent = new AgentEvent
+        {
+            EventTimeUtc = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc),
+            EventType = AgentEventType.CommandDetected,
+            EventLevel = AgentEventLevel.Info,
+            Message = "Command detected",
+            Source = "AgentStateMachine",
+            RequestId = "request-1",
+            ErrorCode = null,
+            ProcessName = "QuantifiedSelf.Windows.Agent",
+            SessionId = 42,
+            PayloadJson = "{\"commandSource\":\"FileFallback\"}"
+        };
+
+        await journal.AppendAsync(agentEvent);
+
+        var journalPath = journal.GetJournalPath(agentEvent.EventTimeUtc);
+        var lines = await File.ReadAllLinesAsync(journalPath);
+        Assert.Single(lines);
+        Assert.Contains("\"eventType\":\"CommandDetected\"", lines[0]);
+        Assert.Contains("\"eventLevel\":\"Info\"", lines[0]);
+        Assert.Contains("\"requestId\":\"request-1\"", lines[0]);
+    }
+
+    [Fact]
+    public async Task AgentEventWriter_ContinuesWhenDatabaseWriteFails()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var badDatabasePath = Path.Combine(paths.Root, "event-db");
+        Directory.CreateDirectory(badDatabasePath);
+
+        var eventRepository = new AgentEventRepository(badDatabasePath);
+        var journal = new AgentEventJournal(paths);
+        var writer = new AgentEventWriter(eventRepository, journal);
+
+        var agentEvent = new AgentEvent
+        {
+            EventTimeUtc = DateTime.UtcNow,
+            EventType = AgentEventType.AgentStarted,
+            EventLevel = AgentEventLevel.Info,
+            Message = "Agent started"
+        };
+
+        await writer.WriteAsync(agentEvent);
+
+        Assert.NotNull(writer.LastEventWriteError);
+        Assert.True(writer.EventWriteErrorCount > 0);
+        Assert.True(File.Exists(journal.GetJournalPath(agentEvent.EventTimeUtc)));
+    }
+
+    [Fact]
+    public async Task AgentEventWriter_ContinuesWhenJournalWriteFails()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        Directory.Delete(paths.LogsDir);
+        await File.WriteAllTextAsync(paths.LogsDir, "blocked");
+
+        var eventRepository = new AgentEventRepository(paths.DatabasePath);
+        var journal = new AgentEventJournal(paths);
+        var writer = new AgentEventWriter(eventRepository, journal);
+
+        var agentEvent = new AgentEvent
+        {
+            EventTimeUtc = DateTime.UtcNow,
+            EventType = AgentEventType.AgentStarted,
+            EventLevel = AgentEventLevel.Info,
+            Message = "Agent started"
+        };
+
+        await writer.WriteAsync(agentEvent);
+
+        Assert.NotNull(writer.LastJournalWriteError);
+        Assert.True(writer.JournalWriteErrorCount > 0);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT COUNT(*) FROM agent_events;";
+        var count = Convert.ToInt32(await command.ExecuteScalarAsync());
+        Assert.Equal(1, count);
+    }
+
+    [Fact]
+    public void AgentEventRateLimiter_SuppressesRepeatedEventsWithinWindow()
+    {
+        var limiter = new AgentEventRateLimiter();
+        var utcNow = new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc);
+
+        for (var i = 0; i < 5; i++)
+        {
+            Assert.True(limiter.ShouldAllow("PrivacyFiltered:Code", utcNow.AddSeconds(i)));
+        }
+
+        Assert.False(limiter.ShouldAllow("PrivacyFiltered:Code", utcNow.AddSeconds(30)));
+        Assert.True(limiter.ShouldAllow("PrivacyFiltered:Other", utcNow.AddSeconds(30)));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesPauseCommandEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3600,
+                HeartbeatIntervalSeconds = 3600,
+                UseMockCapture = true
+            });
+
+        var controlFileStore = new AgentControlFileStore();
+        await controlFileStore.WriteAsync(
+            paths.AgentControlPath,
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.Pause,
+                DesiredState = AgentDesiredState.Paused,
+                RequestId = "pause-1",
+                RequestedBy = "QuantifiedSelf.Windows.App"
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var eventTypes = events.Select(x => x.EventType).ToArray();
+
+        Assert.Contains(AgentEventType.CommandDetected, eventTypes);
+        Assert.Contains(AgentEventType.CommandAccepted, eventTypes);
+        Assert.Contains(AgentEventType.CommandCompleted, eventTypes);
+        Assert.Contains(AgentEventType.AgentPaused, eventTypes);
+
+        var commandDetected = events.Single(x => x.EventType == AgentEventType.CommandDetected);
+        Assert.Equal("pause-1", commandDetected.RequestId);
+        Assert.Contains("\"commandSource\": \"FileFallback\"", commandDetected.PayloadJson ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesResumeAndStopLifecycleEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3600,
+                HeartbeatIntervalSeconds = 3600,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.Pause,
+                DesiredState = AgentDesiredState.Paused,
+                RequestId = "pause-lifecycle"
+            },
+            CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.Resume,
+                DesiredState = AgentDesiredState.Running,
+                RequestId = "resume-lifecycle"
+            },
+            CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.Stop,
+                DesiredState = AgentDesiredState.Stopped,
+                RequestId = "stop-lifecycle"
+            },
+            CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var eventTypes = events.Select(x => x.EventType).ToArray();
+
+        Assert.Contains(AgentEventType.AgentPaused, eventTypes);
+        Assert.Contains(AgentEventType.AgentResumed, eventTypes);
+        Assert.Contains(AgentEventType.AgentStopped, eventTypes);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "resume-lifecycle");
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "stop-lifecycle");
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesConfigReloadedEvent()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3600,
+                HeartbeatIntervalSeconds = 3600,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ReloadConfig,
+                RequestId = "reload-config"
+            },
+            CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var configReloaded = Assert.Single(events.Where(x => x.EventType == AgentEventType.ConfigReloaded));
+
+        Assert.Equal(AgentEventLevel.Info, configReloaded.EventLevel);
+        Assert.Contains("\"actualState\": \"Running\"", configReloaded.PayloadJson ?? string.Empty);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "reload-config");
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesInvalidJsonCommandEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3600,
+                HeartbeatIntervalSeconds = 3600,
+                UseMockCapture = true
+            });
+
+        await File.WriteAllTextAsync(paths.AgentControlPath, "{ not json");
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var invalidJsonEvent = events.Single(x => x.EventType == AgentEventType.CommandInvalidJson);
+        Assert.True(string.IsNullOrWhiteSpace(invalidJsonEvent.RequestId));
+        Assert.Equal("CommandInvalidJson", invalidJsonEvent.ErrorCode);
+        Assert.Contains("\"commandSource\": \"FileFallback\"", invalidJsonEvent.PayloadJson ?? string.Empty);
+        Assert.Contains("\"quarantined\": true", invalidJsonEvent.PayloadJson ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesCommandFailedEventForUnsupportedCommand()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3600,
+                HeartbeatIntervalSeconds = 3600,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = (AgentCommandType)999,
+                RequestId = "bad-command"
+            },
+            CancellationToken.None);
+
+        Assert.False(result.Accepted);
+        Assert.Equal("UnsupportedCommand", result.ErrorCode);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var failedEvent = events.Single(x => x.EventType == AgentEventType.CommandFailed);
+        Assert.Equal("bad-command", failedEvent.RequestId);
+        Assert.Equal("UnsupportedCommand", failedEvent.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesSessionStartedAndClosedEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Code",
+                        WindowTitle = "Workspace",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    },
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow.AddSeconds(2),
+                        ProcessName = "Browser",
+                        WindowTitle = "Browser Window",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter: eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Equal(2, events.Count(x => x.EventType == AgentEventType.SessionStarted));
+        Assert.Equal(1, events.Count(x => x.EventType == AgentEventType.SessionClosed));
+
+        var closedEvent = events.Single(x => x.EventType == AgentEventType.SessionClosed);
+        Assert.Contains("\"closeReason\": \"ProcessChanged\"", closedEvent.PayloadJson ?? string.Empty);
+        Assert.Contains("\"startedAtUtc\":", events.First(x => x.EventType == AgentEventType.SessionStarted).PayloadJson ?? string.Empty);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(2, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesPrivacyFilteredEvents_AndRateLimitsThem()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedTitlePatterns = ["*Secret*"]
+            });
+
+        var samples = Enumerable.Range(0, 6)
+            .Select(_ => new ForegroundSample
+            {
+                SampleTimeUtc = DateTime.UtcNow,
+                ProcessName = "Code",
+                WindowTitle = "My Secret Notes",
+                IdleSeconds = 0,
+                ActivityState = "Active"
+            })
+            .ToArray();
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider(samples),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter: eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        for (var i = 0; i < 6; i++)
+        {
+            await Task.Delay(1100);
+            await stateMachine.TickAsync(CancellationToken.None);
+        }
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var privacyEvents = events.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+
+        Assert.Equal(5, privacyEvents.Count);
+        Assert.All(privacyEvents, x => Assert.Contains("Sample filtered by privacy", x.Message));
+        Assert.All(privacyEvents, x => Assert.DoesNotContain("Secret", x.PayloadJson ?? string.Empty, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("\"ruleType\": \"Title\"", privacyEvents[0].PayloadJson ?? string.Empty);
+        Assert.Contains("\"processName\": \"Code\"", privacyEvents[0].PayloadJson ?? string.Empty);
+        Assert.Contains("\"privacyReason\": \"Excluded by title privacy rule\"", privacyEvents[0].PayloadJson ?? string.Empty);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_RateLimitsPrivacyFilteredEventsByRuleTypeAndProcessName()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = ["KeePass"],
+                ExcludedTitlePatterns = ["*Secret*"]
+            });
+
+        var samples = new[]
+        {
+            new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "Code", WindowTitle = "My Secret Notes", IdleSeconds = 0, ActivityState = "Active" },
+            new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "Code", WindowTitle = "My Secret Notes", IdleSeconds = 0, ActivityState = "Active" },
+            new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "Code", WindowTitle = "My Secret Notes", IdleSeconds = 0, ActivityState = "Active" },
+            new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "Code", WindowTitle = "My Secret Notes", IdleSeconds = 0, ActivityState = "Active" },
+            new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "Code", WindowTitle = "My Secret Notes", IdleSeconds = 0, ActivityState = "Active" },
+            new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "KeePass", WindowTitle = "Vault", IdleSeconds = 0, ActivityState = "Active" }
+        };
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider(samples),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter: eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        for (var i = 0; i < samples.Length; i++)
+        {
+            await Task.Delay(1100);
+            await stateMachine.TickAsync(CancellationToken.None);
+        }
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var privacyEvents = events.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+
+        Assert.Equal(6, privacyEvents.Count);
+        Assert.Equal(5, privacyEvents.Count(x => (x.PayloadJson ?? string.Empty).Contains("\"ruleType\": \"Title\"", StringComparison.Ordinal)));
+        Assert.Equal(1, privacyEvents.Count(x => (x.PayloadJson ?? string.Empty).Contains("\"ruleType\": \"Process\"", StringComparison.Ordinal)));
+        Assert.Contains(privacyEvents, x => (x.PayloadJson ?? string.Empty).Contains("\"processName\": \"KeePass\"", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_WritesCaptureFailedEvents_AndRateLimitsThem()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter: eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+
+        for (var i = 0; i < 6; i++)
+        {
+            await stateMachine.TickAsync(CancellationToken.None);
+        }
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var failedEvents = events.Where(x => x.EventType == AgentEventType.CaptureFailed).ToList();
+
+        Assert.Equal(5, failedEvents.Count);
+        Assert.All(failedEvents, x => Assert.Equal("ForegroundWindowUnavailable", x.ErrorCode));
+        Assert.Contains("Foreground window capture failed", failedEvents[0].Message);
+        Assert.Contains("\"errorCode\": \"ForegroundWindowUnavailable\"", failedEvents[0].PayloadJson ?? string.Empty);
+        Assert.Contains("\"exceptionType\": \"InvalidOperationException\"", failedEvents[0].PayloadJson ?? string.Empty);
+        Assert.Contains("\"shortMessage\": \"No samples left.\"", failedEvents[0].PayloadJson ?? string.Empty);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_SanitizesPathLikeCaptureFailures()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true
+            });
+
+        var throwingProvider = new ConfiguredForegroundSampleProvider(
+            new PathThrowingMockForegroundSampleProvider(),
+            new QueueWin32ForegroundSampleProvider([]));
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            throwingProvider,
+            eventWriter: eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var healthJson = await File.ReadAllTextAsync(paths.HealthStatePath);
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var captureFailed = Assert.Single(events.Where(x => x.EventType == AgentEventType.CaptureFailed));
+
+        Assert.DoesNotContain(@"C:\Users\Alice\secrets\db.sqlite", healthJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share\logs\agent.log", healthJson, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"C:\Users\Alice\secrets\db.sqlite", captureFailed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share\logs\agent.log", captureFailed.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"C:\Users\Alice\secrets\db.sqlite", captureFailed.PayloadJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share\logs\agent.log", captureFailed.PayloadJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DiagnosticsDataService_ReturnsCurrentJournalPathForToday()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var diagnosticsDataService = new DiagnosticsDataService(paths);
+
+        var journalPath = diagnosticsDataService.GetCurrentJournalPath(new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.Equal("agent_events_20260619.jsonl", Path.GetFileName(journalPath));
+        Assert.EndsWith(Path.Combine("logs", "agent_events_20260619.jsonl"), journalPath, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DiagnosticsQueryService_DoesNotParseJsonl()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+        await File.WriteAllTextAsync(
+            Path.Combine(paths.LogsDir, "agent_events_20260619.jsonl"),
+            "{\"eventType\":\"CommandFailed\",\"eventLevel\":\"Error\",\"message\":\"JSONL only\"}");
+
+        var queryService = new DiagnosticsQueryService(paths.DatabasePath);
+        var recentEvents = await queryService.GetRecentEventsAsync();
+        var recentErrors = await queryService.GetRecentErrorsAsync();
+
+        Assert.Empty(recentEvents);
+        Assert.Empty(recentErrors);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_DoesNotWriteHighFrequencySampleOrHeartbeatEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample { SampleTimeUtc = DateTime.UtcNow, ProcessName = "Code", WindowTitle = "One", IdleSeconds = 0, ActivityState = "Active" },
+                    new ForegroundSample { SampleTimeUtc = DateTime.UtcNow.AddSeconds(2), ProcessName = "Code", WindowTitle = "Two", IdleSeconds = 0, ActivityState = "Active" },
+                    new ForegroundSample { SampleTimeUtc = DateTime.UtcNow.AddSeconds(4), ProcessName = "Code", WindowTitle = "Three", IdleSeconds = 0, ActivityState = "Active" }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter: eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        for (var i = 0; i < 3; i++)
+        {
+            await Task.Delay(1100);
+            await stateMachine.TickAsync(CancellationToken.None);
+        }
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+
+        Assert.DoesNotContain(events, x => x.EventType.ToString().Equals("SampleCaptured", StringComparison.Ordinal));
+        Assert.DoesNotContain(events, x => x.EventType.ToString().Equals("Heartbeat", StringComparison.Ordinal));
+        Assert.Equal(1, events.Count(x => x.EventType == AgentEventType.AgentStarted));
+        Assert.Equal(1, events.Count(x => x.EventType == AgentEventType.SessionStarted));
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(3, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
     [Fact]
@@ -414,6 +1270,9 @@ public sealed class DataFlowTests
         services.AddSingleton<SqliteDatabaseInitializer>(sp => new SqliteDatabaseInitializer(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
         services.AddSingleton<ForegroundSampleRepository>(sp => new ForegroundSampleRepository(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
         services.AddSingleton<AppSessionRepository>(sp => new AppSessionRepository(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
+        services.AddSingleton<AgentEventRepository>(sp => new AgentEventRepository(sp.GetRequiredService<WindowsAgentPaths>().DatabasePath));
+        services.AddSingleton<AgentEventJournal>();
+        services.AddSingleton<AgentEventWriter>();
         services.AddSingleton<ForegroundSamplePrivacyFilter>();
         services.AddSingleton<WindowsIdleDetector>();
         services.AddSingleton<IIdleDetector, WindowsIdleDetector>();
@@ -428,10 +1287,12 @@ public sealed class DataFlowTests
 
         var idleDetector = provider.GetRequiredService<IIdleDetector>();
         var capturePipeline = provider.GetRequiredService<ConfiguredForegroundSampleProvider>();
+        var eventWriter = provider.GetRequiredService<AgentEventWriter>();
         var stateMachine = provider.GetRequiredService<AgentStateMachine>();
 
         Assert.NotNull(idleDetector);
         Assert.NotNull(capturePipeline);
+        Assert.NotNull(eventWriter);
         Assert.NotNull(stateMachine);
     }
 
@@ -536,7 +1397,31 @@ public sealed class DataFlowTests
 
     private static AgentStateMachine CreateStateMachine(
         WindowsAgentPaths paths,
+        ConfiguredForegroundSampleProvider sampleProvider)
+    {
+        return CreateStateMachine(
+            paths,
+            sampleProvider,
+            eventWriter: null,
+            logger: null);
+    }
+
+    private static AgentStateMachine CreateStateMachine(
+        WindowsAgentPaths paths,
         ConfiguredForegroundSampleProvider sampleProvider,
+        ILogger<AgentStateMachine>? logger)
+    {
+        return CreateStateMachine(
+            paths,
+            sampleProvider,
+            eventWriter: null,
+            logger: logger);
+    }
+
+    private static AgentStateMachine CreateStateMachine(
+        WindowsAgentPaths paths,
+        ConfiguredForegroundSampleProvider sampleProvider,
+        AgentEventWriter? eventWriter = null,
         ILogger<AgentStateMachine>? logger = null)
     {
         var runtimeStateStore = new RuntimeStateStore();
@@ -547,6 +1432,22 @@ public sealed class DataFlowTests
         var sampleRepository = new ForegroundSampleRepository(paths.DatabasePath);
         var sessionAggregator = new SessionAggregator(new AppSessionRepository(paths.DatabasePath));
         var privacyFilter = new ForegroundSamplePrivacyFilter();
+
+        if (eventWriter is null)
+        {
+            return new AgentStateMachine(
+                paths,
+                runtimeStateStore,
+                healthStateStore,
+                controlFileStore,
+                optionsStore,
+                initializer,
+                sampleRepository,
+                sessionAggregator,
+                privacyFilter,
+                sampleProvider,
+                logger ?? NullLogger<AgentStateMachine>.Instance);
+        }
 
         return new AgentStateMachine(
             paths,
@@ -559,7 +1460,61 @@ public sealed class DataFlowTests
             sessionAggregator,
             privacyFilter,
             sampleProvider,
+            eventWriter,
             logger ?? NullLogger<AgentStateMachine>.Instance);
+    }
+
+    private static async Task<AgentEventWriter> CreateEventWriterAsync(WindowsAgentPaths paths)
+    {
+        paths.EnsureDirectories();
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+        return new AgentEventWriter(new AgentEventRepository(paths.DatabasePath), new AgentEventJournal(paths));
+    }
+
+    private static async Task<List<AgentEvent>> ReadEventsAsync(string databasePath)
+    {
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(databasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                id,
+                event_time_utc,
+                event_type,
+                event_level,
+                message,
+                source,
+                request_id,
+                error_code,
+                process_name,
+                session_id,
+                payload_json
+            FROM agent_events
+            ORDER BY id ASC;
+            """;
+
+        var events = new List<AgentEvent>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            events.Add(new AgentEvent
+            {
+                Id = reader.GetInt64(0),
+                EventTimeUtc = DateTime.Parse(reader.GetString(1), CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                EventType = Enum.Parse<AgentEventType>(reader.GetString(2), ignoreCase: true),
+                EventLevel = Enum.Parse<AgentEventLevel>(reader.GetString(3), ignoreCase: true),
+                Message = reader.GetString(4),
+                Source = reader.IsDBNull(5) ? null : reader.GetString(5),
+                RequestId = reader.IsDBNull(6) ? null : reader.GetString(6),
+                ErrorCode = reader.IsDBNull(7) ? null : reader.GetString(7),
+                ProcessName = reader.IsDBNull(8) ? null : reader.GetString(8),
+                SessionId = reader.IsDBNull(9) ? null : reader.GetInt64(9),
+                PayloadJson = reader.IsDBNull(10) ? null : reader.GetString(10)
+            });
+        }
+
+        return events;
     }
 
     private static async Task InsertSessionAsync(
@@ -637,6 +1592,21 @@ public sealed class DataFlowTests
         return columns;
     }
 
+    private static async Task<List<string>> GetIndexNamesAsync(SqliteConnection connection, string tableName)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA index_list({tableName});";
+
+        var indexNames = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            indexNames.Add(reader.GetString(1));
+        }
+
+        return indexNames;
+    }
+
     private sealed class QueueMockForegroundSampleProvider : MockForegroundSampleProvider
     {
         private readonly Queue<ForegroundSample> _samples;
@@ -654,6 +1624,15 @@ public sealed class DataFlowTests
             }
 
             return _samples.Dequeue();
+        }
+    }
+
+    private sealed class PathThrowingMockForegroundSampleProvider : MockForegroundSampleProvider
+    {
+        public override ForegroundSample Capture()
+        {
+            throw new InvalidOperationException(
+                @"Failed to open C:\Users\Alice\secrets\db.sqlite and \\server\share\logs\agent.log");
         }
     }
 
