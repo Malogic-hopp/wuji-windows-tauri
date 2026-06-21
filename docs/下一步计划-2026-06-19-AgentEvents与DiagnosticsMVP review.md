@@ -1,193 +1,507 @@
-这份计划整体是对的，而且方向很稳：**不是继续堆 UI，而是先把“运行历史、异常原因、命令链路、隐私命中”记录下来**。这和你计划里“让 WUJI 不只‘能采集’，还要‘能解释自己为什么这么运行’”的目标完全一致。
+# 下一步计划审核：Agent Events 与 Diagnostics MVP（2026-06-19）
 
-我主要建议你在现有计划上做几处收紧。
+## 审核范围
+
+本审核文档只针对以下两份文档做对齐审查：
+
+```text
+docs\下一步计划-2026-06-19-AgentEvents与DiagnosticsMVP.md
+docs\QuantifiedSelf Windows 端完整重构方案.md
+```
+
+本审核不再使用《真实采样稳定性手动验收清单》作为依据。  
+原因是当前审核重点不是验证真实采样 MVP 是否通过，而是判断 Agent Events 与 Diagnostics MVP 是否和完整重构方案保持一致，并给出执行层面的修订建议。
+
+## 总体结论
+
+当前《下一步计划：Agent Events 与 Diagnostics MVP》方向正确，可以作为下一阶段执行稿。
+
+它和完整重构方案中的几个核心原则是一致的：
+
+```text
+Agent 是唯一数据写入者
+WPF App 只负责控制和展示
+SQLite 是主数据源
+JSONL 是审计和排错日志
+runtime_state / health_state 是当前态快照
+agent_control.json 是 V0 控制 fallback
+Diagnostics 面向工程诊断
+Dashboard 面向日常使用
+隐私规则必须在 Agent 采集阶段生效
+```
+
+更重要的是，这份计划没有急着进入托盘、安装包、完整 Settings、Named Pipe / gRPC 或复杂图表，而是先补“历史诊断”和“事件审计”。这个优先级和完整重构方案的长期架构是兼容的。
+
+建议保留当前阶段定位：
+
+```text
+从真实采样 MVP 升级到可诊断 MVP
+```
+
+不要把它扩展成产品化阶段。
 
 ---
 
-# 1. 先统一命名：Severity 还是 Level
+## 1. 本计划和完整重构方案的对齐点
 
-你计划里用了：
+### 1.1 Agent Events 属于长期架构，不是临时补丁
 
-```text
-AgentEventSeverity
-severity
-```
-
-之前方案里也可能出现过：
+完整重构方案在数据层和最终技术组合中都明确提到：
 
 ```text
-event_level
-AgentEventLevel
+agent_events_YYYYMMDD.jsonl
+SQLite agent_events 轻量索引
+JSONL 是审计和排错日志
+DiagnosticsView 读取 agent_events 和最近错误
 ```
 
-建议现在就统一，避免后面 SQLite 字段、JSONL 字段、C# 枚举名不一致。
-
-我建议用：
+因此当前计划新增：
 
 ```text
-AgentEventLevel
-event_level
+agent_events 表
+AgentEventRepository
+AgentEventJournal
+AgentEventWriter
+Diagnostics Recent Events / Recent Errors
 ```
 
-枚举：
+不是额外复杂化，而是在补完整方案中本来就预留的诊断层。
 
-```csharp
-public enum AgentEventLevel
-{
-    Debug,
-    Info,
-    Warning,
-    Error,
-    Critical
-}
-```
+### 1.2 暂不做 IPC 是合理的
 
-如果你更喜欢 `Severity` 也可以，但要全项目统一，不要一边叫 `severity`，一边叫 `event_level`。
+完整重构方案里 Named Pipe / gRPC 是 V1 长期主控制通道，但当前项目仍处于 V0/V0.5 阶段，`agent_control.json` fallback 已经能支撑 Pause / Resume / Stop。
 
----
-
-# 2. CommandReceived 的语义要再明确
-
-你计划里有：
+所以本计划暂不做：
 
 ```text
-CommandReceived
-CommandConsumed
-CommandInvalidJson
+Named Pipe / gRPC
+Agent 状态流订阅
+复杂控制响应 UI
 ```
 
-这里容易混乱，因为现在是 file fallback：
-
-```text
-WPF 写 agent_control.json
-Agent 读 agent_control.json
-Agent 执行命令
-```
-
-但根据“Agent 是唯一写 SQLite 的进程”原则，**WPF 不应该直接写 agent_events**。所以建议事件语义按 Agent 视角定义：
+这个取舍是合理的。  
+当前更应该先把 file fallback 命令链路中的关键行为记录下来：
 
 ```text
 CommandDetected
-    Agent 发现 agent_control.json 中存在命令
-
 CommandAccepted
-    Agent 验证命令合法，准备执行
-
 CommandCompleted
-    Agent 执行完成，状态转换完成
-
 CommandFailed
-    Agent 收到命令但执行失败
-
 CommandInvalidJson
-    Agent 读取到坏 JSON，并移动为 .bad
 ```
 
-如果继续用 `CommandReceived / CommandConsumed` 也可以，但我建议至少补上：
+以后迁移到 IPC 时，这套事件语义仍然可复用。
+
+### 1.3 Diagnostics 第一版只读 SQLite 是正确边界
+
+完整重构方案里 WPF App 的职责是读取本地数据并展示，不直接写采集域数据。  
+当前计划要求：
 
 ```text
+Diagnostics 第一版只查 SQLite
+不解析 JSONL
+WPF 只读 agent_events
+```
+
+这是正确边界。  
+JSONL 作为审计文件保留，但第一版不做浏览器，可以避免过早引入：
+
+```text
+文件锁
+大文件分页
+日期切换
+滚动性能
+解析失败兜底
+```
+
+### 1.4 隐私要求与完整重构方案一致
+
+完整重构方案强调：
+
+```text
+隐私规则必须在 Agent 采集阶段生效
+UI 展示层脱敏不能替代 Agent 采集阶段脱敏
+默认开启窗口标题脱敏
+excludedProcesses 命中时不写 foreground_samples 和 app_sessions
+```
+
+当前计划进一步要求：
+
+```text
+不写真实窗口标题到 message / payload_json
+payload_json 白名单
+不写 exception.ToString()
+PrivacyFiltered 只写泛化原因
+CaptureFailed 只写 errorCode / exceptionType / shortMessage
+```
+
+这个方向应保留，而且应作为本阶段硬约束。
+
+---
+
+## 2. 建议收紧的地方
+
+### 2.1 明确 JSONL 开关语义
+
+完整重构方案里同时存在：
+
+```text
+foreground_samples_YYYYMMDD.jsonl
+agent_events_YYYYMMDD.jsonl
+```
+
+当前配置中已有：
+
+```json
+"enableJsonlJournal": true
+```
+
+但下一步计划没有明确这个开关是否同时控制：
+
+```text
+foreground samples JSONL
+agent events JSONL
+```
+
+建议在计划中补充一种明确口径：
+
+```text
+方案 A：
+enableJsonlJournal 同时控制 foreground_samples JSONL 和 agent_events JSONL。
+
+方案 B：
+保留 enableJsonlJournal 控制采样 journal，
+新增 enableAgentEventJournal 控制 agent_events_YYYYMMDD.jsonl。
+```
+
+更推荐方案 B，原因是事件审计和采样流水的用途不同，后续也可能分别打开或关闭。
+
+### 2.2 `CaptureFailed` 的范围需要拆清
+
+当前计划中 `CaptureFailed` 同时可能覆盖：
+
+```text
+Win32 前台窗口读取失败
+采样对象构造失败
+写 foreground_samples 失败
+session 合并或写库失败
+```
+
+这会让 Diagnostics 中的错误过于泛化。
+
+建议二选一：
+
+```text
+方案 A：保留 CaptureFailed，但 errorCode 必须区分阶段
+    ForegroundWindowUnavailable
+    ProcessLookupFailed
+    SampleWriteFailed
+    SessionAggregationFailed
+    SessionWriteFailed
+
+方案 B：拆成更明确的事件类型
+    CaptureFailed
+    SampleWriteFailed
+    SessionWriteFailed
+```
+
+第一版可以选方案 A，改动较小，但必须要求 `error_code` 足够稳定。
+
+### 2.3 `CommandInvalidJson` 需要定义 request_id 为空时的行为
+
+坏 `agent_control.json` 很可能无法解析出：
+
+```text
+requestId
+command
+desiredState
+```
+
+建议补充：
+
+```text
+CommandInvalidJson 的 request_id 允许为空
+event_level = Warning
+error_code = CommandInvalidJson
+message 只写泛化文案
+payload_json 只允许写 quarantined=true / fileKind=agent_control
+不写原始 JSON 内容
+不写完整文件路径
+```
+
+这样既方便测试，也不会因为坏控制文件泄露敏感内容。
+
+### 2.4 `SessionClosed` 应通过 closeReason 表达 ProcessChanged
+
+当前计划中推荐事件范围包含：
+
+```text
+SessionStarted
+SessionClosed
+```
+
+但在 SessionAggregator 接入边界里又提到低成本时可先记录：
+
+```text
+AgentPaused
+AgentStopped
+ProcessChanged
+```
+
+建议不要新增 `ProcessChanged` 事件类型。  
+更推荐统一为：
+
+```text
+SessionClosed
+payload_json.closeReason = ProcessChanged
+```
+
+这样事件类型更收敛，也和现有 `app_sessions.close_reason` 口径一致。
+
+### 2.5 Recent Events 查询需要稳定排序
+
+当前索引建议是：
+
+```sql
+idx_agent_events_time
+idx_agent_events_type
+idx_agent_events_level_time
+```
+
+建议计划里补充 Diagnostics 查询排序：
+
+```sql
+ORDER BY event_time_utc DESC, id DESC
+```
+
+或在实现中直接使用：
+
+```sql
+ORDER BY id DESC
+```
+
+同一个 tick 内可能写入多条事件，只按时间排序可能导致展示顺序不稳定。
+
+### 2.6 明确 SQLite 与 JSONL 是 best-effort 双写
+
+计划已经要求 AgentEventWriter 旁路化，这是对的。  
+建议再明确：
+
+```text
+SQLite agent_events 与 JSONL agent_events_YYYYMMDD.jsonl 不要求强一致。
+AgentEventWriter 是 best-effort 双写。
+SQLite 写失败时，Diagnostics 可能看不到该事件。
+JSONL 写失败时，SQLite 查询仍可展示事件。
+两者都失败时，只记录 lastEventWriteError / lastJournalWriteError 到内存或 health_state，不递归写事件。
+```
+
+这可以避免后续把事件系统实现成采集主链路上的强事务依赖。
+
+### 2.7 Diagnostics 可以展示事件系统自身健康
+
+完整重构方案里 DiagnosticsView 职责包括展示路径和错误。  
+当前计划已经提到可以记录：
+
+```text
+lastEventWriteError
+lastJournalWriteError
+```
+
+建议把它落到 Diagnostics 第一版中：
+
+```text
+事件 SQLite 写入状态
+事件 JSONL 写入状态
+当前 agent_events JSONL 文件路径
+最近一次事件写入错误
+最近一次 journal 写入错误
+```
+
+这不需要复杂 UI，但能回答一个关键问题：
+
+```text
+为什么 Recent Events 没有新事件？
+```
+
+### 2.8 命令事件需要兼容未来 IPC
+
+完整重构方案最终会从 `agent_control.json` 迁移到 Named Pipe / gRPC。  
+当前计划的命令事件不要写死为“文件命令专用语义”。
+
+建议在 `source` 或 `payload_json` 中允许：
+
+```text
+commandSource = FileFallback
+commandSource = NamedPipe
+commandSource = Grpc
+```
+
+第一版实际只写：
+
+```text
+FileFallback
+```
+
+这样以后接 IPC 时不需要重新定义事件体系。
+
+### 2.9 `AgentStarted` 和 `AgentStopped` 建议记录版本与退出原因
+
+完整重构方案中的 runtime_state 建议包含：
+
+```text
+version
+processId
+startedAtUtc
+state
+```
+
+事件中不应写敏感路径，但可以写非敏感运行信息。
+
+建议：
+
+```text
+AgentStarted payload_json:
+    processId
+    version
+    actualState
+
+AgentStopped payload_json:
+    processId
+    actualState
+    stopReason
+```
+
+不要写：
+
+```text
+commandLine
+exePath
+fullUserPath
+```
+
+### 2.10 事件量验收需要量化
+
+当前验收标准中有：
+
+```text
+普通采样不会大量刷 agent_events
+PrivacyFiltered / CaptureFailed 连续触发时不会刷爆 agent_events
+```
+
+建议量化，便于后续手动或自动验收：
+
+```text
+30 分钟正常运行时，agent_events 数量应显著小于 foreground_samples。
+普通采样不应产生 SampleCaptured / Heartbeat 类事件。
+同一 PrivacyFiltered key 连续触发 5 分钟，最多写 5 条。
+同一 CaptureFailed key 连续触发 5 分钟，最多写 5 条。
+```
+
+如果实现采用“每 key 60 秒 1 条”，这些标准自然成立。
+
+---
+
+## 3. 建议调整后的事件范围
+
+建议第一版事件范围保持克制：
+
+```text
+AgentStarted
+AgentStopped
+AgentPaused
+AgentResumed
+
+CommandDetected
+CommandAccepted
 CommandCompleted
 CommandFailed
-```
+CommandInvalidJson
 
-否则 Diagnostics 里只能看到“命令被读到了”，但看不到“命令到底有没有执行完成”。
-
----
-
-# 3. AgentEventWriter 一定要“旁路化”
-
-你的计划里写了：
-
-```text
-AgentEventWriter
-    一次调用同时写 SQLite 和 JSONL
-    失败时不应拖垮采样主循环
-```
-
-这个非常关键。建议实现时明确三条规则：
-
-```text
-1. 写事件失败不能抛到 Agent 主循环
-2. SQLite 写失败时，尽量继续写 JSONL
-3. JSONL 写失败时，不能影响 SQLite 和采样
-```
-
-也就是说，事件系统是“诊断增强”，不是核心采集依赖。
-
-第一版可以这样设计：
-
-```text
-AgentEventWriter.WriteAsync(event)
-    try write SQLite
-    catch 保存 lastEventWriteError 到 health_state 或内存
-
-    try write JSONL
-    catch 保存 lastJournalWriteError 到 health_state 或内存
-
-    永远不让异常向上传播到采集循环
-```
-
-这样更符合长期运行软件的要求。
-
----
-
-# 4. PrivacyFiltered 和 CaptureFailed 必须限流
-
-你的事件范围是合理的，但这两个事件如果不限制，很容易刷爆：
-
-```text
+ConfigReloaded
 PrivacyFiltered
 CaptureFailed
+
+SessionStarted
+SessionClosed
 ```
 
-例如用户一直停留在被排除的应用，3 秒一次采样，一小时就是 1200 条 `PrivacyFiltered`。
-
-建议第一版就加简单限流：
+暂不做：
 
 ```text
-同一 eventType + processName + errorCode / ruleType
-60 秒内最多写 1 条
+HealthChanged
+SampleCaptured
+Heartbeat
+DashboardRefreshed
+普通 UI 刷新
+ProcessChanged 独立事件
 ```
 
-或者更简单：
+其中：
 
 ```text
-每类 PrivacyFiltered 每分钟最多 1 条
-每类 CaptureFailed 每分钟最多 1 条
+ProcessChanged 通过 SessionClosed.closeReason 表达
+Heartbeat 继续由 runtime_state / health_state 表达
+SampleCaptured 继续由 foreground_samples 表达
+HealthChanged 等 health_state 模型稳定后再做
 ```
-
-这样 Diagnostics 能看到问题，又不会污染事件表。
 
 ---
 
-# 5. payload_json 要加“白名单”原则
+## 4. 建议调整后的 payload 白名单
 
-你现在写了：
+建议把白名单分成“通用字段”和“事件专用字段”，实现时更不容易误放敏感内容。
 
-```text
-payload_json 只放非敏感结构化字段
-不要写真实窗口标题
-```
-
-这个方向对，但我建议再明确成白名单，不要靠开发时自觉。
-
-允许写：
+通用允许字段：
 
 ```text
-ruleType
-processName
-sessionId
-durationSeconds
-activeSeconds
-idleSeconds
-closeReason
 requestId
 actualState
 desiredState
 errorCode
+exceptionType
+shortMessage
 ```
 
-不建议写：
+Agent 生命周期允许字段：
+
+```text
+processId
+version
+stopReason
+```
+
+命令事件允许字段：
+
+```text
+command
+commandSource
+accepted
+completed
+requestedBy
+requestedAtUtc
+waitForCompletion
+timeoutMilliseconds
+```
+
+隐私事件允许字段：
+
+```text
+ruleType
+processName
+```
+
+session 事件允许字段：
+
+```text
+sessionId
+durationSeconds
+activeSeconds
+idleSeconds
+unknownSeconds
+closeReason
+```
+
+禁止字段保持不变：
 
 ```text
 windowTitle
@@ -196,215 +510,114 @@ executablePath
 commandLine
 fullUserPath
 exception.ToString()
-```
-
-尤其是 `exception.ToString()`，可能带路径、窗口标题、命令行、用户名。建议只写：
-
-```text
-exceptionType
-errorCode
-shortMessage
-```
-
-完整异常如果以后要写，也应该进本地开发日志，而不是 agent_events 的 payload。
-
----
-
-# 6. SQLite 索引建议再补一个组合索引
-
-你计划里有：
-
-```sql
-idx_agent_events_time
-idx_agent_events_type
-```
-
-建议再加：
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_agent_events_level_time
-ON agent_events(severity, event_time_utc);
-```
-
-如果你改成 `event_level`，就是：
-
-```sql
-CREATE INDEX IF NOT EXISTS idx_agent_events_level_time
-ON agent_events(event_level, event_time_utc);
-```
-
-因为 Diagnostics 很可能经常查：
-
-```sql
-WHERE severity IN ('Warning', 'Error', 'Critical')
-ORDER BY event_time_utc DESC
-LIMIT 10
-```
-
-这个索引会更贴合“最近错误”查询。
-
----
-
-# 7. HealthChanged 先谨慎做
-
-你列了：
-
-```text
-HealthChanged
-```
-
-这个事件有用，但第一版可能不好定义。
-
-如果每次 health_state 写入都记录 `HealthChanged`，会太吵。建议第一版只记录真正的状态变化：
-
-```text
-Healthy -> Warning
-Warning -> Healthy
-Healthy -> Error
-Error -> Healthy
-Running -> Stale
-```
-
-或者先不做 `HealthChanged`，等 health_state 的状态模型更稳定后再加。
-
-我的建议：
-
-```text
-第一版可以暂缓 HealthChanged
-先做 AgentStarted / Stopped / Paused / Resumed / Command / Privacy / Capture / Session
+rawJson
 ```
 
 ---
 
-# 8. SessionStarted / SessionClosed 不要过度侵入聚合器
+## 5. 建议调整后的开发顺序
 
-你计划里已经提醒了：
-
-```text
-SessionStarted / SessionClosed 如果 SessionAggregator 当前不方便返回事件，
-可以先只记录 AgentPaused / AgentStopped / ProcessChanged 等上层事件。
-不要为了事件体系过度重构 session 聚合器。
-```
-
-这个判断很好。
-
-我建议更具体一点：让 `SessionAggregator` 返回一个轻量结果，而不是直接依赖 `AgentEventWriter`。
-
-例如：
-
-```csharp
-public sealed class SessionAggregationResult
-{
-    public long? StartedSessionId { get; init; }
-    public long? ClosedSessionId { get; init; }
-    public string? CloseReason { get; init; }
-}
-```
-
-然后由 `AgentStateMachine` 统一写事件。
-
-这样可以保持：
-
-```text
-SessionAggregator 负责 session 逻辑
-AgentStateMachine 负责事件编排
-AgentEventWriter 负责落地
-```
-
-职责会更干净。
-
----
-
-# 9. Diagnostics 第一版不要解析 JSONL
-
-你的计划里说：
-
-```text
-数据来源优先 SQLite agent_events
-JSONL 暂时作为文件级审计，不一定第一版直接在 UI 中解析
-```
-
-这个决定很好。
-
-第一版 Diagnostics 只查 SQLite：
-
-```text
-Recent Events
-Recent Errors
-```
-
-JSONL 只提供：
-
-```text
-当前 JSONL 文件路径
-打开日志目录按钮
-```
-
-不要第一版就做 JSONL 浏览器，否则会引入文件锁、分页、滚动、日期切换等额外复杂度。
-
----
-
-# 10. 建议把验收标准再加 3 条
-
-你现有验收标准已经不错，我建议补这三条：
-
-```text
-13. AgentEventWriter 写 SQLite 或 JSONL 失败时，Agent 不崩溃
-14. PrivacyFiltered / CaptureFailed 连续触发时不会刷爆 agent_events
-15. Diagnostics 查询事件时，WPF 只读 SQLite，不直接写 agent_events
-```
-
-这三条可以防止事件系统反过来破坏稳定性。
-
----
-
-# 我建议你把计划改成这个执行顺序
-
-你现在计划的顺序是合理的，我只建议微调为：
+当前开发顺序基本合理。  
+建议微调为先让查询和页面空态跑通，再逐步接事件：
 
 ```text
 1. 定义 Core Events 模型
 2. 新增 agent_events 表和索引
 3. 实现 AgentEventRepository
-4. 实现 AgentEventJournal
-5. 实现 AgentEventWriter，要求失败不影响主循环
-6. 先接生命周期事件：AgentStarted / AgentStopped / AgentPaused / AgentResumed
-7. 再接命令事件：CommandDetected / CommandAccepted / CommandCompleted / CommandFailed / CommandInvalidJson
-8. 再接采集与隐私事件：CaptureFailed / PrivacyFiltered，并做限流
-9. 再接 session 事件：SessionStarted / SessionClosed
-10. Diagnostics 查询 SQLite 最近事件 / 最近错误
-11. 补测试
-12. 手动运行 30 分钟看事件量是否合理
+4. 实现 DiagnosticsQueryService 查询最近事件 / 最近错误
+5. Diagnostics 页面先展示空列表 / 无事件状态
+6. 实现 AgentEventJournal
+7. 实现 AgentEventWriter，要求 best-effort 双写且失败不影响主循环
+8. 实现 AgentEventRateLimiter
+9. 接生命周期事件：AgentStarted / AgentStopped / AgentPaused / AgentResumed
+10. 接命令事件：CommandDetected / CommandAccepted / CommandCompleted / CommandFailed / CommandInvalidJson
+11. 接采集与隐私事件：CaptureFailed / PrivacyFiltered，并做限流
+12. 轻量接 session 事件：SessionStarted / SessionClosed
+13. Diagnostics 页面展示事件系统健康、JSONL 路径、Recent Events、Recent Errors
+14. 补测试
+15. 手动运行一段时间，确认事件量合理
 ```
 
-这个顺序比一口气把所有事件接入更稳。
+这样做的好处是：
+
+```text
+Diagnostics 骨架可以更早验证
+每接一种事件都能马上在 UI 看到
+事件落地和事件展示不会等到最后才集成
+```
 
 ---
 
-# 总体评价
+## 6. 建议补充的测试
 
-这份计划可以执行，方向没有问题。我的核心建议是：
-
-```text
-1. 统一 Level / Severity 命名
-2. 增加 CommandCompleted / CommandFailed
-3. 事件写入失败不能影响采集
-4. PrivacyFiltered / CaptureFailed 必须限流
-5. payload_json 采用白名单，严禁真实标题、路径、命令行、完整异常
-6. Diagnostics 第一版只查 SQLite，不解析 JSONL
-7. HealthChanged 可以后置
-```
-
-这样做完以后，WUJI 的阶段会从：
+当前计划中的测试列表已经比较完整。  
+建议额外补充：
 
 ```text
-真实采样 MVP
+AgentEventRepository_ReturnsEventsWithStableOrdering
+AgentEventWriter_ContinuesJournalWhenRepositoryFails
+AgentEventWriter_ContinuesRepositoryWhenJournalFails
+AgentEventWriter_RecordsLastWriteErrorsWithoutRecursiveEvents
+AgentStateMachine_WritesCommandInvalidJsonWithoutRequestId
+AgentStateMachine_WritesCommandSourceForFileFallback
+AgentStateMachine_WritesSessionClosedWithProcessChangedCloseReason
+AgentEventPayloadSanitizer_RemovesForbiddenKeys
+DiagnosticsQueryService_ReturnsEmptyListsWhenAgentEventsTableIsEmpty
+DiagnosticsQueryService_DoesNotParseJsonl
 ```
 
-升级到：
+测试重点仍然是：
 
 ```text
-可诊断 MVP
+事件存在
+事件顺序稳定
+事件量受控
+敏感字段不泄露
+写事件失败不影响主流程
+Diagnostics 只读 SQLite
 ```
 
-这一步非常值得做，而且比现在去做托盘、安装包、IPC 更优先。
+---
+
+## 7. 可以不改的内容
+
+以下内容当前计划已经处理得比较好，不建议再展开：
+
+```text
+不做 Named Pipe / gRPC
+不做托盘
+不做安装包
+不做完整 Settings
+不做 JSONL 浏览器
+不记录普通采样事件
+不记录 Heartbeat 事件
+不让 SessionAggregator 直接依赖 AgentEventWriter
+不让 WPF 写 agent_events
+```
+
+这些克制很重要。  
+如果本阶段范围继续膨胀，容易把“可诊断 MVP”拖成“半个产品化版本”，反而影响稳定性。
+
+---
+
+## 8. 审核结论
+
+这份下一步计划可以执行。  
+它与完整重构方案的大方向一致，而且优先级正确。
+
+建议在执行前补充或修订以下要点：
+
+```text
+1. 明确 agent events JSONL 与 enableJsonlJournal 的配置关系
+2. 拆清 CaptureFailed 的错误阶段或 errorCode 体系
+3. 定义 CommandInvalidJson 在 request_id 为空时的事件形态
+4. 用 SessionClosed.closeReason 表达 ProcessChanged，不新增 ProcessChanged 事件
+5. Recent Events 查询增加稳定排序
+6. 明确 SQLite 与 JSONL 是 best-effort 双写，不要求强一致
+7. Diagnostics 展示事件系统自身健康
+8. 命令事件预留 commandSource，以兼容未来 IPC
+9. AgentStarted / AgentStopped 记录非敏感运行元信息
+10. 将事件量验收标准量化
+```
+
+完成这些调整后，这份计划就可以作为 Agent Events 与 Diagnostics MVP 的开发依据。

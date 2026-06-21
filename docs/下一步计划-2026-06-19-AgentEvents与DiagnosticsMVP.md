@@ -105,6 +105,8 @@ JSONL 浏览器
 8. Diagnostics 面向排错，Dashboard 面向日常使用
 9. Agent 仍然是唯一写入 SQLite 的进程
 10. SessionAggregator 不直接依赖 AgentEventWriter
+11. SQLite agent_events 与 JSONL 是 best-effort 双写，不要求强一致
+12. 命令事件语义要兼容未来 Named Pipe / gRPC
 ```
 
 ## 命名统一
@@ -216,6 +218,32 @@ CommandInvalidJson
     Agent 读到坏 JSON，并将控制文件隔离为 .bad
 ```
 
+`CommandInvalidJson` 需要单独约定：
+
+```text
+request_id 允许为空
+event_level = Warning
+error_code = CommandInvalidJson
+message 只写泛化文案
+payload_json 只允许写 quarantined=true / fileKind=agent_control
+不写原始 JSON 内容
+不写完整文件路径
+```
+
+命令来源需要预留未来 IPC：
+
+```text
+commandSource = FileFallback
+commandSource = NamedPipe
+commandSource = Grpc
+```
+
+第一版实际只写：
+
+```text
+commandSource = FileFallback
+```
+
 Diagnostics 中应该能看出：
 
 ```text
@@ -294,8 +322,21 @@ ON agent_events(event_level, event_time_utc);
 
 ```sql
 WHERE event_level IN ('Warning', 'Error', 'Critical')
-ORDER BY event_time_utc DESC
+ORDER BY event_time_utc DESC, id DESC
 LIMIT 10;
+```
+
+Recent Events / Recent Errors 查询必须稳定排序。  
+推荐：
+
+```sql
+ORDER BY event_time_utc DESC, id DESC
+```
+
+如果实现中事件时间精度不足，也可以直接使用：
+
+```sql
+ORDER BY id DESC
 ```
 
 ### JSONL 文件
@@ -314,26 +355,94 @@ LIMIT 10;
 
 JSONL 只追加，不反复重写。
 
+### JSONL 开关语义
+
+当前配置中已有：
+
+```json
+"enableJsonlJournal": true
+```
+
+完整方案中可能同时存在：
+
+```text
+foreground_samples_YYYYMMDD.jsonl
+agent_events_YYYYMMDD.jsonl
+```
+
+建议不要让一个开关长期同时控制两类不同用途的 journal。  
+第一版推荐新增：
+
+```json
+"enableAgentEventJournal": true
+```
+
+语义：
+
+```text
+enableJsonlJournal
+    控制采样类 JSONL，若未来实现 foreground_samples_YYYYMMDD.jsonl，则使用此开关
+
+enableAgentEventJournal
+    控制 agent_events_YYYYMMDD.jsonl
+```
+
+这样后续可以分别关闭高频采样流水和低频事件审计。
+
 ## payload_json 白名单
 
 `payload_json` 必须采用白名单原则，不靠开发时自觉。
 
-允许写入：
+通用允许字段：
 
 ```text
-ruleType
-processName
-sessionId
-durationSeconds
-activeSeconds
-idleSeconds
-closeReason
 requestId
 actualState
 desiredState
 errorCode
 exceptionType
 shortMessage
+```
+
+Agent 生命周期允许字段：
+
+```text
+processId
+version
+stopReason
+```
+
+命令事件允许字段：
+
+```text
+command
+commandSource
+accepted
+completed
+quarantined
+fileKind
+requestedBy
+requestedAtUtc
+waitForCompletion
+timeoutMilliseconds
+```
+
+隐私事件允许字段：
+
+```text
+ruleType
+processName
+```
+
+session 事件允许字段：
+
+```text
+sessionId
+durationSeconds
+activeSeconds
+idleSeconds
+unknownSeconds
+closeReason
 ```
 
 禁止写入：
@@ -345,6 +454,7 @@ executablePath
 commandLine
 fullUserPath
 exception.ToString()
+rawJson
 ```
 
 尤其不要写完整异常：
@@ -420,6 +530,7 @@ AgentEventWriter
     Agent 侧统一入口
     一次调用尝试写 SQLite 和 JSONL
     写事件失败不向采样主循环传播异常
+    暴露最近一次 SQLite / JSONL 写入错误状态
 
 AgentEventRateLimiter
     对 PrivacyFiltered / CaptureFailed 做低成本限流
@@ -436,6 +547,16 @@ AgentEventRateLimiter
 3. 写 JSONL 失败时，不影响 SQLite 和采样主循环
 4. SQLite 和 JSONL 都失败，也不能让异常冒泡到 TickAsync
 5. 可以把 lastEventWriteError / lastJournalWriteError 记录到内存或 health_state，但不要递归写事件
+```
+
+这是一种 best-effort 双写：
+
+```text
+SQLite agent_events 与 JSONL agent_events_YYYYMMDD.jsonl 不要求强一致
+SQLite 写失败时，Diagnostics 可能看不到该事件
+JSONL 写失败时，SQLite 查询仍可展示事件
+两者都失败时，只记录 lastEventWriteError / lastJournalWriteError
+不要为了记录“事件写入失败”再递归写 agent_events
 ```
 
 伪代码：
@@ -485,8 +606,18 @@ AgentEventWriter
 ```text
 AgentPaused
 AgentStopped
-ProcessChanged
+SessionClosed
 ```
+
+不要新增独立的 `ProcessChanged` 事件类型。  
+进程变化统一表达为：
+
+```text
+event_type = SessionClosed
+payload_json.closeReason = ProcessChanged
+```
+
+这样事件口径和现有 `app_sessions.close_reason` 保持一致。
 
 不要为了事件体系过度重构 session 聚合器。
 
@@ -497,6 +628,7 @@ ProcessChanged
 ```text
 AgentStateMachine.InitializeAsync
     AgentStarted
+    payload_json: processId / version / actualState
 
 TransitionToPausedAsync
     AgentPaused
@@ -508,6 +640,7 @@ TransitionToRunningAsync
 TransitionToStoppedAsync
     AgentStopped
     SessionClosed（如能拿到结果）
+    payload_json: processId / actualState / stopReason
 
 TickAsync 发现控制命令
     CommandDetected
@@ -538,6 +671,26 @@ SessionAggregator 开启 / 关闭 session
     SessionClosed（如能轻量接入）
 ```
 
+`CaptureFailed` 第一版可以保留为单一事件类型，但 `error_code` 必须区分失败阶段。  
+建议稳定 errorCode：
+
+```text
+ForegroundWindowUnavailable
+ProcessLookupFailed
+SampleWriteFailed
+SessionAggregationFailed
+SessionWriteFailed
+UnknownCaptureError
+```
+
+如果后续 Diagnostics 中发现过于泛化，再拆成：
+
+```text
+CaptureFailed
+SampleWriteFailed
+SessionWriteFailed
+```
+
 ## Diagnostics 页面增强
 
 当前 Diagnostics 已能展示：
@@ -553,7 +706,11 @@ agent_control.json
 ```text
 Recent Events
 Recent Errors
+事件 SQLite 写入状态
+事件 JSONL 写入状态
 当前 JSONL 文件路径
+最近一次事件 SQLite 写入错误
+最近一次事件 JSONL 写入错误
 打开日志目录按钮
 ```
 
@@ -576,6 +733,15 @@ Recent Events / Recent Errors
 
 JSONL
     第一版只显示路径或提供打开日志目录，不在 UI 中解析
+```
+
+Diagnostics 需要能回答：
+
+```text
+为什么 Recent Events 没有新事件？
+事件 SQLite 是否写入失败？
+事件 JSONL 是否写入失败？
+当前审计文件在哪里？
 ```
 
 不要第一版做 JSONL 浏览器，避免引入：
@@ -638,6 +804,13 @@ JSONL
 16. AgentEventWriter 写 SQLite 或 JSONL 失败时，Agent 不崩溃
 17. Diagnostics 查询事件时，WPF 只读 SQLite，不直接写 agent_events
 18. foreground_samples / app_sessions 原有行为不回归
+19. CommandInvalidJson 在 request_id 为空时仍能写事件
+20. 命令事件包含 commandSource=FileFallback
+21. Recent Events / Recent Errors 排序稳定
+22. 30 分钟正常运行时，agent_events 数量显著小于 foreground_samples
+23. 普通采样不产生 SampleCaptured / Heartbeat 类事件
+24. 同一 PrivacyFiltered key 连续触发 5 分钟，最多写 5 条
+25. 同一 CaptureFailed key 连续触发 5 分钟，最多写 5 条
 ```
 
 ## 推荐测试
@@ -654,11 +827,18 @@ AgentEventRateLimiter_SuppressesRepeatedPrivacyEvents
 AgentStateMachine_WritesLifecycleEvents
 AgentStateMachine_WritesCommandEvents
 AgentStateMachine_WritesCommandInvalidJsonEvent
+AgentStateMachine_WritesCommandInvalidJsonWithoutRequestId
+AgentStateMachine_WritesCommandSourceForFileFallback
 AgentStateMachine_WritesPrivacyFilteredEventWithoutWindowTitle
 AgentStateMachine_WritesCaptureFailedEventWithoutSensitivePayload
+AgentStateMachine_WritesSessionClosedWithProcessChangedCloseReason
 AgentStateMachine_DoesNotWriteEventForEverySample
+AgentEventPayloadSanitizer_RemovesForbiddenKeys
 DiagnosticsQueryService_ReturnsRecentEvents
 DiagnosticsQueryService_ReturnsRecentErrors
+DiagnosticsQueryService_ReturnsEventsWithStableOrdering
+DiagnosticsQueryService_ReturnsEmptyListsWhenAgentEventsTableIsEmpty
+DiagnosticsQueryService_DoesNotParseJsonl
 ```
 
 重点测试：
@@ -679,20 +859,22 @@ JSON 枚举为字符串
 1. 定义 Core Events 模型
 2. 新增 agent_events 表和索引
 3. 实现 AgentEventRepository
-4. 实现 AgentEventJournal
-5. 实现 AgentEventWriter，要求失败不影响主循环
-6. 实现 AgentEventRateLimiter
-7. 先接生命周期事件：AgentStarted / AgentStopped / AgentPaused / AgentResumed
-8. 再接命令事件：CommandDetected / CommandAccepted / CommandCompleted / CommandFailed / CommandInvalidJson
-9. 再接采集与隐私事件：CaptureFailed / PrivacyFiltered，并做限流
-10. 再轻量接 session 事件：SessionStarted / SessionClosed
-11. 增加 Diagnostics 查询服务
-12. Diagnostics 页面展示 Recent Events / Recent Errors
-13. 补测试
-14. 手动运行 30 分钟，确认事件量合理
+4. 实现 Diagnostics 查询服务：Recent Events / Recent Errors
+5. Diagnostics 页面先展示空列表 / 无事件状态
+6. 实现 AgentEventJournal
+7. 实现 AgentEventWriter，要求 best-effort 双写且失败不影响主循环
+8. 实现 AgentEventRateLimiter
+9. 先接生命周期事件：AgentStarted / AgentStopped / AgentPaused / AgentResumed
+10. 再接命令事件：CommandDetected / CommandAccepted / CommandCompleted / CommandFailed / CommandInvalidJson
+11. 再接采集与隐私事件：CaptureFailed / PrivacyFiltered，并做限流
+12. 再轻量接 session 事件：SessionStarted / SessionClosed
+13. Diagnostics 页面展示事件系统健康、JSONL 路径、Recent Events / Recent Errors
+14. 补测试
+15. 手动运行 30 分钟，确认事件量合理
 ```
 
-这个顺序比一次性把所有事件都接入更稳。
+这个顺序比一次性把所有事件都接入更稳。  
+先让 Diagnostics 空态和查询骨架跑通，可以保证每接入一种事件，都能马上在 UI 中验证。
 
 ## 之后再做什么
 
@@ -737,3 +919,25 @@ Diagnostics 可视化
 ```
 
 这一步比托盘、安装包、IPC 更优先。
+
+
+阶段 1：事件基础设施
+Core Events 模型
+agent_events 表和索引
+AgentEventRepository
+DiagnosticsQueryService
+Diagnostics 空态
+
+阶段 2：事件写入链路
+AgentEventJournal
+AgentEventWriter
+AgentEventRateLimiter
+生命周期事件
+命令事件
+
+阶段 3：诊断完善
+PrivacyFiltered / CaptureFailed
+轻量 session 事件
+Diagnostics Recent Events / Recent Errors
+事件系统健康状态
+测试和 30 分钟手动验收
