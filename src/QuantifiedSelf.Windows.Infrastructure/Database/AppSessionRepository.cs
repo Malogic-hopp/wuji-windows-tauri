@@ -45,7 +45,7 @@ public sealed class AppSessionRepository
         return ReadSession(reader);
     }
 
-    public async Task StartSessionAsync(
+    public async Task<AppSession> StartSessionAsync(
         ForegroundSample sample,
         int deltaSeconds = 0,
         CancellationToken cancellationToken = default)
@@ -89,14 +89,39 @@ public sealed class AppSessionRepository
         command.Parameters.AddWithValue("$unknown_duration_seconds", GetDurationDelta(sample, deltaSeconds, "Unknown"));
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        await using var idCommand = connection.CreateCommand();
+        idCommand.CommandText = "SELECT last_insert_rowid();";
+        var sessionId = await idCommand.ExecuteScalarAsync(cancellationToken);
+        var id = sessionId is long insertedId ? insertedId : 0;
+
+        return new AppSession
+        {
+            Id = id,
+            StartedAtUtc = sample.SampleTimeUtc,
+            EndedAtUtc = null,
+            ProcessName = sample.ProcessName,
+            WindowTitle = sample.WindowTitle,
+            TotalDurationSeconds = deltaSeconds,
+            ActiveDurationSeconds = GetDurationDelta(sample, deltaSeconds, "Active"),
+            IdleDurationSeconds = GetDurationDelta(sample, deltaSeconds, "Idle"),
+            UnknownDurationSeconds = GetDurationDelta(sample, deltaSeconds, "Unknown"),
+            CloseReason = "Open"
+        };
     }
 
-    public async Task ExtendOpenSessionAsync(
+    public async Task<AppSession?> ExtendOpenSessionAsync(
         ForegroundSample sample,
         int deltaSeconds = 0,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(sample);
+
+        var openSession = await GetOpenSessionAsync(cancellationToken);
+        if (openSession is null)
+        {
+            return null;
+        }
 
         await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(_databasePath, cancellationToken);
         await using var command = connection.CreateCommand();
@@ -125,10 +150,23 @@ public sealed class AppSessionRepository
         command.Parameters.AddWithValue("$unknown_delta", GetDurationDelta(sample, deltaSeconds, "Unknown"));
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        openSession.WindowTitle = sample.WindowTitle;
+        openSession.TotalDurationSeconds += deltaSeconds;
+        openSession.ActiveDurationSeconds += GetDurationDelta(sample, deltaSeconds, "Active");
+        openSession.IdleDurationSeconds += GetDurationDelta(sample, deltaSeconds, "Idle");
+        openSession.UnknownDurationSeconds += GetDurationDelta(sample, deltaSeconds, "Unknown");
+        return openSession;
     }
 
-    public async Task CloseOpenSessionAsync(string closeReason, CancellationToken cancellationToken = default)
+    public async Task<AppSession?> CloseOpenSessionAsync(string closeReason, CancellationToken cancellationToken = default)
     {
+        var openSession = await GetOpenSessionAsync(cancellationToken);
+        if (openSession is null)
+        {
+            return null;
+        }
+
         await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(_databasePath, cancellationToken);
         await using var command = connection.CreateCommand();
         command.CommandText =
@@ -150,6 +188,10 @@ public sealed class AppSessionRepository
         command.Parameters.AddWithValue("$close_reason", closeReason);
 
         await command.ExecuteNonQueryAsync(cancellationToken);
+
+        openSession.EndedAtUtc = DateTime.UtcNow;
+        openSession.CloseReason = closeReason;
+        return openSession;
     }
 
     private static AppSession ReadSession(SqliteDataReader reader)

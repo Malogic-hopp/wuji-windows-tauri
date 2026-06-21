@@ -18,6 +18,8 @@ public sealed class WindowsAgentOptions
 
     public bool EnableJsonlJournal { get; set; } = true;
 
+    public bool EnableAgentEventJournal { get; set; } = true;
+
     public bool EnableSessionMerge { get; set; } = true;
 
     public bool MaskWindowTitles { get; set; } = true;

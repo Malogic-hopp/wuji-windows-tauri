@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.App.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -23,6 +24,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AgentControlService _controlService;
     private readonly AgentStatusService _statusService;
     private readonly OverviewDataService _overviewDataService;
+    private readonly DiagnosticsDataService _diagnosticsDataService;
     private readonly SettingsService _settingsService;
     private readonly WindowsAgentPaths _paths;
     private readonly DispatcherTimer _refreshTimer;
@@ -49,6 +51,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _appSettingsJson = "{}";
     private string _agentOptionsJson = "{}";
     private string _agentProcessText = "-";
+    private string _eventWriterStatusText = "SQLite writer: unknown";
+    private string _journalWriterStatusText = "JSONL writer: unknown";
+    private string _currentJournalPathText = "-";
+    private string _lastEventWriteErrorText = "None";
+    private string _lastJournalWriteErrorText = "None";
+    private string _currentSessionIdText = "-";
     private string _statusMessage = "Ready";
     private string _dataRootText = "-";
 
@@ -57,6 +65,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AgentControlService controlService,
         AgentStatusService statusService,
         OverviewDataService overviewDataService,
+        DiagnosticsDataService diagnosticsDataService,
         SettingsService settingsService,
         WindowsAgentPaths paths)
     {
@@ -64,6 +73,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _controlService = controlService;
         _statusService = statusService;
         _overviewDataService = overviewDataService;
+        _diagnosticsDataService = diagnosticsDataService;
         _settingsService = settingsService;
         _paths = paths;
 
@@ -74,6 +84,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
         OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = 2);
         OpenDataFolderCommand = new RelayCommand(OpenDataFolder);
+        OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
 
         _refreshTimer = new DispatcherTimer
         {
@@ -96,11 +107,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public ICommand OpenDataFolderCommand { get; }
 
+    public ICommand OpenLogsFolderCommand { get; }
+
     public ObservableCollection<string> Messages { get; } = new();
 
     public ObservableCollection<AppUsageSummary> TopApps { get; } = new();
 
     public ObservableCollection<AppSession> RecentSessions { get; } = new();
+
+    public ObservableCollection<AgentEvent> RecentEvents { get; } = new();
+
+    public ObservableCollection<AgentEvent> RecentErrors { get; } = new();
 
     public string AgentStatusText
     {
@@ -232,6 +249,42 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _agentProcessText, value);
     }
 
+    public string EventWriterStatusText
+    {
+        get => _eventWriterStatusText;
+        private set => SetProperty(ref _eventWriterStatusText, value);
+    }
+
+    public string JournalWriterStatusText
+    {
+        get => _journalWriterStatusText;
+        private set => SetProperty(ref _journalWriterStatusText, value);
+    }
+
+    public string CurrentJournalPathText
+    {
+        get => _currentJournalPathText;
+        private set => SetProperty(ref _currentJournalPathText, value);
+    }
+
+    public string LastEventWriteErrorText
+    {
+        get => _lastEventWriteErrorText;
+        private set => SetProperty(ref _lastEventWriteErrorText, value);
+    }
+
+    public string LastJournalWriteErrorText
+    {
+        get => _lastJournalWriteErrorText;
+        private set => SetProperty(ref _lastJournalWriteErrorText, value);
+    }
+
+    public string CurrentSessionIdText
+    {
+        get => _currentSessionIdText;
+        private set => SetProperty(ref _currentSessionIdText, value);
+    }
+
     public string StatusMessage
     {
         get => _statusMessage;
@@ -282,6 +335,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var dashboardSummary = await _overviewDataService.GetDashboardSummaryAsync(cancellationToken);
             var topApps = await _overviewDataService.GetTopAppsTodayAsync(5, cancellationToken);
             var recentSessions = await _overviewDataService.GetRecentSessionsAsync(5, cancellationToken);
+            var recentEvents = await _diagnosticsDataService.GetRecentEventsAsync(20, cancellationToken);
+            var recentErrors = await _diagnosticsDataService.GetRecentErrorsAsync(10, cancellationToken);
+            var currentJournalPath = _diagnosticsDataService.GetCurrentJournalPath(DateTime.UtcNow);
 
             _appSettings = appSettings;
             _agentOptions = agentOptions;
@@ -300,6 +356,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 : processInfo.StartedAtUtc.HasValue
                     ? $"PID {processInfo.ProcessId}, started {processInfo.StartedAtUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
                     : $"PID {processInfo.ProcessId}, started unknown";
+            EventWriterStatusText = (status.HealthState?.EventWriteErrorCount ?? 0) > 0
+                ? $"SQLite writer degraded ({status.HealthState?.EventWriteErrorCount ?? 0} errors)"
+                : "SQLite writer healthy";
+            JournalWriterStatusText = (status.HealthState?.JournalWriteErrorCount ?? 0) > 0
+                ? $"JSONL writer degraded ({status.HealthState?.JournalWriteErrorCount ?? 0} errors)"
+                : "JSONL writer healthy";
+            CurrentJournalPathText = currentJournalPath;
+            LastEventWriteErrorText = status.HealthState?.LastEventWriteError is null
+                ? "None"
+                : $"{status.HealthState?.LastEventWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastEventWriteError}";
+            LastJournalWriteErrorText = status.HealthState?.LastJournalWriteError is null
+                ? "None"
+                : $"{status.HealthState?.LastJournalWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastJournalWriteError}";
+            CurrentSessionIdText = status.HealthState?.CurrentSessionId?.ToString() ?? "-";
 
             RuntimeStateJson = Serialize(status.RuntimeState);
             HealthStateJson = Serialize(status.HealthState);
@@ -319,6 +389,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             ReplaceCollection(TopApps, topApps);
             ReplaceCollection(RecentSessions, recentSessions);
+            ReplaceCollection(RecentEvents, recentEvents);
+            ReplaceCollection(RecentErrors, recentErrors);
             Messages.Clear();
             if (status.IsStale)
             {
@@ -466,12 +538,22 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void OpenDataFolder()
     {
+        OpenFolder(_paths.Root);
+    }
+
+    private void OpenLogsFolder()
+    {
+        OpenFolder(_paths.LogsDir);
+    }
+
+    private void OpenFolder(string folderPath)
+    {
         try
         {
             Process.Start(new ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = _paths.Root,
+                Arguments = folderPath,
                 UseShellExecute = true
             });
         }

@@ -12,7 +12,7 @@ public sealed class SessionAggregator
         _sessionRepository = sessionRepository;
     }
 
-    public async Task HandleSampleAsync(
+    public async Task<SessionAggregationResult> HandleSampleAsync(
         ForegroundSample sample,
         int deltaSeconds,
         CancellationToken cancellationToken = default)
@@ -22,22 +22,36 @@ public sealed class SessionAggregator
         var openSession = await _sessionRepository.GetOpenSessionAsync(cancellationToken);
         if (openSession is null)
         {
-            await _sessionRepository.StartSessionAsync(sample, deltaSeconds, cancellationToken);
-            return;
+            var startedSession = await _sessionRepository.StartSessionAsync(sample, deltaSeconds, cancellationToken);
+            return new SessionAggregationResult
+            {
+                StartedSession = startedSession
+            };
         }
 
         if (string.Equals(openSession.ProcessName, sample.ProcessName, StringComparison.OrdinalIgnoreCase))
         {
             await _sessionRepository.ExtendOpenSessionAsync(sample, deltaSeconds, cancellationToken);
-            return;
+            return new SessionAggregationResult();
         }
 
-        await _sessionRepository.CloseOpenSessionAsync("ProcessChanged", cancellationToken);
-        await _sessionRepository.StartSessionAsync(sample, deltaSeconds, cancellationToken);
+        var closedSession = await _sessionRepository.CloseOpenSessionAsync("ProcessChanged", cancellationToken);
+        var started = await _sessionRepository.StartSessionAsync(sample, deltaSeconds, cancellationToken);
+        return new SessionAggregationResult
+        {
+            ClosedSession = closedSession,
+            StartedSession = started,
+            CloseReason = "ProcessChanged"
+        };
     }
 
-    public Task CloseOpenSessionAsync(string reason, CancellationToken cancellationToken = default)
+    public async Task<SessionAggregationResult> CloseOpenSessionAsync(string reason, CancellationToken cancellationToken = default)
     {
-        return _sessionRepository.CloseOpenSessionAsync(reason, cancellationToken);
+        var closedSession = await _sessionRepository.CloseOpenSessionAsync(reason, cancellationToken);
+        return new SessionAggregationResult
+        {
+            ClosedSession = closedSession,
+            CloseReason = reason
+        };
     }
 }

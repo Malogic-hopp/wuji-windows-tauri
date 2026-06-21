@@ -27,4 +27,16 @@ public sealed class AgentHealthState
     public int CaptureErrorCount { get; set; }
 
     public long? CurrentSessionId { get; set; }
+
+    public int EventWriteErrorCount { get; set; }
+
+    public int JournalWriteErrorCount { get; set; }
+
+    public string? LastEventWriteError { get; set; }
+
+    public string? LastJournalWriteError { get; set; }
+
+    public DateTime? LastEventWriteErrorUtc { get; set; }
+
+    public DateTime? LastJournalWriteErrorUtc { get; set; }
 }

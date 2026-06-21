@@ -28,7 +28,15 @@ public partial class App : Application
         var processService = new AgentProcessService(paths, runtimeStateStore, controlFileStore, NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, controlFileStore, statusService);
         var overviewDataService = new OverviewDataService(paths);
-        var viewModel = new MainWindowViewModel(processService, controlService, statusService, overviewDataService, settingsService, paths);
+        var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var viewModel = new MainWindowViewModel(
+            processService,
+            controlService,
+            statusService,
+            overviewDataService,
+            diagnosticsDataService,
+            settingsService,
+            paths);
 
         var window = new MainWindow(viewModel);
         MainWindow = window;

@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:converters="clr-namespace:QuantifiedSelf.Windows.App.Converters"
         mc:Ignorable="d"
         Title="WUJI 吾迹"
         Width="1280"
@@ -17,6 +18,8 @@
         <SolidColorBrush x:Key="SurfaceAltBrush" Color="#F8FBFD" />
         <SolidColorBrush x:Key="TextBrush" Color="#102A43" />
         <SolidColorBrush x:Key="MutedTextBrush" Color="#52606D" />
+        <converters:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
+        <converters:StringToVisibilityConverter x:Key="StringToVisibilityConverter" />
 
         <Style TargetType="Button">
             <Setter Property="Background" Value="{StaticResource AccentBrush}" />
@@ -266,32 +269,129 @@
                 <TabItem Header="Diagnostics">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <Grid Margin="0,18,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
+                            <Border Grid.Row="0" Grid.ColumnSpan="3" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,16">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="2*" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel>
+                                        <TextBlock Text="Diagnostics Overview" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding CurrentJournalPathText}" Margin="0,10,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding CurrentSessionIdText, StringFormat=Current Session Id: {0}}" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" />
+                                        <TextBlock Text="{Binding LastEventWriteErrorText, StringFormat=SQLite Last Error: {0}}" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding LastJournalWriteErrorText, StringFormat=JSONL Last Error: {0}}" Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,0,0,10">
+                                            <StackPanel>
+                                                <TextBlock Text="SQLite write state" Foreground="{StaticResource MutedTextBrush}" />
+                                                <TextBlock Text="{Binding EventWriterStatusText}" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,0,0,10">
+                                            <StackPanel>
+                                                <TextBlock Text="JSONL write state" Foreground="{StaticResource MutedTextBrush}" />
+                                                <TextBlock Text="{Binding JournalWriterStatusText}" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </Border>
+                                        <Button Content="Open Logs Folder" Command="{Binding OpenLogsFolderCommand}" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Stretch" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,16">
                                 <StackPanel>
                                     <TextBlock Text="runtime_state.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding RuntimeStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
+                                    <TextBox Text="{Binding RuntimeStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="280" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
+                            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,16">
                                 <StackPanel>
                                     <TextBlock Text="health_state.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding HealthStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
+                                    <TextBox Text="{Binding HealthStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="280" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Column="2" Style="{StaticResource CardBorderStyle}">
+                            <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,16">
                                 <StackPanel>
                                     <TextBlock Text="agent_control.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding ControlCommandJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="380" />
+                                    <TextBox Text="{Binding ControlCommandJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="280" />
                                 </StackPanel>
                             </Border>
+
+                            <Grid Grid.Row="2" Grid.ColumnSpan="3">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+
+                                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
+                                    <StackPanel>
+                                        <TextBlock Text="Recent Events" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock Text="暂无最近事件。Agent 运行后，事件会显示在这里。" Margin="0,12,0,0" Foreground="{StaticResource MutedTextBrush}" Visibility="{Binding RecentEvents.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" TextWrapping="Wrap" />
+                                        <ItemsControl ItemsSource="{Binding RecentEvents}" Margin="0,12,0,0" Visibility="{Binding RecentEvents.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding EventTimeUtc, StringFormat={}{0:yyyy-MM-dd HH:mm:ss} UTC}" FontFamily="Consolas" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                            <TextBlock Margin="0,4,0,0">
+                                                                <Run Text="{Binding EventType}" FontWeight="SemiBold" />
+                                                                <Run Text=" · " />
+                                                                <Run Text="{Binding EventLevel}" />
+                                                            </TextBlock>
+                                                            <TextBlock Text="{Binding Message}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                                            <TextBlock Text="{Binding ErrorCode, StringFormat=ErrorCode {0}}" Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}" Visibility="{Binding ErrorCode, Converter={StaticResource StringToVisibilityConverter}}" />
+                                                            <TextBlock Text="{Binding RequestId, StringFormat=RequestId {0}}" Margin="0,2,0,0" Foreground="{StaticResource MutedTextBrush}" Visibility="{Binding RequestId, Converter={StaticResource StringToVisibilityConverter}}" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+
+                                <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                                    <StackPanel>
+                                        <TextBlock Text="Recent Errors" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock Text="暂无告警或错误。出现 Warning / Error / Critical 事件后会显示在这里。" Margin="0,12,0,0" Foreground="{StaticResource MutedTextBrush}" Visibility="{Binding RecentErrors.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" TextWrapping="Wrap" />
+                                        <ItemsControl ItemsSource="{Binding RecentErrors}" Margin="0,12,0,0" Visibility="{Binding RecentErrors.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding EventTimeUtc, StringFormat={}{0:yyyy-MM-dd HH:mm:ss} UTC}" FontFamily="Consolas" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                            <TextBlock Margin="0,4,0,0">
+                                                                <Run Text="{Binding EventType}" FontWeight="SemiBold" />
+                                                                <Run Text=" · " />
+                                                                <Run Text="{Binding EventLevel}" />
+                                                            </TextBlock>
+                                                            <TextBlock Text="{Binding Message}" Margin="0,4,0,0" TextWrapping="Wrap" />
+                                                            <TextBlock Text="{Binding ErrorCode, StringFormat=ErrorCode {0}}" Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}" Visibility="{Binding ErrorCode, Converter={StaticResource StringToVisibilityConverter}}" />
+                                                            <TextBlock Text="{Binding RequestId, StringFormat=RequestId {0}}" Margin="0,2,0,0" Foreground="{StaticResource MutedTextBrush}" Visibility="{Binding RequestId, Converter={StaticResource StringToVisibilityConverter}}" />
+                                                        </StackPanel>
+                                                    </Border>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
                         </Grid>
                     </ScrollViewer>
                 </TabItem>

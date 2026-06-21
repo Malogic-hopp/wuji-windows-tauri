@@ -91,6 +91,8 @@ public sealed class SqliteDatabaseInitializer
             ON app_sessions(process_name);
             """,
             cancellationToken);
+
+        await EnsureAgentEventsTableAsync(connection, cancellationToken);
     }
 
     private static async Task<bool> NeedsSchemaResetAsync(
@@ -151,6 +153,80 @@ public sealed class SqliteDatabaseInitializer
         }
 
         return columns;
+    }
+
+    private static async Task EnsureAgentEventsTableAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var agentEventColumns = await GetColumnNamesAsync(connection, "agent_events", cancellationToken);
+        if (agentEventColumns.Count > 0)
+        {
+            var actualSet = new HashSet<string>(agentEventColumns, StringComparer.OrdinalIgnoreCase);
+            var expectedColumns = new[]
+            {
+                "id",
+                "event_time_utc",
+                "event_type",
+                "event_level",
+                "message",
+                "source",
+                "request_id",
+                "error_code",
+                "process_name",
+                "session_id",
+                "payload_json"
+            };
+
+            var compatible = expectedColumns.All(actualSet.Contains);
+            if (!compatible)
+            {
+                await ExecuteAsync(connection, "DROP TABLE IF EXISTS agent_events;", cancellationToken);
+            }
+        }
+
+        await ExecuteAsync(
+            connection,
+            """
+            CREATE TABLE IF NOT EXISTS agent_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_time_utc TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                event_level TEXT NOT NULL,
+                message TEXT NOT NULL,
+                source TEXT,
+                request_id TEXT,
+                error_code TEXT,
+                process_name TEXT,
+                session_id INTEGER,
+                payload_json TEXT
+            );
+            """,
+            cancellationToken);
+
+        await ExecuteAsync(
+            connection,
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_events_time
+            ON agent_events(event_time_utc);
+            """,
+            cancellationToken);
+
+        await ExecuteAsync(
+            connection,
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_events_type
+            ON agent_events(event_type);
+            """,
+            cancellationToken);
+
+        await ExecuteAsync(
+            connection,
+            """
+            CREATE INDEX IF NOT EXISTS idx_agent_events_level_time
+            ON agent_events(event_level, event_time_utc);
+            """,
+            cancellationToken);
     }
 
     private static async Task ExecuteAsync(

@@ -13,7 +13,7 @@ public sealed class ForegroundSamplePrivacyFilter
 
         if (IsExcludedProcess(sample.ProcessName, options.ExcludedProcesses))
         {
-            return Excluded($"Excluded by process privacy rule: {sample.ProcessName}", true);
+            return Excluded("Excluded by process privacy rule", true);
         }
 
         if (IsExcludedTitle(sample.WindowTitle, options.ExcludedTitlePatterns))

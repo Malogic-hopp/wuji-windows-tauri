@@ -1,11 +1,14 @@
 using System.Security.Principal;
 using QuantifiedSelf.Windows.Agent;
+using QuantifiedSelf.Windows.Agent.Events;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
 using QuantifiedSelf.Windows.Core.Capture;
+using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 using QuantifiedSelf.Windows.Infrastructure.Control;
+using QuantifiedSelf.Windows.Infrastructure.Events;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
@@ -50,6 +53,13 @@ builder.Services.AddSingleton<AppSessionRepository>(sp =>
     var paths = sp.GetRequiredService<WindowsAgentPaths>();
     return new AppSessionRepository(paths.DatabasePath);
 });
+builder.Services.AddSingleton<AgentEventRepository>(sp =>
+{
+    var paths = sp.GetRequiredService<WindowsAgentPaths>();
+    return new AgentEventRepository(paths.DatabasePath);
+});
+builder.Services.AddSingleton<AgentEventJournal>();
+builder.Services.AddSingleton<AgentEventWriter>();
 builder.Services.AddSingleton<ForegroundSamplePrivacyFilter>();
 builder.Services.AddSingleton<WindowsIdleDetector>();
 builder.Services.AddSingleton<IIdleDetector, WindowsIdleDetector>();
