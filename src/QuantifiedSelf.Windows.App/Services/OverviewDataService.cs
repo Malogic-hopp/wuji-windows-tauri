@@ -8,10 +8,12 @@ namespace QuantifiedSelf.Windows.App.Services;
 public sealed class OverviewDataService
 {
     private readonly OverviewQueryService _queryService;
+    private readonly AppUsageQueryService _appUsageQueryService;
 
     public OverviewDataService(WindowsAgentPaths paths)
     {
         _queryService = new OverviewQueryService(paths.DatabasePath);
+        _appUsageQueryService = new AppUsageQueryService(paths.DatabasePath);
     }
 
     public Task<DashboardSummary> GetDashboardSummaryAsync(CancellationToken cancellationToken = default)
@@ -21,7 +23,10 @@ public sealed class OverviewDataService
 
     public Task<IReadOnlyList<AppUsageSummary>> GetTopAppsTodayAsync(int limit = 5, CancellationToken cancellationToken = default)
     {
-        return MapDisplayNamesAsync(_queryService.GetTopAppsTodayAsync(limit, cancellationToken));
+        return _appUsageQueryService.GetAppUsageForLocalDayAsync(
+            DateOnly.FromDateTime(DateTime.Now),
+            limit,
+            cancellationToken);
     }
 
     public Task<IReadOnlyList<AppSession>> GetRecentSessionsAsync(int limit = 5, CancellationToken cancellationToken = default)

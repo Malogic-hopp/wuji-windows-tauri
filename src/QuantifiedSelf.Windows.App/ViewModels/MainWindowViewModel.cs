@@ -20,6 +20,16 @@ namespace QuantifiedSelf.Windows.App.ViewModels;
 
 public sealed partial class MainWindowViewModel : ObservableObject
 {
+    public static IReadOnlyList<string> NavigationPages { get; } =
+    [
+        "Dashboard",
+        "Apps",
+        "Sessions",
+        "Samples",
+        "Diagnostics",
+        "Settings"
+    ];
+
     private readonly AgentProcessService _processService;
     private readonly AgentControlService _controlService;
     private readonly AgentStatusService _statusService;
@@ -91,7 +101,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy);
         ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
-        OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = 5);
+        OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = GetPageIndex("Settings"));
         OpenDataFolderCommand = new RelayCommand(OpenDataFolder);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
 
@@ -211,16 +221,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             if (SetProperty(ref _selectedTabIndex, value))
             {
-                CurrentPage = value switch
-                {
-                    0 => "Dashboard",
-                    1 => "Samples",
-                    2 => "Sessions",
-                    3 => "Apps",
-                    4 => "Diagnostics",
-                    5 => "Settings",
-                    _ => "Dashboard"
-                };
+                CurrentPage = GetPageForIndex(value);
 
                 if (!_suppressPagePersistence)
                 {
@@ -321,15 +322,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _agentOptions = await _settingsService.ReadAgentOptionsAsync(cancellationToken);
 
         _suppressPagePersistence = true;
-        SelectedTabIndex = _appSettings.LastSelectedPage switch
-        {
-            "Samples" => 1,
-            "Sessions" => 2,
-            "Apps" => 3,
-            "Diagnostics" => 4,
-            "Settings" => 5,
-            _ => 0
-        };
+        SelectedTabIndex = GetPageIndex(_appSettings.LastSelectedPage);
         _suppressPagePersistence = false;
 
         _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(5, _appSettings.RefreshIntervalSeconds));
@@ -353,88 +346,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var processInfo = await _processService.GetAgentProcessInfoAsync(cancellationToken);
             var appSettings = await _settingsService.ReadAppSettingsAsync(cancellationToken);
             var agentOptions = await _settingsService.ReadAgentOptionsAsync(cancellationToken);
-            var dashboardSummary = await _overviewDataService.GetDashboardSummaryAsync(cancellationToken);
-            var topApps = await _overviewDataService.GetTopAppsTodayAsync(5, cancellationToken);
-            var recentSessions = await _overviewDataService.GetRecentSessionsAsync(5, cancellationToken);
-            var recentEvents = await _diagnosticsDataService.GetRecentEventsAsync(20, cancellationToken);
-            var recentErrors = await _diagnosticsDataService.GetRecentErrorsAsync(10, cancellationToken);
-            var currentJournalPath = _diagnosticsDataService.GetCurrentJournalPath(DateTime.UtcNow);
-            await SamplesViewModel.LoadAsync(cancellationToken);
-            await SessionsViewModel.LoadAsync(cancellationToken);
-            await AppsViewModel.LoadAsync(cancellationToken);
 
             _appSettings = appSettings;
             _agentOptions = agentOptions;
 
-            DataRootText = _paths.Root;
-            AgentStatusText = status.StatusText;
-            LastHeartbeatText = status.LastHeartbeatText;
-            LastSampleText = status.LastSampleText;
-            TodayTotalText = FormatDuration(dashboardSummary.TotalDurationSeconds);
-            TodayActiveText = FormatDuration(dashboardSummary.ActiveDurationSeconds);
-            TodayIdleText = FormatDuration(dashboardSummary.IdleDurationSeconds);
-            TodayUnknownText = FormatDuration(dashboardSummary.UnknownDurationSeconds);
-            TodaySessionCountText = dashboardSummary.SessionCount.ToString();
-            AgentProcessText = processInfo is null
-                ? "Agent process not detected"
-                : processInfo.StartedAtUtc.HasValue
-                    ? $"PID {processInfo.ProcessId}, started {processInfo.StartedAtUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
-                    : $"PID {processInfo.ProcessId}, started unknown";
-            EventWriterStatusText = (status.HealthState?.EventWriteErrorCount ?? 0) > 0
-                ? $"SQLite writer degraded ({status.HealthState?.EventWriteErrorCount ?? 0} errors)"
-                : "SQLite writer healthy";
-            JournalWriterStatusText = (status.HealthState?.JournalWriteErrorCount ?? 0) > 0
-                ? $"JSONL writer degraded ({status.HealthState?.JournalWriteErrorCount ?? 0} errors)"
-                : "JSONL writer healthy";
-            CurrentJournalPathText = currentJournalPath;
-            LastEventWriteErrorText = status.HealthState?.LastEventWriteError is null
-                ? "None"
-                : $"{status.HealthState?.LastEventWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastEventWriteError}";
-            LastJournalWriteErrorText = status.HealthState?.LastJournalWriteError is null
-                ? "None"
-                : $"{status.HealthState?.LastJournalWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastJournalWriteError}";
-            CurrentSessionIdText = status.HealthState?.CurrentSessionId?.ToString() ?? "-";
-
-            RuntimeStateJson = Serialize(status.RuntimeState);
-            HealthStateJson = Serialize(status.HealthState);
-            ControlCommandJson = string.IsNullOrWhiteSpace(status.CurrentControlCommandText)
-                ? "{}"
-                : status.CurrentControlCommandText;
-            AppSettingsJson = Serialize(appSettings);
-            AgentOptionsJson = Serialize(agentOptions);
-            StatusMessage = status.IsStale ? "Agent heartbeat is stale" : status.StatusText;
-            CurrentPage = SelectedTabIndex switch
-            {
-                0 => "Dashboard",
-                1 => "Samples",
-                2 => "Sessions",
-                3 => "Apps",
-                4 => "Diagnostics",
-                5 => "Settings",
-                _ => "Dashboard"
-            };
-
-            ReplaceCollection(TopApps, topApps);
-            ReplaceCollection(RecentSessions, recentSessions);
-            ReplaceCollection(RecentEvents, recentEvents);
-            ReplaceCollection(RecentErrors, recentErrors);
-            Messages.Clear();
-            if (status.IsStale)
-            {
-                Messages.Add("Agent heartbeat is stale.");
-            }
-            else if (status.ActualState == AgentActualState.Stopped)
-            {
-                Messages.Add("Agent stopped.");
-            }
-            else if (!status.IsRunning)
-            {
-                Messages.Add("Agent is not running.");
-            }
-            else
-            {
-                Messages.Add("Agent is alive and updating runtime_state.json.");
-            }
+            RefreshCommonStatus(status, processInfo, appSettings, agentOptions);
+            await RefreshCurrentPageDataAsync(status, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -446,6 +363,131 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             IsBusy = false;
             _refreshGate.Release();
+        }
+    }
+
+    private async Task RefreshCurrentPageDataAsync(
+        AgentStatusSnapshot status,
+        CancellationToken cancellationToken)
+    {
+        CurrentPage = GetPageForIndex(SelectedTabIndex);
+
+        switch (CurrentPage)
+        {
+            case "Dashboard":
+                await RefreshDashboardAsync(status, cancellationToken);
+                break;
+            case "Apps":
+                await AppsViewModel.LoadAsync(cancellationToken);
+                break;
+            case "Sessions":
+                await SessionsViewModel.LoadAsync(cancellationToken);
+                break;
+            case "Samples":
+                await SamplesViewModel.LoadAsync(cancellationToken);
+                break;
+            case "Diagnostics":
+                await RefreshDiagnosticsAsync(status, cancellationToken);
+                break;
+            case "Settings":
+                RefreshSettingsView();
+                break;
+        }
+    }
+
+    private async Task RefreshDashboardAsync(
+        AgentStatusSnapshot status,
+        CancellationToken cancellationToken)
+    {
+        var dashboardSummary = await _overviewDataService.GetDashboardSummaryAsync(cancellationToken);
+        var topApps = await _overviewDataService.GetTopAppsTodayAsync(5, cancellationToken);
+        var recentSessions = await _overviewDataService.GetRecentSessionsAsync(5, cancellationToken);
+
+        TodayTotalText = FormatDuration(dashboardSummary.TotalDurationSeconds);
+        TodayActiveText = FormatDuration(dashboardSummary.ActiveDurationSeconds);
+        TodayIdleText = FormatDuration(dashboardSummary.IdleDurationSeconds);
+        TodayUnknownText = FormatDuration(dashboardSummary.UnknownDurationSeconds);
+        TodaySessionCountText = dashboardSummary.SessionCount.ToString();
+
+        ReplaceCollection(TopApps, topApps);
+        ReplaceCollection(RecentSessions, recentSessions);
+        RefreshMessages(status);
+    }
+
+    private async Task RefreshDiagnosticsAsync(
+        AgentStatusSnapshot status,
+        CancellationToken cancellationToken)
+    {
+        var recentEvents = await _diagnosticsDataService.GetRecentEventsAsync(20, cancellationToken);
+        var recentErrors = await _diagnosticsDataService.GetRecentErrorsAsync(10, cancellationToken);
+
+        CurrentJournalPathText = _diagnosticsDataService.GetCurrentJournalPath(DateTime.UtcNow);
+        EventWriterStatusText = (status.HealthState?.EventWriteErrorCount ?? 0) > 0
+            ? $"SQLite writer degraded ({status.HealthState?.EventWriteErrorCount ?? 0} errors)"
+            : "SQLite writer healthy";
+        JournalWriterStatusText = (status.HealthState?.JournalWriteErrorCount ?? 0) > 0
+            ? $"JSONL writer degraded ({status.HealthState?.JournalWriteErrorCount ?? 0} errors)"
+            : "JSONL writer healthy";
+        LastEventWriteErrorText = status.HealthState?.LastEventWriteError is null
+            ? "None"
+            : $"{status.HealthState?.LastEventWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastEventWriteError}";
+        LastJournalWriteErrorText = status.HealthState?.LastJournalWriteError is null
+            ? "None"
+            : $"{status.HealthState?.LastJournalWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastJournalWriteError}";
+        CurrentSessionIdText = status.HealthState?.CurrentSessionId?.ToString() ?? "-";
+
+        ReplaceCollection(RecentEvents, recentEvents);
+        ReplaceCollection(RecentErrors, recentErrors);
+    }
+
+    private void RefreshCommonStatus(
+        AgentStatusSnapshot status,
+        AgentProcessInfo? processInfo,
+        AppSettings appSettings,
+        WindowsAgentOptions agentOptions)
+    {
+        DataRootText = _paths.Root;
+        AgentStatusText = status.StatusText;
+        LastHeartbeatText = status.LastHeartbeatText;
+        LastSampleText = status.LastSampleText;
+        AgentProcessText = processInfo is null
+            ? "Agent process not detected"
+            : processInfo.StartedAtUtc.HasValue
+                ? $"PID {processInfo.ProcessId}, started {processInfo.StartedAtUtc.Value.ToLocalTime():yyyy-MM-dd HH:mm:ss}"
+                : $"PID {processInfo.ProcessId}, started unknown";
+        RuntimeStateJson = Serialize(status.RuntimeState);
+        HealthStateJson = Serialize(status.HealthState);
+        ControlCommandJson = string.IsNullOrWhiteSpace(status.CurrentControlCommandText)
+            ? "{}"
+            : status.CurrentControlCommandText;
+        AppSettingsJson = Serialize(appSettings);
+        AgentOptionsJson = Serialize(agentOptions);
+        StatusMessage = status.IsStale ? "Agent heartbeat is stale" : status.StatusText;
+    }
+
+    private void RefreshSettingsView()
+    {
+        DataRootText = _paths.Root;
+    }
+
+    private void RefreshMessages(AgentStatusSnapshot status)
+    {
+        Messages.Clear();
+        if (status.IsStale)
+        {
+            Messages.Add("Agent heartbeat is stale.");
+        }
+        else if (status.ActualState == AgentActualState.Stopped)
+        {
+            Messages.Add("Agent stopped.");
+        }
+        else if (!status.IsRunning)
+        {
+            Messages.Add("Agent is not running.");
+        }
+        else
+        {
+            Messages.Add("Agent is alive and updating runtime_state.json.");
         }
     }
 
@@ -549,6 +591,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             collection.Add(item);
         }
+    }
+
+    private static string GetPageForIndex(int index)
+    {
+        return index >= 0 && index < NavigationPages.Count
+            ? NavigationPages[index]
+            : "Dashboard";
+    }
+
+    private static int GetPageIndex(string? page)
+    {
+        if (string.IsNullOrWhiteSpace(page))
+        {
+            return 0;
+        }
+
+        for (var index = 0; index < NavigationPages.Count; index++)
+        {
+            if (string.Equals(NavigationPages[index], page, StringComparison.OrdinalIgnoreCase))
+            {
+                return index;
+            }
+        }
+
+        return 0;
     }
 
     private async Task PersistAppSettingsAsync()

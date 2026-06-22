@@ -267,16 +267,16 @@
                     </ScrollViewer>
                 </TabItem>
 
-                <TabItem Header="Samples">
-                    <views:SamplesView DataContext="{Binding SamplesViewModel}" />
+                <TabItem Header="Apps">
+                    <views:AppsView DataContext="{Binding AppsViewModel}" />
                 </TabItem>
 
                 <TabItem Header="Sessions">
                     <views:SessionsView DataContext="{Binding SessionsViewModel}" />
                 </TabItem>
 
-                <TabItem Header="Apps">
-                    <views:AppsView DataContext="{Binding AppsViewModel}" />
+                <TabItem Header="Samples">
+                    <views:SamplesView DataContext="{Binding SamplesViewModel}" />
                 </TabItem>
 
                 <TabItem Header="Diagnostics">
