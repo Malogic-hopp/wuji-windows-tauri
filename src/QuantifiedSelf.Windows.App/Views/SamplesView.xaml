@@ -1,0 +1,71 @@
+<UserControl x:Class="QuantifiedSelf.Windows.App.Views.SamplesView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:converters="clr-namespace:QuantifiedSelf.Windows.App.Converters"
+             mc:Ignorable="d"
+             d:DesignHeight="640"
+             d:DesignWidth="1080">
+    <UserControl.Resources>
+        <converters:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
+    </UserControl.Resources>
+
+    <Grid Margin="0,18,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Style="{DynamicResource CardBorderStyle}">
+            <DockPanel LastChildFill="True">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock Text="Recent Samples" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" />
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <ComboBox ItemsSource="{Binding ActivityStateFilters}"
+                              SelectedItem="{Binding SelectedActivityState, Mode=TwoWay}"
+                              Width="140"
+                              Margin="0,0,8,0"
+                              VerticalContentAlignment="Center" />
+                    <Button Content="Refresh" Command="{Binding RefreshCommand}" Style="{DynamicResource SecondaryButtonStyle}" />
+                </StackPanel>
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Style="{DynamicResource CardBorderStyle}">
+            <Grid>
+                <TextBlock Text="{Binding EmptyStateText}"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           TextWrapping="Wrap"
+                           Visibility="{Binding Samples.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
+
+                <DataGrid ItemsSource="{Binding Samples}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal"
+                          RowHeaderWidth="0"
+                          EnableRowVirtualization="True"
+                          EnableColumnVirtualization="True"
+                          VirtualizingStackPanel.IsVirtualizing="True"
+                          VirtualizingStackPanel.VirtualizationMode="Recycling"
+                          Visibility="{Binding Samples.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Local time" Binding="{Binding LocalTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" Width="170" />
+                        <DataGridTextColumn Header="Display name" Binding="{Binding DisplayName}" Width="170" />
+                        <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="170" />
+                        <DataGridTextColumn Header="Window title" Binding="{Binding WindowTitleText}" Width="*" />
+                        <DataGridTextColumn Header="Idle seconds" Binding="{Binding IdleSeconds}" Width="110" />
+                        <DataGridTextColumn Header="Activity" Binding="{Binding ActivityState}" Width="100" />
+                        <DataGridTextColumn Header="Sample id" Binding="{Binding SampleId}" Width="90" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

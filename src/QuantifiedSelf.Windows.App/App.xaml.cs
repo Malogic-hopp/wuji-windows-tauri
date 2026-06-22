@@ -29,12 +29,15 @@ public partial class App : Application
         var controlService = new AgentControlService(paths, controlFileStore, statusService);
         var overviewDataService = new OverviewDataService(paths);
         var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var samplesDataService = new SamplesDataService(paths);
+        var samplesViewModel = new SamplesViewModel(samplesDataService);
         var viewModel = new MainWindowViewModel(
             processService,
             controlService,
             statusService,
             overviewDataService,
             diagnosticsDataService,
+            samplesViewModel,
             settingsService,
             paths);
 

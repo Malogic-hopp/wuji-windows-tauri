@@ -4,6 +4,7 @@
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:converters="clr-namespace:QuantifiedSelf.Windows.App.Converters"
+        xmlns:views="clr-namespace:QuantifiedSelf.Windows.App.Views"
         mc:Ignorable="d"
         Title="WUJI 吾迹"
         Width="1280"
@@ -264,6 +265,10 @@
                             </Border>
                         </Grid>
                     </ScrollViewer>
+                </TabItem>
+
+                <TabItem Header="Samples">
+                    <views:SamplesView DataContext="{Binding SamplesViewModel}" />
                 </TabItem>
 
                 <TabItem Header="Diagnostics">

@@ -25,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AgentStatusService _statusService;
     private readonly OverviewDataService _overviewDataService;
     private readonly DiagnosticsDataService _diagnosticsDataService;
+    private readonly SamplesViewModel _samplesViewModel;
     private readonly SettingsService _settingsService;
     private readonly WindowsAgentPaths _paths;
     private readonly DispatcherTimer _refreshTimer;
@@ -66,6 +67,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AgentStatusService statusService,
         OverviewDataService overviewDataService,
         DiagnosticsDataService diagnosticsDataService,
+        SamplesViewModel samplesViewModel,
         SettingsService settingsService,
         WindowsAgentPaths paths)
     {
@@ -74,6 +76,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _statusService = statusService;
         _overviewDataService = overviewDataService;
         _diagnosticsDataService = diagnosticsDataService;
+        _samplesViewModel = samplesViewModel;
         _settingsService = settingsService;
         _paths = paths;
 
@@ -82,7 +85,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy);
         ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
-        OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = 2);
+        OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = 3);
         OpenDataFolderCommand = new RelayCommand(OpenDataFolder);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
 
@@ -118,6 +121,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<AgentEvent> RecentEvents { get; } = new();
 
     public ObservableCollection<AgentEvent> RecentErrors { get; } = new();
+
+    public SamplesViewModel SamplesViewModel => _samplesViewModel;
 
     public string AgentStatusText
     {
@@ -199,8 +204,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 CurrentPage = value switch
                 {
                     0 => "Dashboard",
-                    1 => "Diagnostics",
-                    2 => "Settings",
+                    1 => "Samples",
+                    2 => "Diagnostics",
+                    3 => "Settings",
                     _ => "Dashboard"
                 };
 
@@ -305,8 +311,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _suppressPagePersistence = true;
         SelectedTabIndex = _appSettings.LastSelectedPage switch
         {
-            "Diagnostics" => 1,
-            "Settings" => 2,
+            "Samples" => 1,
+            "Diagnostics" => 2,
+            "Settings" => 3,
             _ => 0
         };
         _suppressPagePersistence = false;
@@ -338,6 +345,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var recentEvents = await _diagnosticsDataService.GetRecentEventsAsync(20, cancellationToken);
             var recentErrors = await _diagnosticsDataService.GetRecentErrorsAsync(10, cancellationToken);
             var currentJournalPath = _diagnosticsDataService.GetCurrentJournalPath(DateTime.UtcNow);
+            await SamplesViewModel.LoadAsync(cancellationToken);
 
             _appSettings = appSettings;
             _agentOptions = agentOptions;
@@ -382,8 +390,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
             CurrentPage = SelectedTabIndex switch
             {
                 0 => "Dashboard",
-                1 => "Diagnostics",
-                2 => "Settings",
+                1 => "Samples",
+                2 => "Diagnostics",
+                3 => "Settings",
                 _ => "Dashboard"
             };
 
