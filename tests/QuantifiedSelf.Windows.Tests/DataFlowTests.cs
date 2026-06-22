@@ -1692,6 +1692,47 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public async Task OverviewDataService_TopAppsMatchesAppsViewTodayQuery()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var dayStart = DateTime.Now.Date;
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(-1), dayStart.AddHours(1), "CrossMidnight", 7200, 2400, 3600, 1200, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(9), dayStart.AddHours(10), "Code", 3600, 1800, 1200, 600, "ProcessChanged");
+        await InsertOpenSessionAsync(paths.DatabasePath, DateTime.Now.AddMinutes(-10), "OpenApp", 600, 500, 100, 0);
+
+        var overviewDataService = new OverviewDataService(paths);
+        var appUsageQueryService = new AppUsageQueryService(paths.DatabasePath);
+
+        var dashboardTopApps = await overviewDataService.GetTopAppsTodayAsync(5);
+        var appsViewTopApps = await appUsageQueryService.GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now), 5);
+
+        Assert.Equal(appsViewTopApps.Select(x => x.ProcessName), dashboardTopApps.Select(x => x.ProcessName));
+        for (var index = 0; index < appsViewTopApps.Count; index++)
+        {
+            Assert.InRange(
+                Math.Abs(appsViewTopApps[index].ActiveDurationSeconds - dashboardTopApps[index].ActiveDurationSeconds),
+                0,
+                2);
+            Assert.InRange(
+                Math.Abs(appsViewTopApps[index].TotalDurationSeconds - dashboardTopApps[index].TotalDurationSeconds),
+                0,
+                2);
+            Assert.InRange(
+                Math.Abs(appsViewTopApps[index].IdleDurationSeconds - dashboardTopApps[index].IdleDurationSeconds),
+                0,
+                2);
+            Assert.InRange(
+                Math.Abs(appsViewTopApps[index].UnknownDurationSeconds - dashboardTopApps[index].UnknownDurationSeconds),
+                0,
+                2);
+        }
+    }
+
+    [Fact]
     public async Task AppsViewModel_LoadsTodayAppUsage()
     {
         var lastUsedUtc = DateTime.UtcNow.AddMinutes(-5);
@@ -1812,6 +1853,81 @@ public sealed class DataFlowTests
         Assert.Contains("<path>", viewModel.StatusText, StringComparison.Ordinal);
         Assert.DoesNotContain(@"C:\Users\Alice", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NavigationOrder_IsDashboardAppsSessionsSamplesDiagnosticsSettings()
+    {
+        Assert.Equal(
+            ["Dashboard", "Apps", "Sessions", "Samples", "Diagnostics", "Settings"],
+            MainWindowViewModel.NavigationPages);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_NavigatesToAppsSessionsSamples()
+    {
+        using var workspace = new TempWorkspace();
+        var viewModel = await CreateMainWindowViewModelAsync(workspace);
+
+        viewModel.SelectedTabIndex = 1;
+        Assert.Equal("Apps", viewModel.CurrentPage);
+
+        viewModel.SelectedTabIndex = 2;
+        Assert.Equal("Sessions", viewModel.CurrentPage);
+
+        viewModel.SelectedTabIndex = 3;
+        Assert.Equal("Samples", viewModel.CurrentPage);
+
+        viewModel.OpenSettingsCommand.Execute(null);
+        Assert.Equal(5, viewModel.SelectedTabIndex);
+        Assert.Equal("Settings", viewModel.CurrentPage);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_RefreshesCurrentPage()
+    {
+        using var workspace = new TempWorkspace();
+        var samplesLoads = 0;
+        var sessionsLoads = 0;
+        var appsLoads = 0;
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            sampleLoader: (_, _) =>
+            {
+                samplesLoads++;
+                return Task.FromResult<IReadOnlyList<ForegroundSample>>([]);
+            },
+            sessionLoader: (_, _, _) =>
+            {
+                sessionsLoads++;
+                return Task.FromResult<IReadOnlyList<AppSession>>([]);
+            },
+            appLoader: (_, _) =>
+            {
+                appsLoads++;
+                return Task.FromResult<IReadOnlyList<AppUsageSummary>>([]);
+            });
+
+        viewModel.SelectedTabIndex = 1;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(1, appsLoads);
+        Assert.Equal(0, sessionsLoads);
+        Assert.Equal(0, samplesLoads);
+
+        viewModel.SelectedTabIndex = 2;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(1, appsLoads);
+        Assert.Equal(1, sessionsLoads);
+        Assert.Equal(0, samplesLoads);
+
+        viewModel.SelectedTabIndex = 3;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(1, appsLoads);
+        Assert.Equal(1, sessionsLoads);
+        Assert.Equal(1, samplesLoads);
     }
 
     [Fact]
@@ -2165,6 +2281,57 @@ public sealed class DataFlowTests
         command.CommandText = sql;
         var value = await command.ExecuteScalarAsync();
         return Convert.ToInt32(value);
+    }
+
+    private static async Task<MainWindowViewModel> CreateMainWindowViewModelAsync(
+        TempWorkspace workspace,
+        Func<int, CancellationToken, Task<IReadOnlyList<ForegroundSample>>>? sampleLoader = null,
+        Func<string, int, CancellationToken, Task<IReadOnlyList<AppSession>>>? sessionLoader = null,
+        Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null)
+    {
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var runtimeStateStore = new RuntimeStateStore();
+        var healthStateStore = new AgentHealthStateStore();
+        var controlFileStore = new AgentControlFileStore();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var statusService = new AgentStatusService(
+            paths,
+            runtimeStateStore,
+            healthStateStore,
+            controlFileStore,
+            agentOptionsStore);
+        var processService = new AgentProcessService(
+            paths,
+            runtimeStateStore,
+            controlFileStore,
+            NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, controlFileStore, statusService);
+        var overviewDataService = new OverviewDataService(paths);
+        var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var samplesViewModel = new SamplesViewModel(sampleLoader ?? ((_, _) =>
+            Task.FromResult<IReadOnlyList<ForegroundSample>>([])));
+        var sessionsViewModel = new SessionsViewModel(sessionLoader ?? ((_, _, _) =>
+            Task.FromResult<IReadOnlyList<AppSession>>([])));
+        var appsViewModel = new AppsViewModel(appLoader ?? ((_, _) =>
+            Task.FromResult<IReadOnlyList<AppUsageSummary>>([])));
+
+        return new MainWindowViewModel(
+            processService,
+            controlService,
+            statusService,
+            overviewDataService,
+            diagnosticsDataService,
+            samplesViewModel,
+            sessionsViewModel,
+            appsViewModel,
+            settingsService,
+            paths);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
