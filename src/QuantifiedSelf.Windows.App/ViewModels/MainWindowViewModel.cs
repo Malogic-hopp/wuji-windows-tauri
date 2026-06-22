@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading;
@@ -12,7 +11,6 @@ using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
-using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Core.Serialization;
 
@@ -38,13 +36,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SamplesViewModel _samplesViewModel;
     private readonly SessionsViewModel _sessionsViewModel;
     private readonly AppsViewModel _appsViewModel;
+    private readonly SettingsViewModel _settingsViewModel;
     private readonly SettingsService _settingsService;
-    private readonly WindowsAgentPaths _paths;
     private readonly DispatcherTimer _refreshTimer;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
 
     private AppSettings _appSettings = new();
-    private WindowsAgentOptions _agentOptions = new();
     private bool _suppressPagePersistence;
 
     private string _agentStatusText = "Not running";
@@ -61,8 +58,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _runtimeStateJson = "{}";
     private string _healthStateJson = "{}";
     private string _controlCommandJson = "{}";
-    private string _appSettingsJson = "{}";
-    private string _agentOptionsJson = "{}";
     private string _agentProcessText = "-";
     private string _eventWriterStatusText = "SQLite writer: unknown";
     private string _journalWriterStatusText = "JSONL writer: unknown";
@@ -71,7 +66,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _lastJournalWriteErrorText = "None";
     private string _currentSessionIdText = "-";
     private string _statusMessage = "Ready";
-    private string _dataRootText = "-";
 
     public MainWindowViewModel(
         AgentProcessService processService,
@@ -82,8 +76,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SamplesViewModel samplesViewModel,
         SessionsViewModel sessionsViewModel,
         AppsViewModel appsViewModel,
-        SettingsService settingsService,
-        WindowsAgentPaths paths)
+        SettingsViewModel settingsViewModel,
+        SettingsService settingsService)
     {
         _processService = processService;
         _controlService = controlService;
@@ -93,8 +87,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _samplesViewModel = samplesViewModel;
         _sessionsViewModel = sessionsViewModel;
         _appsViewModel = appsViewModel;
+        _settingsViewModel = settingsViewModel;
         _settingsService = settingsService;
-        _paths = paths;
+        _settingsViewModel.AppSettingsSaved += HandleAppSettingsSaved;
 
         StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy);
         StopAgentCommand = new AsyncRelayCommand(StopAgentAsync, () => !IsBusy);
@@ -102,8 +97,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
         OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = GetPageIndex("Settings"));
-        OpenDataFolderCommand = new RelayCommand(OpenDataFolder);
-        OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
 
         _refreshTimer = new DispatcherTimer
         {
@@ -124,10 +117,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public ICommand OpenSettingsCommand { get; }
 
-    public ICommand OpenDataFolderCommand { get; }
-
-    public ICommand OpenLogsFolderCommand { get; }
-
     public ObservableCollection<string> Messages { get; } = new();
 
     public ObservableCollection<AppUsageSummary> TopApps { get; } = new();
@@ -143,6 +132,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public SessionsViewModel SessionsViewModel => _sessionsViewModel;
 
     public AppsViewModel AppsViewModel => _appsViewModel;
+
+    public SettingsViewModel SettingsViewModel => _settingsViewModel;
 
     public string AgentStatusText
     {
@@ -250,18 +241,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _controlCommandJson, value);
     }
 
-    public string AppSettingsJson
-    {
-        get => _appSettingsJson;
-        private set => SetProperty(ref _appSettingsJson, value);
-    }
-
-    public string AgentOptionsJson
-    {
-        get => _agentOptionsJson;
-        private set => SetProperty(ref _agentOptionsJson, value);
-    }
-
     public string AgentProcessText
     {
         get => _agentProcessText;
@@ -310,22 +289,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _statusMessage, value);
     }
 
-    public string DataRootText
-    {
-        get => _dataRootText;
-        private set => SetProperty(ref _dataRootText, value);
-    }
-
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        _appSettings = await _settingsService.ReadAppSettingsAsync(cancellationToken);
-        _agentOptions = await _settingsService.ReadAgentOptionsAsync(cancellationToken);
+        await _settingsViewModel.LoadAsync(cancellationToken);
+        ApplyAppSettings(_settingsViewModel.AppSettings);
 
         _suppressPagePersistence = true;
         SelectedTabIndex = GetPageIndex(_appSettings.LastSelectedPage);
         _suppressPagePersistence = false;
 
-        _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(5, _appSettings.RefreshIntervalSeconds));
         _refreshTimer.Start();
 
         await RefreshAsync(cancellationToken);
@@ -344,20 +316,18 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
             var status = await _statusService.GetStatusAsync(cancellationToken);
             var processInfo = await _processService.GetAgentProcessInfoAsync(cancellationToken);
-            var appSettings = await _settingsService.ReadAppSettingsAsync(cancellationToken);
-            var agentOptions = await _settingsService.ReadAgentOptionsAsync(cancellationToken);
 
-            _appSettings = appSettings;
-            _agentOptions = agentOptions;
-
-            RefreshCommonStatus(status, processInfo, appSettings, agentOptions);
+            RefreshCommonStatus(status, processInfo);
             await RefreshCurrentPageDataAsync(status, cancellationToken);
         }
         catch (Exception ex)
         {
-            StatusMessage = ex.Message;
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            StatusMessage = string.IsNullOrWhiteSpace(safeMessage)
+                ? "Refresh failed."
+                : $"Refresh failed: {safeMessage}";
             Messages.Clear();
-            Messages.Add(ex.Message);
+            Messages.Add(StatusMessage);
         }
         finally
         {
@@ -390,7 +360,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 await RefreshDiagnosticsAsync(status, cancellationToken);
                 break;
             case "Settings":
-                RefreshSettingsView();
+                await _settingsViewModel.LoadAsync(cancellationToken);
+                ApplyAppSettings(_settingsViewModel.AppSettings);
                 break;
         }
     }
@@ -442,11 +413,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private void RefreshCommonStatus(
         AgentStatusSnapshot status,
-        AgentProcessInfo? processInfo,
-        AppSettings appSettings,
-        WindowsAgentOptions agentOptions)
+        AgentProcessInfo? processInfo)
     {
-        DataRootText = _paths.Root;
         AgentStatusText = status.StatusText;
         LastHeartbeatText = status.LastHeartbeatText;
         LastSampleText = status.LastSampleText;
@@ -460,14 +428,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ControlCommandJson = string.IsNullOrWhiteSpace(status.CurrentControlCommandText)
             ? "{}"
             : status.CurrentControlCommandText;
-        AppSettingsJson = Serialize(appSettings);
-        AgentOptionsJson = Serialize(agentOptions);
         StatusMessage = status.IsStale ? "Agent heartbeat is stale" : status.StatusText;
-    }
-
-    private void RefreshSettingsView()
-    {
-        DataRootText = _paths.Root;
     }
 
     private void RefreshMessages(AgentStatusSnapshot status)
@@ -489,6 +450,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             Messages.Add("Agent is alive and updating runtime_state.json.");
         }
+    }
+
+    private void HandleAppSettingsSaved(AppSettings settings)
+    {
+        ApplyAppSettings(settings);
+    }
+
+    private void ApplyAppSettings(AppSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        _appSettings = CloneAppSettings(settings);
+        _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(5, settings.RefreshIntervalSeconds));
+    }
+
+    private static AppSettings CloneAppSettings(AppSettings settings)
+    {
+        return new AppSettings
+        {
+            AutoStartAgentWhenAppStarts = settings.AutoStartAgentWhenAppStarts,
+            MinimizeToTray = settings.MinimizeToTray,
+            CloseToTray = settings.CloseToTray,
+            RefreshIntervalSeconds = settings.RefreshIntervalSeconds,
+            Theme = settings.Theme,
+            LastSelectedPage = settings.LastSelectedPage
+        };
     }
 
     private async Task StartAgentAsync()
@@ -627,34 +613,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
         catch
         {
             // Best effort persistence for tab selection and UI preferences.
-        }
-    }
-
-    private void OpenDataFolder()
-    {
-        OpenFolder(_paths.Root);
-    }
-
-    private void OpenLogsFolder()
-    {
-        OpenFolder(_paths.LogsDir);
-    }
-
-    private void OpenFolder(string folderPath)
-    {
-        try
-        {
-            Process.Start(new ProcessStartInfo
-            {
-                FileName = "explorer.exe",
-                Arguments = folderPath,
-                UseShellExecute = true
-            });
-        }
-        catch (Exception ex)
-        {
-            StatusMessage = ex.Message;
-            Messages.Add(ex.Message);
         }
     }
 }

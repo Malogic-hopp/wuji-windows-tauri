@@ -35,6 +35,7 @@ public partial class App : Application
         var samplesViewModel = new SamplesViewModel(samplesDataService);
         var sessionsViewModel = new SessionsViewModel(sessionsDataService);
         var appsViewModel = new AppsViewModel(appsDataService);
+        var settingsViewModel = new SettingsViewModel(settingsService, paths);
         var viewModel = new MainWindowViewModel(
             processService,
             controlService,
@@ -44,8 +45,8 @@ public partial class App : Application
             samplesViewModel,
             sessionsViewModel,
             appsViewModel,
-            settingsService,
-            paths);
+            settingsViewModel,
+            settingsService);
 
         var window = new MainWindow(viewModel);
         MainWindow = window;

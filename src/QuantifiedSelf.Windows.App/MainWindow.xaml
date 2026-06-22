@@ -321,7 +321,6 @@
                                                 <TextBlock Text="{Binding JournalWriterStatusText}" FontSize="18" FontWeight="SemiBold" Margin="0,6,0,0" TextWrapping="Wrap" />
                                             </StackPanel>
                                         </Border>
-                                        <Button Content="Open Logs Folder" Command="{Binding OpenLogsFolderCommand}" Style="{StaticResource SecondaryButtonStyle}" HorizontalAlignment="Stretch" />
                                     </StackPanel>
                                 </Grid>
                             </Border>
@@ -410,43 +409,7 @@
                 </TabItem>
 
                 <TabItem Header="Settings">
-                    <ScrollViewer VerticalScrollBarVisibility="Auto">
-                        <Grid Margin="0,18,0,0">
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                            </Grid.RowDefinitions>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-
-                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="0" Grid.ColumnSpan="2">
-                                <DockPanel LastChildFill="True">
-                                    <StackPanel DockPanel.Dock="Left">
-                                        <TextBlock Text="Local data root" FontSize="16" FontWeight="SemiBold" />
-                                        <TextBlock Text="{Binding DataRootText}" Margin="0,10,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
-                                    </StackPanel>
-
-                                    <Button Content="Open Data Folder" Command="{Binding OpenDataFolderCommand}" DockPanel.Dock="Right" Style="{StaticResource SecondaryButtonStyle}" />
-                                </DockPanel>
-                            </Border>
-
-                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="1" Margin="0,0,12,0">
-                                <StackPanel>
-                                    <TextBlock Text="app-settings.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding AppSettingsJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="360" />
-                                </StackPanel>
-                            </Border>
-
-                            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}">
-                                <StackPanel>
-                                    <TextBlock Text="windows-agent.json" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBox Text="{Binding AgentOptionsJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="360" />
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-                    </ScrollViewer>
+                    <views:SettingsView DataContext="{Binding SettingsViewModel}" />
                 </TabItem>
             </TabControl>
         </Grid>

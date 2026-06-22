@@ -1,0 +1,307 @@
+<UserControl x:Class="QuantifiedSelf.Windows.App.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             mc:Ignorable="d"
+             d:DesignHeight="640"
+             d:DesignWidth="1080">
+    <UserControl.Resources>
+        <Style x:Key="SettingsSectionTitleStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+
+        <Style x:Key="SettingsLabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Margin" Value="0,10,0,0" />
+        </Style>
+
+        <Style x:Key="SettingsValueStyle" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="FontFamily" Value="Consolas" />
+        </Style>
+
+        <Style x:Key="ValidationStatusTextStyle" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasAgentOptionsValidationError}" Value="True">
+                    <Setter Property="Foreground" Value="#B42318" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="0,18,0,0">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Border Style="{DynamicResource CardBorderStyle}">
+                <DockPanel LastChildFill="False">
+                    <StackPanel DockPanel.Dock="Left">
+                        <TextBlock Text="Settings" Style="{StaticResource SettingsSectionTitleStyle}" />
+                        <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding EmptyStateText}" Margin="0,6,0,0" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
+                    </StackPanel>
+
+                    <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center">
+                        <Button Content="Refresh"
+                                Command="{Binding RefreshCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}" />
+                        <Button Content="Open Data Folder"
+                                Command="{Binding OpenDataFolderCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}" />
+                        <Button Content="Open Logs Folder"
+                                Command="{Binding OpenLogsFolderCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}" />
+                        <Button Content="Open Config Folder"
+                                Command="{Binding OpenConfigFolderCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}" />
+                    </WrapPanel>
+                </DockPanel>
+            </Border>
+
+            <Grid Grid.Row="1" Margin="0,0,0,16">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+
+                <Border Style="{DynamicResource CardBorderStyle}" Margin="0,0,12,0">
+                    <StackPanel>
+                        <TextBlock Text="App Settings" Style="{StaticResource SettingsSectionTitleStyle}" />
+
+                        <TextBlock Text="app-settings.json path" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBlock Text="{Binding AppSettingsPathText}" Style="{StaticResource SettingsValueStyle}" />
+
+                        <Grid Margin="0,12,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="refreshIntervalSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding RefreshIntervalSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140"
+                                     HorizontalAlignment="Left"
+                                     Margin="0,8,0,0" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="autoStartAgentWhenAppStarts" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <CheckBox Grid.Row="1" Grid.Column="1"
+                                      IsChecked="{Binding AutoStartAgentWhenAppStarts, Mode=TwoWay}"
+                                      Margin="0,12,0,0"
+                                      HorizontalAlignment="Left" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="lastSelectedPage" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <ComboBox Grid.Row="2" Grid.Column="1"
+                                      ItemsSource="{Binding LastSelectedPageOptions}"
+                                      SelectedItem="{Binding LastSelectedPageText, Mode=TwoWay}"
+                                      Width="220"
+                                      HorizontalAlignment="Left"
+                                      Margin="0,8,0,0" />
+                        </Grid>
+
+                        <Button Content="Save App Settings"
+                                Command="{Binding SaveAppSettingsCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}"
+                                Margin="0,16,0,0"
+                                HorizontalAlignment="Left" />
+
+                        <TextBlock Text="{Binding SaveStatusText}"
+                                   Margin="0,10,0,0"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <Border Grid.Column="1" Style="{DynamicResource CardBorderStyle}">
+                    <StackPanel>
+                        <TextBlock Text="Agent Options" Style="{StaticResource SettingsSectionTitleStyle}" />
+
+                        <TextBlock Text="windows-agent.json path" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBlock Text="{Binding AgentOptionsPathText}" Style="{StaticResource SettingsValueStyle}" />
+
+                        <Grid Margin="0,12,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="samplingIntervalSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
+                            <TextBox Grid.Row="0" Grid.Column="1"
+                                     Text="{Binding SamplingIntervalSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140"
+                                     HorizontalAlignment="Left"
+                                     Margin="0,8,0,0" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="idleThresholdSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBox Grid.Row="1" Grid.Column="1"
+                                     Text="{Binding IdleThresholdSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140"
+                                     HorizontalAlignment="Left"
+                                     Margin="0,8,0,0" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="heartbeatIntervalSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBox Grid.Row="2" Grid.Column="1"
+                                     Text="{Binding HeartbeatIntervalSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140"
+                                     HorizontalAlignment="Left"
+                                     Margin="0,8,0,0" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="staleThresholdSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBox Grid.Row="3" Grid.Column="1"
+                                     Text="{Binding StaleThresholdSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140"
+                                     HorizontalAlignment="Left"
+                                     Margin="0,8,0,0" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="retentionDays" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBox Grid.Row="4" Grid.Column="1"
+                                     Text="{Binding RetentionDaysText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="140"
+                                     HorizontalAlignment="Left"
+                                     Margin="0,8,0,0" />
+                        </Grid>
+
+                        <TextBlock Text="Note: retentionDays only saves configuration in stage 6. Actual history cleanup is deferred to stage 7."
+                                   Margin="0,10,0,0"
+                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   TextWrapping="Wrap" />
+
+                        <Grid Margin="0,14,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="enableJsonlJournal" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
+                            <CheckBox Grid.Row="0" Grid.Column="1"
+                                      IsChecked="{Binding EnableJsonlJournal, Mode=TwoWay}"
+                                      HorizontalAlignment="Left"
+                                      Margin="0,12,0,0" />
+
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="enableAgentEventJournal" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <CheckBox Grid.Row="1" Grid.Column="1"
+                                      IsChecked="{Binding EnableAgentEventJournal, Mode=TwoWay}"
+                                      HorizontalAlignment="Left"
+                                      Margin="0,12,0,0" />
+
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="enableSessionMerge" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <CheckBox Grid.Row="2" Grid.Column="1"
+                                      IsChecked="{Binding EnableSessionMerge, Mode=TwoWay}"
+                                      HorizontalAlignment="Left"
+                                      Margin="0,12,0,0" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="maskWindowTitles" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <CheckBox Grid.Row="3" Grid.Column="1"
+                                      IsChecked="{Binding MaskWindowTitles, Mode=TwoWay}"
+                                      HorizontalAlignment="Left"
+                                      Margin="0,12,0,0" />
+                        </Grid>
+
+                        <TextBlock Text="excludedProcesses" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBox Text="{Binding ExcludedProcessesText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Margin="0,4,0,0"
+                                 MinHeight="84"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas" />
+
+                        <TextBlock Text="excludedTitlePatterns" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBox Text="{Binding ExcludedTitlePatternsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Margin="0,4,0,0"
+                                 MinHeight="84"
+                                 AcceptsReturn="True"
+                                 VerticalScrollBarVisibility="Auto"
+                                 HorizontalScrollBarVisibility="Auto"
+                                 TextWrapping="Wrap"
+                                 FontFamily="Consolas" />
+
+                        <WrapPanel Margin="0,16,0,0">
+                            <Button Content="Validate Agent Options"
+                                    Command="{Binding ValidateAgentOptionsCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                            <Button Content="Reset Agent Options"
+                                    Command="{Binding ResetAgentOptionsEditorCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                        </WrapPanel>
+
+                        <TextBlock Text="{Binding AgentOptionsValidationText}"
+                                   Margin="0,10,0,0"
+                                   Style="{StaticResource ValidationStatusTextStyle}" />
+                        <TextBlock Text="{Binding AgentOptionsValidationDetailsText}"
+                                   Margin="0,6,0,0"
+                                   Style="{StaticResource ValidationStatusTextStyle}" />
+
+                        <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,16,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Normalized preview" FontWeight="SemiBold" />
+
+                                <TextBlock Text="excludedProcesses" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,0,0" />
+                                <TextBlock Text="{Binding NormalizedExcludedProcessesText}" Style="{StaticResource SettingsValueStyle}" />
+
+                                <TextBlock Text="excludedTitlePatterns" Style="{StaticResource SettingsLabelStyle}" />
+                                <TextBlock Text="{Binding NormalizedExcludedTitlePatternsText}" Style="{StaticResource SettingsValueStyle}" />
+
+                                <TextBlock Text="idleSummaryIntervalMinutes" Style="{StaticResource SettingsLabelStyle}" />
+                                <TextBlock Text="{Binding IdleSummaryIntervalMinutesText}" Style="{StaticResource SettingsValueStyle}" />
+
+                                <TextBlock Text="useMockCapture" Style="{StaticResource SettingsLabelStyle}" />
+                                <TextBlock Text="{Binding UseMockCaptureText}" Style="{StaticResource SettingsValueStyle}" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Border>
+            </Grid>
+
+            <Border Grid.Row="2" Style="{DynamicResource CardBorderStyle}">
+                <StackPanel>
+                    <TextBlock Text="Local Data" Style="{StaticResource SettingsSectionTitleStyle}" />
+
+                    <TextBlock Text="data root" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding DataRootText}" Style="{StaticResource SettingsValueStyle}" />
+
+                    <TextBlock Text="config directory" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding ConfigDirectoryText}" Style="{StaticResource SettingsValueStyle}" />
+
+                    <TextBlock Text="database path" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding DatabasePathText}" Style="{StaticResource SettingsValueStyle}" />
+
+                    <TextBlock Text="logs directory" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding LogsDirectoryText}" Style="{StaticResource SettingsValueStyle}" />
+
+                    <TextBlock Text="runtime directory" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding RuntimeDirectoryText}" Style="{StaticResource SettingsValueStyle}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+    </ScrollViewer>
+</UserControl>
