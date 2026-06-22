@@ -1890,6 +1890,7 @@ public sealed class DataFlowTests
         var samplesLoads = 0;
         var sessionsLoads = 0;
         var appsLoads = 0;
+        var settingsLoads = 0;
         var viewModel = await CreateMainWindowViewModelAsync(
             workspace,
             sampleLoader: (_, _) =>
@@ -1906,6 +1907,11 @@ public sealed class DataFlowTests
             {
                 appsLoads++;
                 return Task.FromResult<IReadOnlyList<AppUsageSummary>>([]);
+            },
+            settingsLoader: cancellationToken =>
+            {
+                settingsLoads++;
+                return Task.FromResult(new AppSettings());
             });
 
         viewModel.SelectedTabIndex = 1;
@@ -1928,6 +1934,638 @@ public sealed class DataFlowTests
         Assert.Equal(1, appsLoads);
         Assert.Equal(1, sessionsLoads);
         Assert.Equal(1, samplesLoads);
+        Assert.Equal(0, settingsLoads);
+
+        viewModel.SelectedTabIndex = 5;
+        await viewModel.RefreshAsync();
+
+        Assert.Equal(1, settingsLoads);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_AppliesRefreshIntervalAfterSettingsSave()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var runtimeStateStore = new RuntimeStateStore();
+        var healthStateStore = new AgentHealthStateStore();
+        var controlFileStore = new AgentControlFileStore();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+
+        await appSettingsStore.WriteAsync(
+            settingsService.AppSettingsPath,
+            new AppSettings
+            {
+                RefreshIntervalSeconds = 15,
+                AutoStartAgentWhenAppStarts = false,
+                LastSelectedPage = "Dashboard"
+            });
+
+        var statusService = new AgentStatusService(
+            paths,
+            runtimeStateStore,
+            healthStateStore,
+            controlFileStore,
+            agentOptionsStore);
+        var processService = new AgentProcessService(
+            paths,
+            runtimeStateStore,
+            controlFileStore,
+            NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, controlFileStore, statusService);
+        var overviewDataService = new OverviewDataService(paths);
+        var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var samplesViewModel = new SamplesViewModel((_, _) => Task.FromResult<IReadOnlyList<ForegroundSample>>([]));
+        var sessionsViewModel = new SessionsViewModel((_, _, _) => Task.FromResult<IReadOnlyList<AppSession>>([]));
+        var appsViewModel = new AppsViewModel((_, _) => Task.FromResult<IReadOnlyList<AppUsageSummary>>([]));
+        var settingsViewModel = new SettingsViewModel(settingsService, paths);
+        var mainViewModel = new MainWindowViewModel(
+            processService,
+            controlService,
+            statusService,
+            overviewDataService,
+            diagnosticsDataService,
+            samplesViewModel,
+            sessionsViewModel,
+            appsViewModel,
+            settingsViewModel,
+            settingsService);
+
+        await mainViewModel.InitializeAsync();
+
+        var timer = GetPrivateFieldValue<System.Windows.Threading.DispatcherTimer>(mainViewModel, "_refreshTimer");
+        Assert.Equal(TimeSpan.FromSeconds(15), timer.Interval);
+
+        settingsViewModel.RefreshIntervalSecondsText = "30";
+        await settingsViewModel.SaveAppSettingsAsync();
+
+        Assert.Equal(TimeSpan.FromSeconds(30), timer.Interval);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_LoadsAppSettings()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        await appSettingsStore.WriteAsync(
+            Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings
+            {
+                AutoStartAgentWhenAppStarts = true,
+                RefreshIntervalSeconds = 42,
+                LastSelectedPage = "Samples"
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.HasLoadError);
+        Assert.Equal(42, viewModel.AppSettings.RefreshIntervalSeconds);
+        Assert.True(viewModel.AppSettings.AutoStartAgentWhenAppStarts);
+        Assert.Equal("Samples", viewModel.AppSettings.LastSelectedPage);
+        Assert.Equal("42", viewModel.RefreshIntervalSecondsText);
+        Assert.Equal("Enabled", viewModel.AutoStartAgentWhenAppStartsText);
+        Assert.Equal("Samples", viewModel.LastSelectedPageText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_LoadsAgentOptions()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        await agentOptionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 7,
+                IdleThresholdSeconds = 90,
+                HeartbeatIntervalSeconds = 5,
+                StaleThresholdSeconds = 20,
+                RetentionDays = 14,
+                EnableJsonlJournal = false,
+                EnableAgentEventJournal = false,
+                EnableSessionMerge = false,
+                MaskWindowTitles = false,
+                ExcludedProcesses = ["Notepad"],
+                ExcludedTitlePatterns = ["*Secret*"]
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.HasLoadError);
+        Assert.Equal(7, viewModel.AgentOptions.SamplingIntervalSeconds);
+        Assert.Equal(90, viewModel.AgentOptions.IdleThresholdSeconds);
+        Assert.Equal(5, viewModel.AgentOptions.HeartbeatIntervalSeconds);
+        Assert.Equal(20, viewModel.AgentOptions.StaleThresholdSeconds);
+        Assert.Equal(14, viewModel.AgentOptions.RetentionDays);
+        Assert.Equal("7", viewModel.SamplingIntervalSecondsText);
+        Assert.Equal("90", viewModel.IdleThresholdSecondsText);
+        Assert.Equal("5", viewModel.HeartbeatIntervalSecondsText);
+        Assert.Equal("20", viewModel.StaleThresholdSecondsText);
+        Assert.Equal("14", viewModel.RetentionDaysText);
+        Assert.Equal("Disabled", viewModel.EnableJsonlJournalText);
+        Assert.Equal("Disabled", viewModel.EnableAgentEventJournalText);
+        Assert.Equal("Disabled", viewModel.EnableSessionMergeText);
+        Assert.Equal("Disabled", viewModel.MaskWindowTitlesText);
+        Assert.Equal("Notepad", viewModel.ExcludedProcessesText);
+        Assert.Equal("*Secret*", viewModel.ExcludedTitlePatternsText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ReturnsDefaultsWhenFilesMissing()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.HasLoadError);
+        Assert.Equal(15, viewModel.AppSettings.RefreshIntervalSeconds);
+        Assert.False(viewModel.AppSettings.AutoStartAgentWhenAppStarts);
+        Assert.Equal("Dashboard", viewModel.AppSettings.LastSelectedPage);
+        Assert.Equal(3, viewModel.AgentOptions.SamplingIntervalSeconds);
+        Assert.Equal(60, viewModel.AgentOptions.IdleThresholdSeconds);
+        Assert.Equal(3, viewModel.AgentOptions.HeartbeatIntervalSeconds);
+        Assert.Equal(15, viewModel.AgentOptions.StaleThresholdSeconds);
+        Assert.Equal(30, viewModel.AgentOptions.RetentionDays);
+        Assert.Equal("KeePass", viewModel.AgentOptions.ExcludedProcesses.First());
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_UsesEmptyStateForEmptyCollections()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        await agentOptionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                ExcludedProcesses = [],
+                ExcludedTitlePatterns = []
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.HasLoadError);
+        Assert.Equal("(none)", viewModel.ExcludedProcessesText);
+        Assert.Equal("(none)", viewModel.ExcludedTitlePatternsText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RedactsLoadFailureAndShowsSafeStatusText()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var viewModel = new SettingsViewModel(
+            _ => throw new InvalidOperationException(
+                @"Failed to open C:\Users\Alice\secrets\app-settings.json"),
+            (_, _) => Task.CompletedTask,
+            _ => throw new InvalidOperationException(
+                @"Failed to open \\server\share\windows-agent.json"),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.True(viewModel.HasLoadError);
+        Assert.DoesNotContain(@"C:\Users\Alice\secrets\app-settings.json", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share\windows-agent.json", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<path>", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.Equal("Settings could not be fully loaded. Refresh to retry.", viewModel.EmptyStateText);
+    }
+
+    [Fact]
+    public void SettingsViewModel_ExposesDataConfigLogRuntimePaths()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            paths);
+
+        Assert.Equal(paths.Root, viewModel.DataRootText);
+        Assert.Equal(paths.ConfigDir, viewModel.ConfigDirectoryText);
+        Assert.Equal(paths.DatabasePath, viewModel.DatabasePathText);
+        Assert.Equal(paths.LogsDir, viewModel.LogsDirectoryText);
+        Assert.Equal(paths.RuntimeDir, viewModel.RuntimeDirectoryText);
+        Assert.Equal(Path.Combine(paths.ConfigDir, "app-settings.json"), viewModel.AppSettingsPathText);
+        Assert.Equal(paths.AgentOptionsPath, viewModel.AgentOptionsPathText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SavesAppSettings()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+
+        await appSettingsStore.WriteAsync(
+            settingsService.AppSettingsPath,
+            new AppSettings
+            {
+                RefreshIntervalSeconds = 15,
+                AutoStartAgentWhenAppStarts = false,
+                LastSelectedPage = "Dashboard"
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.RefreshIntervalSecondsText = "45";
+        viewModel.AutoStartAgentWhenAppStarts = true;
+        viewModel.LastSelectedPageText = "Diagnostics";
+
+        await viewModel.SaveAppSettingsAsync();
+
+        var saved = await settingsService.ReadAppSettingsAsync();
+        Assert.Equal(45, saved.RefreshIntervalSeconds);
+        Assert.True(saved.AutoStartAgentWhenAppStarts);
+        Assert.Equal("Diagnostics", saved.LastSelectedPage);
+        Assert.Equal("App settings saved.", viewModel.SaveStatusText);
+        Assert.False(viewModel.HasValidationError);
+        Assert.False(viewModel.HasSaveError);
+        Assert.Equal("45", viewModel.RefreshIntervalSecondsText);
+        Assert.True(viewModel.AutoStartAgentWhenAppStarts);
+        Assert.Equal("Diagnostics", viewModel.LastSelectedPageText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RejectsInvalidRefreshInterval()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+
+        await appSettingsStore.WriteAsync(
+            settingsService.AppSettingsPath,
+            new AppSettings
+            {
+                RefreshIntervalSeconds = 15,
+                AutoStartAgentWhenAppStarts = false,
+                LastSelectedPage = "Dashboard"
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.RefreshIntervalSecondsText = "4";
+        await viewModel.SaveAppSettingsAsync();
+
+        var saved = await settingsService.ReadAppSettingsAsync();
+        Assert.Equal(15, saved.RefreshIntervalSeconds);
+        Assert.True(viewModel.HasValidationError);
+        Assert.False(viewModel.HasSaveError);
+        Assert.Contains("Refresh interval must be an integer between 5 and 300 seconds.", viewModel.SaveStatusText, StringComparison.Ordinal);
+
+        viewModel.RefreshIntervalSecondsText = "abc";
+        await viewModel.SaveAppSettingsAsync();
+
+        Assert.True(viewModel.HasValidationError);
+        Assert.Contains("Refresh interval must be an integer between 5 and 300 seconds.", viewModel.SaveStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RejectsUnknownLastSelectedPage()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+
+        await appSettingsStore.WriteAsync(
+            settingsService.AppSettingsPath,
+            new AppSettings
+            {
+                RefreshIntervalSeconds = 15,
+                AutoStartAgentWhenAppStarts = false,
+                LastSelectedPage = "Dashboard"
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.RefreshIntervalSecondsText = "20";
+        viewModel.LastSelectedPageText = "Tray";
+        await viewModel.SaveAppSettingsAsync();
+
+        var saved = await settingsService.ReadAppSettingsAsync();
+        Assert.Equal("Dashboard", saved.LastSelectedPage);
+        Assert.True(viewModel.HasValidationError);
+        Assert.Contains("Last selected page must be one of", viewModel.SaveStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RedactsAppSettingsSaveFailure()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings
+            {
+                RefreshIntervalSeconds = 15,
+                LastSelectedPage = "Dashboard"
+            }),
+            (_, _) => throw new InvalidOperationException(
+                @"Failed to save C:\Users\Alice\config\app-settings.json"),
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            paths);
+
+        await viewModel.LoadAsync();
+        viewModel.RefreshIntervalSecondsText = "30";
+        await viewModel.SaveAppSettingsAsync();
+
+        Assert.True(viewModel.HasSaveError);
+        Assert.DoesNotContain(@"C:\Users\Alice\config\app-settings.json", viewModel.SaveStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<path>", viewModel.SaveStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_AcceptsDefaultOptions()
+    {
+        var validator = new AgentOptionsValidator();
+
+        var result = validator.Validate(new WindowsAgentOptions());
+
+        Assert.True(result.IsValid);
+        Assert.Equal("Agent options are valid.", result.SafeMessageText);
+        Assert.Equal(["KeePass", "1Password", "Bitwarden"], result.NormalizedOptions.ExcludedProcesses);
+        Assert.Empty(result.NormalizedOptions.ExcludedTitlePatterns);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_RejectsInvalidNumericRanges()
+    {
+        var validator = new AgentOptionsValidator();
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 0,
+            IdleThresholdSeconds = 9,
+            HeartbeatIntervalSeconds = 0,
+            StaleThresholdSeconds = 4,
+            RetentionDays = 0
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, issue => issue.FieldName == "samplingIntervalSeconds");
+        Assert.Contains(result.Issues, issue => issue.FieldName == "idleThresholdSeconds");
+        Assert.Contains(result.Issues, issue => issue.FieldName == "heartbeatIntervalSeconds");
+        Assert.Contains(result.Issues, issue => issue.FieldName == "staleThresholdSeconds");
+        Assert.Contains(result.Issues, issue => issue.FieldName == "retentionDays");
+        Assert.DoesNotContain("C:\\", result.SafeMessageText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_RejectsStaleThresholdEqualToHeartbeat()
+    {
+        var validator = new AgentOptionsValidator();
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 1,
+            IdleThresholdSeconds = 10,
+            HeartbeatIntervalSeconds = 5,
+            StaleThresholdSeconds = 5,
+            RetentionDays = 30
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, issue => issue.FieldName == "staleThresholdSeconds" && issue.Message.Contains("greater than heartbeatIntervalSeconds", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_RejectsProcessPaths()
+    {
+        var validator = new AgentOptionsValidator();
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            ExcludedProcesses = ["C:\\Windows\\System32\\notepad.exe", "Notepad"],
+            ExcludedTitlePatterns = ["*Secret*"]
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Issues, issue => issue.FieldName == "excludedProcesses");
+        Assert.DoesNotContain(@"C:\Windows\System32\notepad.exe", result.SafeMessageText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["Notepad"], result.NormalizedOptions.ExcludedProcesses);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_NormalizesExcludedProcesses()
+    {
+        var validator = new AgentOptionsValidator();
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            ExcludedProcesses = ["notepad.exe", " Notepad ", "calc.exe", "calc"],
+            ExcludedTitlePatterns = ["*Secret*"]
+        });
+
+        Assert.True(result.IsValid);
+        Assert.Equal(["notepad", "calc"], result.NormalizedOptions.ExcludedProcesses);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_DeduplicatesPrivacyRules()
+    {
+        var validator = new AgentOptionsValidator();
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            ExcludedProcesses = ["KeePass", "keepass.exe", " 1Password ", "1password.exe"],
+            ExcludedTitlePatterns = ["*Secret*", "  ", "*Secret*", "*Private*", "*private*"]
+        });
+
+        Assert.True(result.IsValid);
+        Assert.Equal(["KeePass", "1Password"], result.NormalizedOptions.ExcludedProcesses);
+        Assert.Equal(["*Secret*", "*Private*"], result.NormalizedOptions.ExcludedTitlePatterns);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ValidatesAgentOptionsEditor()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "7";
+        viewModel.IdleThresholdSecondsText = "90";
+        viewModel.HeartbeatIntervalSecondsText = "5";
+        viewModel.StaleThresholdSecondsText = "20";
+        viewModel.RetentionDaysText = "14";
+        viewModel.EnableJsonlJournal = false;
+        viewModel.ExcludedProcessesText = "notepad.exe\ncalc.exe\ncalc";
+        viewModel.ExcludedTitlePatternsText = "*Secret*\n*Secret*";
+
+        viewModel.ValidateAgentOptions();
+
+        Assert.False(viewModel.HasAgentOptionsValidationError);
+        Assert.Equal("Agent options are valid.", viewModel.AgentOptionsValidationText);
+        Assert.Equal("Normalized preview updated.", viewModel.AgentOptionsValidationDetailsText);
+        Assert.Equal("Disabled", viewModel.EnableJsonlJournalText);
+        Assert.Equal("notepad" + Environment.NewLine + "calc", viewModel.NormalizedExcludedProcessesText);
+        Assert.Equal("*Secret*", viewModel.NormalizedExcludedTitlePatternsText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ResetAgentOptionsEditorRestoresLoadedValues()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+
+        await agentOptionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 11,
+                IdleThresholdSeconds = 120,
+                HeartbeatIntervalSeconds = 9,
+                StaleThresholdSeconds = 40,
+                RetentionDays = 45,
+                EnableJsonlJournal = false,
+                EnableAgentEventJournal = false,
+                EnableSessionMerge = false,
+                MaskWindowTitles = false,
+                ExcludedProcesses = ["Notepad"],
+                ExcludedTitlePatterns = ["*Secret*"],
+                UseMockCapture = true
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "7";
+        viewModel.IdleThresholdSecondsText = "90";
+        viewModel.HeartbeatIntervalSecondsText = "5";
+        viewModel.StaleThresholdSecondsText = "20";
+        viewModel.RetentionDaysText = "14";
+        viewModel.EnableJsonlJournal = true;
+        viewModel.EnableAgentEventJournal = true;
+        viewModel.EnableSessionMerge = true;
+        viewModel.MaskWindowTitles = true;
+        viewModel.ExcludedProcessesText = "calc.exe";
+        viewModel.ExcludedTitlePatternsText = "*Private*";
+
+        viewModel.ResetAgentOptionsEditor();
+
+        Assert.Equal("11", viewModel.SamplingIntervalSecondsText);
+        Assert.Equal("120", viewModel.IdleThresholdSecondsText);
+        Assert.Equal("9", viewModel.HeartbeatIntervalSecondsText);
+        Assert.Equal("40", viewModel.StaleThresholdSecondsText);
+        Assert.Equal("45", viewModel.RetentionDaysText);
+        Assert.False(viewModel.EnableJsonlJournal);
+        Assert.False(viewModel.EnableAgentEventJournal);
+        Assert.False(viewModel.EnableSessionMerge);
+        Assert.False(viewModel.MaskWindowTitles);
+        Assert.Equal("Notepad", viewModel.ExcludedProcessesText);
+        Assert.Equal("*Secret*", viewModel.ExcludedTitlePatternsText);
+        Assert.Equal("Enabled", viewModel.UseMockCaptureText);
+        Assert.Equal("Notepad", viewModel.NormalizedExcludedProcessesText);
+        Assert.Equal("*Secret*", viewModel.NormalizedExcludedTitlePatternsText);
+        Assert.Equal("Agent options editor reset to loaded values.", viewModel.AgentOptionsValidationText);
+        Assert.False(viewModel.HasAgentOptionsValidationError);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SaveAppSettingsDoesNotSaveAgentOptions()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var appSettingsStore = new AppSettingsStore();
+        var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+
+        await appSettingsStore.WriteAsync(
+            settingsService.AppSettingsPath,
+            new AppSettings
+            {
+                RefreshIntervalSeconds = 15,
+                AutoStartAgentWhenAppStarts = false,
+                LastSelectedPage = "Dashboard"
+            });
+
+        await agentOptionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 11,
+                IdleThresholdSeconds = 120,
+                HeartbeatIntervalSeconds = 9,
+                StaleThresholdSeconds = 40,
+                RetentionDays = 45,
+                EnableJsonlJournal = false,
+                EnableAgentEventJournal = false,
+                EnableSessionMerge = false,
+                MaskWindowTitles = false,
+                ExcludedProcesses = ["Notepad"],
+                ExcludedTitlePatterns = ["*Secret*"],
+                UseMockCapture = true
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.RefreshIntervalSecondsText = "30";
+        viewModel.AutoStartAgentWhenAppStarts = true;
+        viewModel.LastSelectedPageText = "Diagnostics";
+        viewModel.SamplingIntervalSecondsText = "7";
+        viewModel.EnableJsonlJournal = true;
+        viewModel.ExcludedProcessesText = "calc.exe";
+
+        await viewModel.SaveAppSettingsAsync();
+
+        var savedAppSettings = await settingsService.ReadAppSettingsAsync();
+        var savedAgentOptions = await settingsService.ReadAgentOptionsAsync();
+
+        Assert.Equal(30, savedAppSettings.RefreshIntervalSeconds);
+        Assert.True(savedAppSettings.AutoStartAgentWhenAppStarts);
+        Assert.Equal("Diagnostics", savedAppSettings.LastSelectedPage);
+        Assert.Equal(11, savedAgentOptions.SamplingIntervalSeconds);
+        Assert.False(savedAgentOptions.EnableJsonlJournal);
+        Assert.Equal(["Notepad"], savedAgentOptions.ExcludedProcesses);
     }
 
     [Fact]
@@ -2287,7 +2925,8 @@ public sealed class DataFlowTests
         TempWorkspace workspace,
         Func<int, CancellationToken, Task<IReadOnlyList<ForegroundSample>>>? sampleLoader = null,
         Func<string, int, CancellationToken, Task<IReadOnlyList<AppSession>>>? sessionLoader = null,
-        Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null)
+        Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null,
+        Func<CancellationToken, Task<AppSettings>>? settingsLoader = null)
     {
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
@@ -2300,6 +2939,9 @@ public sealed class DataFlowTests
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
         var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsViewModel = settingsLoader is null
+            ? new SettingsViewModel(settingsService, paths)
+            : new SettingsViewModel(settingsLoader, (_, _) => Task.CompletedTask, _ => Task.FromResult(new WindowsAgentOptions()), paths);
         var statusService = new AgentStatusService(
             paths,
             runtimeStateStore,
@@ -2330,8 +2972,15 @@ public sealed class DataFlowTests
             samplesViewModel,
             sessionsViewModel,
             appsViewModel,
-            settingsService,
-            paths);
+            settingsViewModel,
+            settingsService);
+    }
+
+    private static T GetPrivateFieldValue<T>(object instance, string fieldName)
+    {
+        var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(field);
+        return (T)field!.GetValue(instance)!;
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
