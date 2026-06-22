@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Agent.Events;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
@@ -1334,6 +1335,202 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public async Task SampleQueryService_ReturnsRecentSamplesWithStableOrderingAndLimit()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var sampleTime = DateTime.UtcNow;
+        await InsertSampleAsync(paths.DatabasePath, sampleTime.AddMinutes(-1), "Old", "Old title", "Active");
+        await InsertSampleAsync(paths.DatabasePath, sampleTime, "Code", "Code title", "Active");
+        await InsertSampleAsync(paths.DatabasePath, sampleTime, "QuantifiedSelf.Windows.App", null, "Idle");
+
+        var queryService = new SampleQueryService(paths.DatabasePath);
+
+        var samples = await queryService.GetRecentSamplesAsync(limit: 2);
+
+        Assert.Equal(2, samples.Count);
+        Assert.Equal("QuantifiedSelf.Windows.App", samples[0].ProcessName);
+        Assert.Equal("WUJI", samples[0].DisplayName);
+        Assert.Equal("Code", samples[1].ProcessName);
+        Assert.True(samples[0].Id > samples[1].Id);
+    }
+
+    [Fact]
+    public async Task SamplesViewModel_LoadsRecentSamplesAndFiltersByActivityState()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var sampleTime = DateTime.UtcNow;
+        await InsertSampleAsync(paths.DatabasePath, sampleTime.AddMinutes(-2), "Code", "Code title", "Active");
+        await InsertSampleAsync(paths.DatabasePath, sampleTime.AddMinutes(-1), "Explorer", null, "Unknown");
+        await InsertSampleAsync(paths.DatabasePath, sampleTime, "QuantifiedSelf.Windows.App", null, "Idle");
+
+        var viewModel = new SamplesViewModel(new SamplesDataService(paths));
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal(3, viewModel.Samples.Count);
+        Assert.Equal("QuantifiedSelf.Windows.App", viewModel.Samples[0].ProcessName);
+        Assert.Equal("WUJI", viewModel.Samples[0].DisplayName);
+        Assert.Equal("[Hidden]", viewModel.Samples[0].WindowTitleText);
+        Assert.DoesNotContain(
+            typeof(SampleListItemViewModel).GetProperties().Select(property => property.Name),
+            propertyName => propertyName.Contains("ExecutablePath", StringComparison.OrdinalIgnoreCase));
+
+        viewModel.SelectedActivityState = "Idle";
+
+        Assert.Single(viewModel.Samples);
+        Assert.Equal("Idle", viewModel.Samples[0].ActivityState);
+        Assert.Contains("Showing 1 of 3", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SamplesViewModel_ReturnsEmptyStateForEmptyDatabase()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var viewModel = new SamplesViewModel(new SamplesDataService(paths));
+
+        await viewModel.LoadAsync();
+
+        Assert.Empty(viewModel.Samples);
+        Assert.False(viewModel.HasLoadError);
+        Assert.Equal("No samples found.", viewModel.StatusText);
+        Assert.Contains("暂无采样记录", viewModel.EmptyStateText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SamplesViewModel_RedactsLoadFailureAndShowsErrorState()
+    {
+        var viewModel = new SamplesViewModel((_, _) =>
+            throw new InvalidOperationException(
+                @"Failed to open C:\Users\Alice\secrets\db.sqlite and \\server\share\logs\agent.log"));
+
+        await viewModel.LoadAsync();
+
+        Assert.Empty(viewModel.Samples);
+        Assert.True(viewModel.HasLoadError);
+        Assert.Equal("Samples could not be loaded. Refresh to retry.", viewModel.EmptyStateText);
+        Assert.Contains("Samples load failed", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<path>", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\Users\Alice", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SessionQueryService_ReturnsRecentSessionsWithStableOrderingAndLimit()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var startedAt = DateTime.Now.Date.AddHours(10);
+        await InsertSessionAsync(paths.DatabasePath, startedAt.AddHours(-1), startedAt, "Old", 600, 600, 0, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, startedAt, startedAt.AddMinutes(10), "Code", 600, 600, 0, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, startedAt, startedAt.AddMinutes(20), "QuantifiedSelf.Windows.Agent", 1200, 1200, 0, 0, "Stopped");
+
+        var queryService = new SessionQueryService(paths.DatabasePath);
+
+        var sessions = await queryService.GetRecentSessionsAsync(limit: 2);
+
+        Assert.Equal(2, sessions.Count);
+        Assert.Equal("QuantifiedSelf.Windows.Agent", sessions[0].ProcessName);
+        Assert.Equal("WUJI Agent", sessions[0].DisplayName);
+        Assert.Equal("Code", sessions[1].ProcessName);
+        Assert.True(sessions[0].Id > sessions[1].Id);
+    }
+
+    [Fact]
+    public async Task SessionQueryService_ReturnsSessionsOverlappingLocalDay()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var dayStart = DateTime.Now.Date;
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(-1), dayStart.AddHours(1), "CrossMidnight", 7200, 7200, 0, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(8), dayStart.AddHours(9), "InsideDay", 3600, 1800, 1800, 0, "Paused");
+        await InsertOpenSessionAsync(paths.DatabasePath, dayStart.AddHours(10), "OpenApp", 300, 300, 0, 0);
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddDays(-1).AddHours(8), dayStart.AddDays(-1).AddHours(9), "Yesterday", 3600, 3600, 0, 0, "Stopped");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddDays(1).AddHours(1), dayStart.AddDays(1).AddHours(2), "Tomorrow", 3600, 3600, 0, 0, "Stopped");
+
+        var queryService = new SessionQueryService(paths.DatabasePath);
+
+        var sessions = await queryService.GetSessionsForLocalDayAsync(DateOnly.FromDateTime(dayStart), limit: 10);
+
+        Assert.Equal(["OpenApp", "InsideDay", "CrossMidnight"], sessions.Select(x => x.ProcessName).ToArray());
+        Assert.Equal("Open", sessions[0].CloseReason);
+        Assert.Null(sessions[0].EndedAtUtc);
+    }
+
+    [Fact]
+    public async Task AppUsageQueryService_RanksAppsByActiveDurationAndStableTieBreaking()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var dayStart = DateTime.Now.Date;
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(8), dayStart.AddHours(9), "Alpha", 3600, 1200, 2400, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(9), dayStart.AddHours(10), "Beta", 3600, 1200, 2400, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(10), dayStart.AddHours(12), "Gamma", 7200, 1200, 6000, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(-1), dayStart.AddHours(1), "CrossMidnight", 7200, 2000, 5200, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(12), dayStart.AddHours(13), "QuantifiedSelf.Windows.App", 3600, 900, 2700, 0, "Stopped");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(13), dayStart.AddHours(14), string.Empty, 3600, 100, 3500, 0, "Stopped");
+        await InsertSessionAsync(paths.DatabasePath, dayStart.AddDays(-1).AddHours(13), dayStart.AddDays(-1).AddHours(14), "Ignored", 3600, 3600, 0, 0, "Stopped");
+
+        var queryService = new AppUsageQueryService(paths.DatabasePath);
+
+        var apps = await queryService.GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(dayStart), limit: 10);
+        var limitedApps = await queryService.GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(dayStart), limit: 3);
+
+        Assert.Equal(["Gamma", "Alpha", "Beta", "CrossMidnight", "QuantifiedSelf.Windows.App", string.Empty], apps.Select(x => x.ProcessName).ToArray());
+        Assert.Equal(["Gamma", "Alpha", "Beta"], limitedApps.Select(x => x.ProcessName).ToArray());
+        Assert.Equal(1200, apps[0].ActiveDurationSeconds);
+        Assert.Equal(7200, apps[0].TotalDurationSeconds);
+        Assert.Equal(1000, apps[3].ActiveDurationSeconds);
+        Assert.Equal(3600, apps[3].TotalDurationSeconds);
+        Assert.Equal(dayStart.AddHours(1).ToUniversalTime(), apps[3].LastUsedAtUtc);
+        Assert.Equal("WUJI", apps[4].DisplayName);
+        Assert.Equal("Unknown", apps[5].DisplayName);
+        Assert.DoesNotContain(apps, x => x.ProcessName == "Ignored");
+    }
+
+    [Fact]
+    public async Task DataViewQueryServices_ReturnEmptyListsForMissingDatabaseAndMissingTables()
+    {
+        using var workspace = new TempWorkspace();
+        var missingDatabasePath = Path.Combine(workspace.Root, "missing.db");
+
+        Assert.Empty(await new SampleQueryService(missingDatabasePath).GetRecentSamplesAsync());
+        Assert.Empty(await new SessionQueryService(missingDatabasePath).GetRecentSessionsAsync());
+        Assert.Empty(await new SessionQueryService(missingDatabasePath).GetSessionsForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
+        Assert.Empty(await new AppUsageQueryService(missingDatabasePath).GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
+
+        var emptyDatabasePath = Path.Combine(workspace.Root, "empty.db");
+        await using (await SqliteConnectionFactory.OpenAsync(emptyDatabasePath, SqliteOpenMode.ReadWriteCreate))
+        {
+        }
+
+        Assert.Empty(await new SampleQueryService(emptyDatabasePath).GetRecentSamplesAsync());
+        Assert.Empty(await new SessionQueryService(emptyDatabasePath).GetRecentSessionsAsync());
+        Assert.Empty(await new SessionQueryService(emptyDatabasePath).GetSessionsForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
+        Assert.Empty(await new AppUsageQueryService(emptyDatabasePath).GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
+    }
+
+    [Fact]
     public async Task SqliteDatabaseInitializer_ResetsLegacySchemaToCurrentShape()
     {
         using var workspace = new TempWorkspace();
@@ -1565,6 +1762,93 @@ public sealed class DataFlowTests
         command.Parameters.AddWithValue("$idle_duration_seconds", idleDurationSeconds);
         command.Parameters.AddWithValue("$unknown_duration_seconds", unknownDurationSeconds);
         command.Parameters.AddWithValue("$close_reason", closeReason);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task InsertOpenSessionAsync(
+        string databasePath,
+        DateTime startedAtLocal,
+        string processName,
+        int totalDurationSeconds,
+        int activeDurationSeconds,
+        int idleDurationSeconds,
+        int unknownDurationSeconds)
+    {
+        await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(databasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO app_sessions (
+                started_at_utc,
+                ended_at_utc,
+                process_name,
+                window_title,
+                total_duration_seconds,
+                active_duration_seconds,
+                idle_duration_seconds,
+                unknown_duration_seconds,
+                close_reason
+            )
+            VALUES (
+                $started_at_utc,
+                NULL,
+                $process_name,
+                $window_title,
+                $total_duration_seconds,
+                $active_duration_seconds,
+                $idle_duration_seconds,
+                $unknown_duration_seconds,
+                'Open'
+            );
+            """;
+
+        command.Parameters.AddWithValue("$started_at_utc", startedAtLocal.ToUniversalTime().ToString("O"));
+        command.Parameters.AddWithValue("$process_name", processName);
+        command.Parameters.AddWithValue("$window_title", DBNull.Value);
+        command.Parameters.AddWithValue("$total_duration_seconds", totalDurationSeconds);
+        command.Parameters.AddWithValue("$active_duration_seconds", activeDurationSeconds);
+        command.Parameters.AddWithValue("$idle_duration_seconds", idleDurationSeconds);
+        command.Parameters.AddWithValue("$unknown_duration_seconds", unknownDurationSeconds);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static async Task InsertSampleAsync(
+        string databasePath,
+        DateTime sampleTimeUtc,
+        string processName,
+        string? windowTitle,
+        string activityState)
+    {
+        await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(databasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO foreground_samples (
+                sample_time_utc,
+                process_name,
+                window_title,
+                executable_path,
+                idle_seconds,
+                activity_state
+            )
+            VALUES (
+                $sample_time_utc,
+                $process_name,
+                $window_title,
+                $executable_path,
+                $idle_seconds,
+                $activity_state
+            );
+            """;
+
+        command.Parameters.AddWithValue("$sample_time_utc", sampleTimeUtc.ToUniversalTime().ToString("O"));
+        command.Parameters.AddWithValue("$process_name", processName);
+        command.Parameters.AddWithValue("$window_title", (object?)windowTitle ?? DBNull.Value);
+        command.Parameters.AddWithValue("$executable_path", DBNull.Value);
+        command.Parameters.AddWithValue("$idle_seconds", 0);
+        command.Parameters.AddWithValue("$activity_state", activityState);
 
         await command.ExecuteNonQueryAsync();
     }
