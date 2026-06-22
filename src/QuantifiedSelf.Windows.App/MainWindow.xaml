@@ -271,6 +271,14 @@
                     <views:SamplesView DataContext="{Binding SamplesViewModel}" />
                 </TabItem>
 
+                <TabItem Header="Sessions">
+                    <views:SessionsView DataContext="{Binding SessionsViewModel}" />
+                </TabItem>
+
+                <TabItem Header="Apps">
+                    <views:AppsView DataContext="{Binding AppsViewModel}" />
+                </TabItem>
+
                 <TabItem Header="Diagnostics">
                     <ScrollViewer VerticalScrollBarVisibility="Auto">
                         <Grid Margin="0,18,0,0">

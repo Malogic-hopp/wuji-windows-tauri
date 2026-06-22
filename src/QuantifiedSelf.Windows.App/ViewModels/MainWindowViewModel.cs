@@ -26,6 +26,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly OverviewDataService _overviewDataService;
     private readonly DiagnosticsDataService _diagnosticsDataService;
     private readonly SamplesViewModel _samplesViewModel;
+    private readonly SessionsViewModel _sessionsViewModel;
+    private readonly AppsViewModel _appsViewModel;
     private readonly SettingsService _settingsService;
     private readonly WindowsAgentPaths _paths;
     private readonly DispatcherTimer _refreshTimer;
@@ -68,6 +70,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         OverviewDataService overviewDataService,
         DiagnosticsDataService diagnosticsDataService,
         SamplesViewModel samplesViewModel,
+        SessionsViewModel sessionsViewModel,
+        AppsViewModel appsViewModel,
         SettingsService settingsService,
         WindowsAgentPaths paths)
     {
@@ -77,6 +81,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _overviewDataService = overviewDataService;
         _diagnosticsDataService = diagnosticsDataService;
         _samplesViewModel = samplesViewModel;
+        _sessionsViewModel = sessionsViewModel;
+        _appsViewModel = appsViewModel;
         _settingsService = settingsService;
         _paths = paths;
 
@@ -85,7 +91,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy);
         ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
-        OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = 3);
+        OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = 5);
         OpenDataFolderCommand = new RelayCommand(OpenDataFolder);
         OpenLogsFolderCommand = new RelayCommand(OpenLogsFolder);
 
@@ -123,6 +129,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public ObservableCollection<AgentEvent> RecentErrors { get; } = new();
 
     public SamplesViewModel SamplesViewModel => _samplesViewModel;
+
+    public SessionsViewModel SessionsViewModel => _sessionsViewModel;
+
+    public AppsViewModel AppsViewModel => _appsViewModel;
 
     public string AgentStatusText
     {
@@ -205,8 +215,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 {
                     0 => "Dashboard",
                     1 => "Samples",
-                    2 => "Diagnostics",
-                    3 => "Settings",
+                    2 => "Sessions",
+                    3 => "Apps",
+                    4 => "Diagnostics",
+                    5 => "Settings",
                     _ => "Dashboard"
                 };
 
@@ -312,8 +324,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SelectedTabIndex = _appSettings.LastSelectedPage switch
         {
             "Samples" => 1,
-            "Diagnostics" => 2,
-            "Settings" => 3,
+            "Sessions" => 2,
+            "Apps" => 3,
+            "Diagnostics" => 4,
+            "Settings" => 5,
             _ => 0
         };
         _suppressPagePersistence = false;
@@ -346,6 +360,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var recentErrors = await _diagnosticsDataService.GetRecentErrorsAsync(10, cancellationToken);
             var currentJournalPath = _diagnosticsDataService.GetCurrentJournalPath(DateTime.UtcNow);
             await SamplesViewModel.LoadAsync(cancellationToken);
+            await SessionsViewModel.LoadAsync(cancellationToken);
+            await AppsViewModel.LoadAsync(cancellationToken);
 
             _appSettings = appSettings;
             _agentOptions = agentOptions;
@@ -391,8 +407,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
             {
                 0 => "Dashboard",
                 1 => "Samples",
-                2 => "Diagnostics",
-                3 => "Settings",
+                2 => "Sessions",
+                3 => "Apps",
+                4 => "Diagnostics",
+                5 => "Settings",
                 _ => "Dashboard"
             };
 

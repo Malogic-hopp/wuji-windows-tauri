@@ -57,14 +57,29 @@ public sealed class SessionQueryService
         int limit = 200,
         CancellationToken cancellationToken = default)
     {
+        var range = DataViewQueryHelpers.GetLocalDayRangeUtc(localDate);
+        return await GetSessionsOverlappingRangeAsync(range.StartUtc, range.EndUtc, limit, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<AppSession>> GetSessionsOverlappingRangeAsync(
+        DateTime startUtc,
+        DateTime endUtc,
+        int limit = 200,
+        CancellationToken cancellationToken = default)
+    {
         if (!File.Exists(_databasePath))
         {
             return Array.Empty<AppSession>();
         }
 
         limit = DataViewQueryHelpers.NormalizeLimit(limit);
+        var normalizedStartUtc = startUtc.ToUniversalTime();
+        var normalizedEndUtc = endUtc.ToUniversalTime();
+        if (normalizedEndUtc <= normalizedStartUtc)
+        {
+            return Array.Empty<AppSession>();
+        }
 
-        var range = DataViewQueryHelpers.GetLocalDayRangeUtc(localDate);
         var nowUtc = DateTime.UtcNow;
 
         await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(_databasePath, cancellationToken);
@@ -94,8 +109,8 @@ public sealed class SessionQueryService
             LIMIT $limit;
             """;
 
-        command.Parameters.AddWithValue("$start_utc", DataViewQueryHelpers.ToDbDateTime(range.StartUtc));
-        command.Parameters.AddWithValue("$end_utc", DataViewQueryHelpers.ToDbDateTime(range.EndUtc));
+        command.Parameters.AddWithValue("$start_utc", DataViewQueryHelpers.ToDbDateTime(normalizedStartUtc));
+        command.Parameters.AddWithValue("$end_utc", DataViewQueryHelpers.ToDbDateTime(normalizedEndUtc));
         command.Parameters.AddWithValue("$now_utc", DataViewQueryHelpers.ToDbDateTime(nowUtc));
         command.Parameters.AddWithValue("$limit", limit);
 

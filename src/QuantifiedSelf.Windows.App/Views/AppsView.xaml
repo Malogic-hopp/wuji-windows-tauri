@@ -1,0 +1,69 @@
+<UserControl x:Class="QuantifiedSelf.Windows.App.Views.AppsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:converters="clr-namespace:QuantifiedSelf.Windows.App.Converters"
+             mc:Ignorable="d"
+             d:DesignHeight="640"
+             d:DesignWidth="1080">
+    <UserControl.Resources>
+        <converters:CountToVisibilityConverter x:Key="CountToVisibilityConverter" />
+    </UserControl.Resources>
+
+    <Grid Margin="0,18,0,0">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <Border Style="{DynamicResource CardBorderStyle}">
+            <DockPanel LastChildFill="False">
+                <StackPanel DockPanel.Dock="Left">
+                    <TextBlock Text="Apps Today" FontSize="16" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" />
+                </StackPanel>
+
+                <Button Content="Refresh"
+                        DockPanel.Dock="Right"
+                        Command="{Binding RefreshCommand}"
+                        Style="{DynamicResource SecondaryButtonStyle}" />
+            </DockPanel>
+        </Border>
+
+        <Border Grid.Row="1" Style="{DynamicResource CardBorderStyle}">
+            <Grid>
+                <TextBlock Text="{Binding EmptyStateText}"
+                           Foreground="{DynamicResource MutedTextBrush}"
+                           TextWrapping="Wrap"
+                           Visibility="{Binding Apps.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
+
+                <DataGrid ItemsSource="{Binding Apps}"
+                          AutoGenerateColumns="False"
+                          IsReadOnly="True"
+                          CanUserAddRows="False"
+                          CanUserDeleteRows="False"
+                          HeadersVisibility="Column"
+                          GridLinesVisibility="Horizontal"
+                          RowHeaderWidth="0"
+                          EnableRowVirtualization="True"
+                          EnableColumnVirtualization="True"
+                          VirtualizingStackPanel.IsVirtualizing="True"
+                          VirtualizingStackPanel.VirtualizationMode="Recycling"
+                          Visibility="{Binding Apps.Count, Converter={StaticResource CountToVisibilityConverter}}">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Rank" Binding="{Binding Rank}" Width="70" />
+                        <DataGridTextColumn Header="Display name" Binding="{Binding DisplayName}" Width="180" />
+                        <DataGridTextColumn Header="Process name" Binding="{Binding ProcessName}" Width="220" />
+                        <DataGridTextColumn Header="Active" Binding="{Binding ActiveDurationText}" Width="110" />
+                        <DataGridTextColumn Header="Total" Binding="{Binding TotalDurationText}" Width="110" />
+                        <DataGridTextColumn Header="Idle" Binding="{Binding IdleDurationText}" Width="110" />
+                        <DataGridTextColumn Header="Unknown" Binding="{Binding UnknownDurationText}" Width="110" />
+                        <DataGridTextColumn Header="Sessions" Binding="{Binding SessionCount}" Width="90" />
+                        <DataGridTextColumn Header="Last used local time" Binding="{Binding LastUsedLocalTimeText}" Width="170" />
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

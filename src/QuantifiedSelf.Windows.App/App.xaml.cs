@@ -30,7 +30,11 @@ public partial class App : Application
         var overviewDataService = new OverviewDataService(paths);
         var diagnosticsDataService = new DiagnosticsDataService(paths);
         var samplesDataService = new SamplesDataService(paths);
+        var sessionsDataService = new SessionsDataService(paths);
+        var appsDataService = new AppsDataService(paths);
         var samplesViewModel = new SamplesViewModel(samplesDataService);
+        var sessionsViewModel = new SessionsViewModel(sessionsDataService);
+        var appsViewModel = new AppsViewModel(appsDataService);
         var viewModel = new MainWindowViewModel(
             processService,
             controlService,
@@ -38,6 +42,8 @@ public partial class App : Application
             overviewDataService,
             diagnosticsDataService,
             samplesViewModel,
+            sessionsViewModel,
+            appsViewModel,
             settingsService,
             paths);
 
