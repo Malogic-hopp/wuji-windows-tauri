@@ -1475,6 +1475,189 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public async Task SessionQueryService_ReturnsSessionsOverlappingExplicitRange()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var rangeStart = DateTime.Now.Date.AddHours(12);
+        var rangeEnd = rangeStart.AddHours(2);
+        await InsertSessionAsync(paths.DatabasePath, rangeStart.AddHours(-3), rangeStart.AddHours(-2), "Before", 3600, 3600, 0, 0, "Stopped");
+        await InsertSessionAsync(paths.DatabasePath, rangeStart.AddHours(-1), rangeStart.AddMinutes(30), "OverlapStart", 5400, 3600, 1800, 0, "ProcessChanged");
+        await InsertSessionAsync(paths.DatabasePath, rangeStart.AddMinutes(30), rangeStart.AddHours(1), "Inside", 1800, 1800, 0, 0, "Paused");
+        await InsertSessionAsync(paths.DatabasePath, rangeEnd.AddMinutes(30), rangeEnd.AddHours(1), "After", 1800, 1800, 0, 0, "Stopped");
+
+        var queryService = new SessionQueryService(paths.DatabasePath);
+
+        var sessions = await queryService.GetSessionsOverlappingRangeAsync(
+            rangeStart.ToUniversalTime(),
+            rangeEnd.ToUniversalTime(),
+            limit: 10);
+
+        Assert.Equal(["Inside", "OverlapStart"], sessions.Select(x => x.ProcessName).ToArray());
+    }
+
+    [Fact]
+    public async Task SessionsViewModel_LoadsSessionsAndFiltersCloseReason()
+    {
+        var startedAt = DateTime.UtcNow.AddMinutes(-10);
+        var viewModel = new SessionsViewModel((range, limit, _) =>
+        {
+            Assert.Equal("Today", range);
+            Assert.Equal(200, limit);
+            IReadOnlyList<AppSession> sessions =
+            [
+                new AppSession
+                {
+                    Id = 3,
+                    StartedAtUtc = startedAt.AddMinutes(2),
+                    EndedAtUtc = null,
+                    ProcessName = "QuantifiedSelf.Windows.Agent",
+                    DisplayName = "WUJI Agent",
+                    TotalDurationSeconds = 3665,
+                    ActiveDurationSeconds = 120,
+                    IdleDurationSeconds = 60,
+                    UnknownDurationSeconds = 5,
+                    CloseReason = "Open"
+                },
+                new AppSession
+                {
+                    Id = 2,
+                    StartedAtUtc = startedAt.AddMinutes(1),
+                    EndedAtUtc = startedAt.AddMinutes(2),
+                    ProcessName = "Code",
+                    DisplayName = "Code",
+                    TotalDurationSeconds = 60,
+                    ActiveDurationSeconds = 60,
+                    IdleDurationSeconds = 0,
+                    UnknownDurationSeconds = 0,
+                    CloseReason = "Paused"
+                },
+                new AppSession
+                {
+                    Id = 1,
+                    StartedAtUtc = startedAt,
+                    EndedAtUtc = startedAt.AddMinutes(1),
+                    ProcessName = "UnknownReasonApp",
+                    DisplayName = "UnknownReasonApp",
+                    TotalDurationSeconds = 60,
+                    ActiveDurationSeconds = 0,
+                    IdleDurationSeconds = 0,
+                    UnknownDurationSeconds = 60,
+                    CloseReason = "AgentStarted"
+                }
+            ];
+
+            return Task.FromResult(sessions);
+        });
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal(3, viewModel.Sessions.Count);
+        Assert.Equal("正在进行", viewModel.Sessions[0].EndedLocalTimeText);
+        Assert.Equal("1h 1m", viewModel.Sessions[0].TotalDurationText);
+        Assert.DoesNotContain(
+            typeof(SessionListItemViewModel).GetProperties().Select(property => property.Name),
+            propertyName => propertyName.Contains("WindowTitle", StringComparison.OrdinalIgnoreCase));
+
+        viewModel.SelectedCloseReason = "Other";
+
+        Assert.Single(viewModel.Sessions);
+        Assert.Equal("AgentStarted", viewModel.Sessions[0].CloseReason);
+        Assert.Equal("Other", viewModel.Sessions[0].CloseReasonFilter);
+    }
+
+    [Fact]
+    public async Task SessionsViewModel_IgnoresStaleRangeLoadResults()
+    {
+        var startedAt = DateTime.UtcNow.AddMinutes(-10);
+        var todayRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var last24Requested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var todayResult = new TaskCompletionSource<IReadOnlyList<AppSession>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var last24Result = new TaskCompletionSource<IReadOnlyList<AppSession>>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var viewModel = new SessionsViewModel((range, _, _) =>
+        {
+            if (range == "Last 24 Hours")
+            {
+                last24Requested.SetResult();
+                return last24Result.Task;
+            }
+
+            todayRequested.SetResult();
+            return todayResult.Task;
+        });
+
+        var firstLoad = viewModel.LoadAsync();
+        await todayRequested.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        viewModel.SelectedRange = "Last 24 Hours";
+        await last24Requested.Task.WaitAsync(TimeSpan.FromSeconds(2));
+
+        last24Result.SetResult(
+        [
+            new AppSession
+            {
+                Id = 2,
+                StartedAtUtc = startedAt.AddMinutes(1),
+                EndedAtUtc = startedAt.AddMinutes(2),
+                ProcessName = "NewRange",
+                DisplayName = "NewRange",
+                TotalDurationSeconds = 60,
+                ActiveDurationSeconds = 60,
+                IdleDurationSeconds = 0,
+                UnknownDurationSeconds = 0,
+                CloseReason = "Stopped"
+            }
+        ]);
+
+        await WaitUntilAsync(() => viewModel.Sessions.Count == 1 && viewModel.Sessions[0].ProcessName == "NewRange");
+
+        todayResult.SetResult(
+        [
+            new AppSession
+            {
+                Id = 1,
+                StartedAtUtc = startedAt,
+                EndedAtUtc = startedAt.AddMinutes(1),
+                ProcessName = "OldRange",
+                DisplayName = "OldRange",
+                TotalDurationSeconds = 60,
+                ActiveDurationSeconds = 60,
+                IdleDurationSeconds = 0,
+                UnknownDurationSeconds = 0,
+                CloseReason = "Stopped"
+            }
+        ]);
+        await firstLoad;
+        await Task.Delay(50);
+
+        Assert.Single(viewModel.Sessions);
+        Assert.Equal("NewRange", viewModel.Sessions[0].ProcessName);
+        Assert.Contains("last 24 hours", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SessionsViewModel_RedactsLoadFailureAndShowsErrorState()
+    {
+        var viewModel = new SessionsViewModel((_, _, _) =>
+            throw new InvalidOperationException(
+                @"Failed to open C:\Users\Alice\secrets\db.sqlite and \\server\share\logs\agent.log"));
+
+        await viewModel.LoadAsync();
+
+        Assert.Empty(viewModel.Sessions);
+        Assert.True(viewModel.HasLoadError);
+        Assert.Equal("Sessions could not be loaded. Refresh to retry.", viewModel.EmptyStateText);
+        Assert.Contains("Sessions load failed", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<path>", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\Users\Alice", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AppUsageQueryService_RanksAppsByActiveDurationAndStableTieBreaking()
     {
         using var workspace = new TempWorkspace();
@@ -1506,6 +1689,129 @@ public sealed class DataFlowTests
         Assert.Equal("WUJI", apps[4].DisplayName);
         Assert.Equal("Unknown", apps[5].DisplayName);
         Assert.DoesNotContain(apps, x => x.ProcessName == "Ignored");
+    }
+
+    [Fact]
+    public async Task AppsViewModel_LoadsTodayAppUsage()
+    {
+        var lastUsedUtc = DateTime.UtcNow.AddMinutes(-5);
+        var viewModel = new AppsViewModel((limit, _) =>
+        {
+            Assert.Equal(50, limit);
+            IReadOnlyList<AppUsageSummary> apps =
+            [
+                new AppUsageSummary
+                {
+                    ProcessName = "Code",
+                    DisplayName = "Code",
+                    ActiveDurationSeconds = 3665,
+                    TotalDurationSeconds = 7200,
+                    IdleDurationSeconds = 3000,
+                    UnknownDurationSeconds = 535,
+                    SessionCount = 3,
+                    LastUsedAtUtc = lastUsedUtc
+                },
+                new AppUsageSummary
+                {
+                    ProcessName = "QuantifiedSelf.Windows.Agent",
+                    DisplayName = "WUJI Agent",
+                    ActiveDurationSeconds = 120,
+                    TotalDurationSeconds = 180,
+                    IdleDurationSeconds = 30,
+                    UnknownDurationSeconds = 30,
+                    SessionCount = 1,
+                    LastUsedAtUtc = null
+                }
+            ];
+
+            return Task.FromResult(apps);
+        });
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal(2, viewModel.Apps.Count);
+        Assert.Equal(1, viewModel.Apps[0].Rank);
+        Assert.Equal("Code", viewModel.Apps[0].DisplayName);
+        Assert.Equal("1h 1m", viewModel.Apps[0].ActiveDurationText);
+        Assert.Equal("2h 0m", viewModel.Apps[0].TotalDurationText);
+        Assert.Equal("50m 0s", viewModel.Apps[0].IdleDurationText);
+        Assert.Equal("8m 55s", viewModel.Apps[0].UnknownDurationText);
+        Assert.Equal(3, viewModel.Apps[0].SessionCount);
+        Assert.Equal(lastUsedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss"), viewModel.Apps[0].LastUsedLocalTimeText);
+        Assert.Equal(2, viewModel.Apps[1].Rank);
+        Assert.Equal("WUJI Agent", viewModel.Apps[1].DisplayName);
+        Assert.Equal("-", viewModel.Apps[1].LastUsedLocalTimeText);
+        Assert.Contains("ranked by active duration", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AppsViewModel_UsesDisplayNameFallback()
+    {
+        var viewModel = new AppsViewModel((_, _) =>
+        {
+            IReadOnlyList<AppUsageSummary> apps =
+            [
+                new AppUsageSummary
+                {
+                    ProcessName = "ProcessOnly",
+                    DisplayName = string.Empty,
+                    ActiveDurationSeconds = 1,
+                    TotalDurationSeconds = 1,
+                    SessionCount = 1
+                },
+                new AppUsageSummary
+                {
+                    ProcessName = string.Empty,
+                    DisplayName = string.Empty,
+                    ActiveDurationSeconds = 1,
+                    TotalDurationSeconds = 1,
+                    SessionCount = 1
+                }
+            ];
+
+            return Task.FromResult(apps);
+        });
+
+        await viewModel.LoadAsync();
+
+        Assert.Equal("ProcessOnly", viewModel.Apps[0].DisplayName);
+        Assert.Equal("Unknown", viewModel.Apps[1].DisplayName);
+    }
+
+    [Fact]
+    public async Task AppsViewModel_ReturnsEmptyStateForEmptyDatabase()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var viewModel = new AppsViewModel(new AppsDataService(paths));
+
+        await viewModel.LoadAsync();
+
+        Assert.Empty(viewModel.Apps);
+        Assert.False(viewModel.HasLoadError);
+        Assert.Equal("No app usage found for today.", viewModel.StatusText);
+        Assert.Contains("暂无今日应用使用记录", viewModel.EmptyStateText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AppsViewModel_RedactsLoadFailureAndShowsErrorState()
+    {
+        var viewModel = new AppsViewModel((_, _) =>
+            throw new InvalidOperationException(
+                @"Failed to open C:\Users\Alice\secrets\db.sqlite and \\server\share\logs\agent.log"));
+
+        await viewModel.LoadAsync();
+
+        Assert.Empty(viewModel.Apps);
+        Assert.True(viewModel.HasLoadError);
+        Assert.Equal("App usage could not be loaded. Refresh to retry.", viewModel.EmptyStateText);
+        Assert.Contains("App usage load failed", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("<path>", viewModel.StatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\Users\Alice", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1859,6 +2165,22 @@ public sealed class DataFlowTests
         command.CommandText = sql;
         var value = await command.ExecuteScalarAsync();
         return Convert.ToInt32(value);
+    }
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        var deadline = DateTime.UtcNow.AddSeconds(2);
+        while (DateTime.UtcNow < deadline)
+        {
+            if (condition())
+            {
+                return;
+            }
+
+            await Task.Delay(20);
+        }
+
+        Assert.True(condition(), "Condition was not met before timeout.");
     }
 
     private static async Task<List<string>> GetColumnsAsync(SqliteConnection connection, string tableName)
