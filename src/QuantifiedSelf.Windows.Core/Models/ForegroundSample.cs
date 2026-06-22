@@ -8,6 +8,8 @@ public sealed class ForegroundSample
 
     public string ProcessName { get; set; } = string.Empty;
 
+    public string DisplayName { get; set; } = string.Empty;
+
     public string? WindowTitle { get; set; }
 
     public string? ExecutablePath { get; set; }
