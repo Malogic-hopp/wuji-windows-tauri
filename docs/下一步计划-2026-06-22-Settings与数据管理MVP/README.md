@@ -66,13 +66,17 @@ dotnet test QuantifiedSelf.Windows.sln --no-restore -p:BaseOutputPath=.codex\tes
 
 ## 阶段目录
 
-- [阶段 6.1：Settings 读取与展示](./01-阶段6.1-Settings读取与展示.md)
-- [阶段 6.2：App Settings 编辑](./02-阶段6.2-AppSettings编辑.md)
-- [阶段 6.3：Agent Options Validator 与编辑](./03-阶段6.3-AgentOptionsValidator与编辑.md)
-- [阶段 6.4：Save / Backup / Restore 配置文件链路](./04-阶段6.4-SaveBackupRestore配置文件链路.md)
-- [阶段 6.5：ReloadConfig 应用链路](./05-阶段6.5-ReloadConfig应用链路.md)
-- [阶段 6.6：隐私规则编辑与生效验收](./06-阶段6.6-隐私规则编辑与生效验收.md)
-- [阶段 6.7：验收、稳定化与收口](./07-阶段6.7-验收稳定化与收口.md)
+- [阶段 6.1：Settings 读取与展示](./01-阶段6.1-Settings读取与展示.md) ✅
+- [阶段 6.2：App Settings 编辑](./02-阶段6.2-AppSettings编辑.md) ✅
+- [阶段 6.3：Agent Options Validator 与编辑](./03-阶段6.3-AgentOptionsValidator与编辑.md) ✅
+- [阶段 6.4：Save / Backup / Restore 配置文件链路](./04-阶段6.4-SaveBackupRestore配置文件链路.md) ✅
+- [阶段 6.5：ReloadConfig 应用链路](./05-阶段6.5-ReloadConfig应用链路.md) ✅
+- [阶段 6.6：隐私规则编辑与生效验收](./06-阶段6.6-隐私规则编辑与生效验收.md) ✅
+- [阶段 6.7：验收、稳定化与收口](./07-阶段6.7-验收稳定化与收口.md) ✅
+
+**阶段 6 已全部完成。** 详见 [阶段 6 完成说明](./阶段6-完成说明-2026-06-24.md)。
+
+Build: `0 warnings / 0 errors` | Test: `103 / 103 passed`
 
 ## 暂缓事项
 

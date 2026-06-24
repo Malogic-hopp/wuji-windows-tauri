@@ -21,13 +21,13 @@ function Get-AgentRoot {
         return $Value
     }
 
-    if (Test-Path -LiteralPath "D:\WUJI\WindowsAgent") {
-        return "D:\WUJI\WindowsAgent"
-    }
-
     $envRoot = $env:QUANTIFIEDSELF_WINDOWS_AGENT_ROOT
     if ($envRoot -and (Test-Path -LiteralPath $envRoot)) {
         return $envRoot
+    }
+
+    if (Test-Path -LiteralPath "D:\WUJI\WindowsAgent") {
+        return "D:\WUJI\WindowsAgent"
     }
 
     return Join-Path $env:LOCALAPPDATA "WUJI\WindowsAgent"
