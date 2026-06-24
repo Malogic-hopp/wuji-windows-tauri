@@ -4,6 +4,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.App.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Agent.Events;
@@ -818,8 +819,9 @@ public sealed class DataFlowTests
             paths.AgentOptionsPath,
             new WindowsAgentOptions
             {
-                SamplingIntervalSeconds = 3600,
-                HeartbeatIntervalSeconds = 3600,
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
                 UseMockCapture = true
             });
 
@@ -1281,6 +1283,7 @@ public sealed class DataFlowTests
         services.AddSingleton<Win32ForegroundSampleProvider>();
         services.AddSingleton<ConfiguredForegroundSampleProvider>();
         services.AddSingleton<SessionAggregator>();
+        services.AddSingleton<AgentOptionsValidator>();
         services.AddSingleton<Microsoft.Extensions.Logging.ILogger<AgentStateMachine>>(NullLogger<AgentStateMachine>.Instance);
         services.AddSingleton<AgentStateMachine>();
 
@@ -2416,6 +2419,220 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public void AgentOptionsValidator_RejectsOverlongExcludedProcesses()
+    {
+        var validator = new AgentOptionsValidator();
+        var tooLong = new string('x', AgentOptionsValidator.ExcludedProcessesMaxItemLength + 1);
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            ExcludedProcesses = [tooLong]
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains("exceeds max length", result.SafeMessageText, StringComparison.Ordinal);
+        Assert.Empty(result.NormalizedOptions.ExcludedProcesses);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_RejectsOverlongExcludedTitlePatterns()
+    {
+        var validator = new AgentOptionsValidator();
+        var tooLong = new string('*', AgentOptionsValidator.ExcludedTitlePatternsMaxItemLength + 1);
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            ExcludedTitlePatterns = [tooLong]
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains("exceeds max length", result.SafeMessageText, StringComparison.Ordinal);
+        Assert.Empty(result.NormalizedOptions.ExcludedTitlePatterns);
+    }
+
+    [Fact]
+    public void AgentOptionsValidator_RejectsExceedingMaxCount()
+    {
+        var validator = new AgentOptionsValidator();
+        var tooMany = Enumerable.Range(1, AgentOptionsValidator.ExcludedTitlePatternsMaxCount + 5)
+            .Select(i => $"*Pattern{i}*")
+            .ToList();
+
+        var result = validator.Validate(new WindowsAgentOptions
+        {
+            ExcludedTitlePatterns = tooMany
+        });
+
+        Assert.False(result.IsValid);
+        Assert.Contains("exceeds max count", result.SafeMessageText, StringComparison.Ordinal);
+        Assert.Equal(AgentOptionsValidator.ExcludedTitlePatternsMaxCount, result.NormalizedOptions.ExcludedTitlePatterns.Count);
+    }
+
+    [Fact]
+    public async Task WindowsAgentOptionsStore_WriteWithBackupAsync_CreatesBackupAndWritesAtomically()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var store = new WindowsAgentOptionsStore();
+
+        var original = new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 3,
+            IdleThresholdSeconds = 60,
+            IdleSummaryIntervalMinutes = 7,
+            UseMockCapture = true
+        };
+
+        await store.WriteAsync(paths.AgentOptionsPath, original);
+
+        var updated = new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 5,
+            IdleThresholdSeconds = 90,
+            IdleSummaryIntervalMinutes = 7,
+            UseMockCapture = false
+        };
+
+        await store.WriteWithBackupAsync(paths.AgentOptionsPath, updated);
+
+        Assert.True(File.Exists(paths.AgentOptionsPath + ".bak"));
+        var backup = await store.ReadAsync(paths.AgentOptionsPath + ".bak");
+        Assert.NotNull(backup);
+        Assert.Equal(3, backup.SamplingIntervalSeconds);
+        Assert.Equal(60, backup.IdleThresholdSeconds);
+        Assert.True(backup.UseMockCapture);
+
+        var current = await store.ReadAsync(paths.AgentOptionsPath);
+        Assert.NotNull(current);
+        Assert.Equal(5, current.SamplingIntervalSeconds);
+        Assert.Equal(90, current.IdleThresholdSeconds);
+        Assert.False(current.UseMockCapture);
+        Assert.Equal(7, current.IdleSummaryIntervalMinutes);
+    }
+
+    [Fact]
+    public async Task WindowsAgentOptionsStore_WriteWithBackupAsync_KeepsOriginalFileWhenTempWriteFails()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var store = new WindowsAgentOptionsStore();
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3,
+                IdleThresholdSeconds = 60
+            });
+
+        Directory.CreateDirectory(paths.AgentOptionsPath + ".tmp");
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            store.WriteWithBackupAsync(
+                paths.AgentOptionsPath,
+                new WindowsAgentOptions
+                {
+                    SamplingIntervalSeconds = 5,
+                    IdleThresholdSeconds = 90
+                }));
+
+        Directory.Delete(paths.AgentOptionsPath + ".tmp");
+        Assert.False(File.Exists(paths.AgentOptionsPath + ".tmp"));
+        var current = await store.ReadAsync(paths.AgentOptionsPath);
+        Assert.NotNull(current);
+        Assert.Equal(3, current.SamplingIntervalSeconds);
+        Assert.Equal(60, current.IdleThresholdSeconds);
+    }
+
+    [Fact]
+    public async Task WindowsAgentOptionsStore_WriteWithBackupAsync_KeepsOriginalFileWhenReplaceFails()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var store = new WindowsAgentOptionsStore();
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3,
+                IdleThresholdSeconds = 60
+            });
+
+        using var lockedOriginal = File.Open(
+            paths.AgentOptionsPath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read);
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            store.WriteWithBackupAsync(
+                paths.AgentOptionsPath,
+                new WindowsAgentOptions
+                {
+                    SamplingIntervalSeconds = 5,
+                    IdleThresholdSeconds = 90
+                }));
+
+        var current = await store.ReadAsync(paths.AgentOptionsPath);
+        Assert.NotNull(current);
+        Assert.Equal(3, current.SamplingIntervalSeconds);
+        Assert.Equal(60, current.IdleThresholdSeconds);
+
+        var backup = await store.ReadAsync(paths.AgentOptionsPath + ".bak");
+        Assert.NotNull(backup);
+        Assert.Equal(3, backup.SamplingIntervalSeconds);
+        Assert.Equal(60, backup.IdleThresholdSeconds);
+    }
+
+    [Fact]
+    public async Task WindowsAgentOptionsStore_RestoreBackupAsync_RestoresFromBackup()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var store = new WindowsAgentOptionsStore();
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3,
+                IdleThresholdSeconds = 60
+            });
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath + ".bak",
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 7,
+                IdleThresholdSeconds = 120
+            });
+
+        await store.RestoreBackupAsync(paths.AgentOptionsPath);
+
+        var current = await store.ReadAsync(paths.AgentOptionsPath);
+        Assert.NotNull(current);
+        Assert.Equal(7, current.SamplingIntervalSeconds);
+        Assert.Equal(120, current.IdleThresholdSeconds);
+    }
+
+    [Fact]
+    public async Task WindowsAgentOptionsStore_RestoreBackupAsync_ThrowsWhenBackupMissing()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var store = new WindowsAgentOptionsStore();
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => store.RestoreBackupAsync(paths.AgentOptionsPath));
+        Assert.Contains("No backup file", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task SettingsViewModel_ValidatesAgentOptionsEditor()
     {
         using var workspace = new TempWorkspace();
@@ -2569,6 +2786,290 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public async Task SettingsViewModel_SavesAgentOptionsWithBackup()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var store = new WindowsAgentOptionsStore();
+
+        await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 3,
+            IdleThresholdSeconds = 60,
+            HeartbeatIntervalSeconds = 3,
+            StaleThresholdSeconds = 15,
+            RetentionDays = 30,
+            MaskWindowTitles = false,
+            ExcludedProcesses = ["KeePass"]
+        });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "5";
+        viewModel.IdleThresholdSecondsText = "90";
+        viewModel.HeartbeatIntervalSecondsText = "4";
+        viewModel.StaleThresholdSecondsText = "20";
+        viewModel.RetentionDaysText = "14";
+        viewModel.MaskWindowTitles = true;
+        viewModel.ExcludedProcessesText = "notepad.exe\ncalc";
+        viewModel.ExcludedTitlePatternsText = "*Secret*";
+
+        await viewModel.SaveAgentOptionsAsync();
+
+        Assert.True(File.Exists(paths.AgentOptionsPath + ".bak"));
+        var backup = await store.ReadAsync(paths.AgentOptionsPath + ".bak");
+        Assert.NotNull(backup);
+        Assert.Equal(3, backup.SamplingIntervalSeconds);
+        Assert.False(backup.MaskWindowTitles);
+        Assert.Equal(["KeePass"], backup.ExcludedProcesses);
+
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(5, saved.SamplingIntervalSeconds);
+        Assert.Equal(90, saved.IdleThresholdSeconds);
+        Assert.Equal(4, saved.HeartbeatIntervalSeconds);
+        Assert.Equal(20, saved.StaleThresholdSeconds);
+        Assert.Equal(14, saved.RetentionDays);
+        Assert.True(saved.MaskWindowTitles);
+        Assert.Equal(["notepad", "calc"], saved.ExcludedProcesses);
+        Assert.Equal(["*Secret*"], saved.ExcludedTitlePatterns);
+
+        Assert.Equal(5, viewModel.AgentOptions.SamplingIntervalSeconds);
+        Assert.Equal("5", viewModel.SamplingIntervalSecondsText);
+        Assert.Contains("Saved to file. Running Agent has not applied the change; ReloadConfig or next Agent start required.", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
+        Assert.Contains("The running Agent has not applied it yet; use ReloadConfig or restart the Agent.", viewModel.AgentOptionsValidationDetailsText, StringComparison.Ordinal);
+        Assert.False(viewModel.HasAgentOptionsSaveError);
+        Assert.False(viewModel.HasAgentOptionsValidationError);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RejectsInvalidAgentOptionsBeforeSave()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+
+        await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 3,
+            HeartbeatIntervalSeconds = 3,
+            StaleThresholdSeconds = 15
+        });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "0";
+        viewModel.StaleThresholdSecondsText = "3";
+
+        await viewModel.SaveAgentOptionsAsync();
+
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(3, saved.SamplingIntervalSeconds);
+        Assert.Equal(15, saved.StaleThresholdSeconds);
+
+        Assert.True(viewModel.HasAgentOptionsValidationError);
+        Assert.False(viewModel.HasAgentOptionsSaveError);
+        Assert.Contains("Cannot save: fix validation errors first.", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
+        Assert.Contains("samplingIntervalSeconds", viewModel.AgentOptionsValidationDetailsText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RejectsPathLikeExcludedProcesses()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+
+        await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 3,
+            HeartbeatIntervalSeconds = 3,
+            StaleThresholdSeconds = 15
+        });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        // Enter path-like process names: one valid, two paths
+        viewModel.ExcludedProcessesText = "notepad.exe\nC:\\Windows\\System32\\notepad.exe\n/usr/bin/firefox";
+
+        // Validate should flag paths as errors
+        viewModel.ValidateAgentOptions();
+        Assert.True(viewModel.HasAgentOptionsValidationError);
+        Assert.Contains("excludedProcesses", viewModel.AgentOptionsValidationDetailsText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not a path", viewModel.AgentOptionsValidationDetailsText, StringComparison.Ordinal);
+
+        // Save should be blocked because of validation errors
+        viewModel.SamplingIntervalSecondsText = "5";
+        await viewModel.SaveAgentOptionsAsync();
+
+        Assert.True(viewModel.HasAgentOptionsValidationError);
+        Assert.False(viewModel.HasAgentOptionsSaveError);
+        Assert.Contains("Cannot save: fix validation errors first.", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
+
+        // The saved file must not contain the path-like entries
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(3, saved.SamplingIntervalSeconds);
+        Assert.DoesNotContain(saved.ExcludedProcesses, p => p.Contains('\\') || p.Contains('/') || p.Contains(':'));
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SaveAgentOptionsFailureDoesNotCorruptExistingFile()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+
+        await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 3,
+            IdleThresholdSeconds = 60,
+            HeartbeatIntervalSeconds = 3,
+            StaleThresholdSeconds = 15
+        });
+
+        Directory.CreateDirectory(paths.AgentOptionsPath + ".tmp");
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+        viewModel.SamplingIntervalSecondsText = "5";
+
+        await viewModel.SaveAgentOptionsAsync();
+
+        Directory.Delete(paths.AgentOptionsPath + ".tmp");
+        Assert.True(viewModel.HasAgentOptionsSaveError);
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(3, saved.SamplingIntervalSeconds);
+        Assert.Equal(60, saved.IdleThresholdSeconds);
+        Assert.DoesNotContain(paths.AgentOptionsPath, viewModel.AgentOptionsSaveStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RestoresAgentOptionsBackup()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var store = new WindowsAgentOptionsStore();
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3,
+                IdleThresholdSeconds = 60,
+                ExcludedProcesses = ["KeePass"]
+            });
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath + ".bak",
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 7,
+                IdleThresholdSeconds = 120,
+                ExcludedProcesses = ["Notepad"]
+            });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        await viewModel.RestoreAgentOptionsBackupAsync();
+
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(7, saved.SamplingIntervalSeconds);
+        Assert.Equal(120, saved.IdleThresholdSeconds);
+        Assert.Equal(["Notepad"], saved.ExcludedProcesses);
+
+        Assert.Equal(7, viewModel.AgentOptions.SamplingIntervalSeconds);
+        Assert.Equal("7", viewModel.SamplingIntervalSecondsText);
+        Assert.Equal("Notepad", viewModel.ExcludedProcessesText);
+        Assert.Contains("Restored from backup. Running Agent has not applied the change; ReloadConfig or next Agent start required.", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
+        Assert.False(viewModel.HasAgentOptionsSaveError);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RestoreBackupWhenMissingShowsSafeStatus()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+
+        await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions { SamplingIntervalSeconds = 3 });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        Assert.False(File.Exists(paths.AgentOptionsPath + ".bak"));
+
+        await viewModel.RestoreAgentOptionsBackupAsync();
+
+        Assert.True(viewModel.HasAgentOptionsSaveError);
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(3, saved.SamplingIntervalSeconds);
+        Assert.DoesNotContain(paths.AgentOptionsPath, viewModel.AgentOptionsSaveStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("restore failed", viewModel.AgentOptionsSaveStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SaveAgentOptionsPreservesNonEditableFields()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+
+        await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
+        {
+            SamplingIntervalSeconds = 3,
+            IdleThresholdSeconds = 60,
+            IdleSummaryIntervalMinutes = 42,
+            UseMockCapture = true,
+            HeartbeatIntervalSeconds = 3,
+            StaleThresholdSeconds = 15,
+            RetentionDays = 30
+        });
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "5";
+        await viewModel.SaveAgentOptionsAsync();
+
+        var saved = await settingsService.ReadAgentOptionsAsync();
+        Assert.Equal(5, saved.SamplingIntervalSeconds);
+        Assert.Equal(42, saved.IdleSummaryIntervalMinutes);
+        Assert.True(saved.UseMockCapture);
+        Assert.Equal("Enabled", viewModel.UseMockCaptureText);
+        Assert.Equal("42", viewModel.IdleSummaryIntervalMinutesText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SaveAgentOptionsDoesNotReloadAgent()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "5";
+        await viewModel.SaveAgentOptionsAsync();
+
+        Assert.False(File.Exists(paths.AgentControlPath));
+        Assert.Contains("next Agent start", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DataViewQueryServices_ReturnEmptyListsForMissingDatabaseAndMissingTables()
     {
         using var workspace = new TempWorkspace();
@@ -2588,6 +3089,544 @@ public sealed class DataFlowTests
         Assert.Empty(await new SessionQueryService(emptyDatabasePath).GetRecentSessionsAsync());
         Assert.Empty(await new SessionQueryService(emptyDatabasePath).GetSessionsForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
         Assert.Empty(await new AppUsageQueryService(emptyDatabasePath).GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ReloadConfigUsesValidatorAndNormalizesOptions()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = ["notepad.exe"]
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "calc",
+                        WindowTitle = "Calculator",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = ["calc.exe", "calc"]
+            });
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ReloadConfig,
+                RequestId = "reload-normalize"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.ConfigReloaded);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "reload-normalize");
+
+        var privacyFiltered = events.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+        Assert.Single(privacyFiltered);
+        Assert.Contains("\"processName\": \"calc\"", privacyFiltered[0].PayloadJson ?? string.Empty, StringComparison.Ordinal);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ReloadConfigRejectsInvalidOptionsAndKeepsCurrentOptions()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = ["Notepad"]
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Notepad",
+                        WindowTitle = "Untitled",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 0,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true
+            });
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ReloadConfig,
+                RequestId = "reload-invalid"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Completed);
+        Assert.Equal("ReloadConfigValidationFailed", result.ErrorCode);
+
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var failedEvent = Assert.Single(events.Where(x => x.EventType == AgentEventType.CommandFailed && x.RequestId == "reload-invalid"));
+        Assert.Equal("ReloadConfigValidationFailed", failedEvent.ErrorCode);
+        Assert.DoesNotContain(paths.AgentOptionsPath, failedEvent.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(events, x => x.EventType == AgentEventType.ConfigReloaded && x.RequestId == "reload-invalid");
+
+        var privacyFiltered = events.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+        Assert.Single(privacyFiltered);
+        Assert.Contains("\"processName\": \"Notepad\"", privacyFiltered[0].PayloadJson ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ReloadConfigReadFailureKeepsCurrentOptions()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = ["Notepad"]
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Notepad",
+                        WindowTitle = "Untitled",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        await File.WriteAllTextAsync(paths.AgentOptionsPath, "{ not json");
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ReloadConfig,
+                RequestId = "reload-read-failed"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.False(result.Completed);
+        Assert.Equal("ReloadConfigReadFailed", result.ErrorCode);
+
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var failedEvent = Assert.Single(events.Where(x => x.EventType == AgentEventType.CommandFailed && x.RequestId == "reload-read-failed"));
+        Assert.Equal("ReloadConfigReadFailed", failedEvent.ErrorCode);
+        Assert.DoesNotContain(paths.AgentOptionsPath, failedEvent.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(events, x => x.EventType == AgentEventType.ConfigReloaded && x.RequestId == "reload-read-failed");
+
+        var privacyFiltered = events.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+        Assert.Single(privacyFiltered);
+        Assert.Contains("\"processName\": \"Notepad\"", privacyFiltered[0].PayloadJson ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ReloadConfigKeepsPausedState()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.Pause,
+                DesiredState = AgentDesiredState.Paused,
+                RequestId = "pause-reload"
+            },
+            CancellationToken.None);
+
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true,
+                IdleThresholdSeconds = 90
+            });
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ReloadConfig,
+                RequestId = "reload-paused"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Paused, result.ActualState);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var configReloaded = Assert.Single(events.Where(x => x.EventType == AgentEventType.ConfigReloaded));
+        Assert.Contains("\"actualState\": \"Paused\"", configReloaded.PayloadJson ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_InitializeAsync_FallsBackToDefaultsForInvalidConfig_UsesNormalizedForValidConfig()
+    {
+        // Part 1: invalid config → fallback to defaults
+        using var workspace1 = new TempWorkspace();
+        var paths1 = new WindowsAgentPaths(workspace1.Root);
+        var optionsStore1 = new WindowsAgentOptionsStore();
+
+        await optionsStore1.WriteAsync(
+            paths1.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 0,  // invalid: below min 1
+                IdleThresholdSeconds = 5,      // invalid: below min 10
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = []         // empty → defaults have KeePass/1Password/Bitwarden
+            });
+
+        var logger1 = new TestLogger<AgentStateMachine>();
+        var stateMachine1 = CreateStateMachine(
+            paths1,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "KeePass",
+                        WindowTitle = "Vault",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            logger: logger1);
+
+        await stateMachine1.InitializeAsync(CancellationToken.None);
+
+        var combinedLogs1 = string.Join(Environment.NewLine, logger1.Messages);
+        Assert.Contains("falling back to defaults", combinedLogs1, StringComparison.OrdinalIgnoreCase);
+
+        // Default sampling interval is 3 s; wait long enough for a sample to be due.
+        await Task.Delay(3100);
+        await stateMachine1.TickAsync(CancellationToken.None);
+
+        // KeePass 属于默认 ExcludedProcesses，应被排除
+        await using var connection1 = await SqliteConnectionFactory.OpenReadOnlyAsync(paths1.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection1, "SELECT COUNT(*) FROM foreground_samples;"));
+
+        // Part 2: valid config with notepad.exe → normalized to notepad
+        using var workspace2 = new TempWorkspace();
+        var paths2 = new WindowsAgentPaths(workspace2.Root);
+        var optionsStore2 = new WindowsAgentOptionsStore();
+
+        await optionsStore2.WriteAsync(
+            paths2.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedProcesses = ["notepad.exe"]
+            });
+
+        var eventWriter2 = await CreateEventWriterAsync(paths2);
+        var stateMachine2 = CreateStateMachine(
+            paths2,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Notepad",
+                        WindowTitle = "Untitled",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter: eventWriter2);
+
+        await stateMachine2.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+        await stateMachine2.TickAsync(CancellationToken.None);
+
+        // notepad.exe 归一化为 notepad，与 Notepad（大小写不敏感）匹配，应被排除
+        var events2 = await ReadEventsAsync(paths2.DatabasePath);
+        var privacyFiltered = events2.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+        Assert.Single(privacyFiltered);
+        Assert.Contains("\"processName\": \"Notepad\"", privacyFiltered[0].PayloadJson ?? string.Empty, StringComparison.Ordinal);
+
+        await using var connection2 = await SqliteConnectionFactory.OpenReadOnlyAsync(paths2.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection2, "SELECT COUNT(*) FROM foreground_samples;"));
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SaveAndReloadSavesThenRequestsReload()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        WindowsAgentOptions? savedOptions = null;
+        var reloadRequested = false;
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (options, _) =>
+            {
+                savedOptions = options;
+                return Task.CompletedTask;
+            },
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot
+            {
+                IsRunning = true,
+                ActualState = AgentActualState.Running
+            }),
+            _ =>
+            {
+                reloadRequested = true;
+                return Task.FromResult(new AgentCommandResult
+                {
+                    Accepted = true,
+                    Completed = false,
+                    ActualState = AgentActualState.Running,
+                    Message = "ReloadConfig queued"
+                });
+            },
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        viewModel.SamplingIntervalSecondsText = "5";
+        viewModel.IdleThresholdSecondsText = "90";
+        viewModel.HeartbeatIntervalSecondsText = "4";
+        viewModel.StaleThresholdSecondsText = "20";
+        viewModel.RetentionDaysText = "14";
+
+        await viewModel.SaveAndReloadAgentOptionsAsync();
+
+        Assert.NotNull(savedOptions);
+        Assert.Equal(5, savedOptions!.SamplingIntervalSeconds);
+        Assert.True(reloadRequested);
+        Assert.Contains("ReloadConfig command queued", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
+        Assert.False(viewModel.HasAgentOptionsReloadError);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ReloadConfigDisabledWhenAgentNotRunning()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot
+            {
+                IsRunning = false,
+                ActualState = AgentActualState.NotRunning
+            }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.CanReloadAgentConfig);
+        Assert.False(viewModel.SaveAndReloadAgentOptionsCommand.CanExecute(null));
+        Assert.False(viewModel.ReloadAgentConfigCommand.CanExecute(null));
+        Assert.Contains("next Agent start", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ReloadConfigFailureShowsSafeStatus()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot
+            {
+                IsRunning = true,
+                ActualState = AgentActualState.Running
+            }),
+            _ => throw new InvalidOperationException(
+                @"Failed to write control command to C:\Users\Alice\runtime\agent_control.json"),
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        await viewModel.ReloadAgentConfigAsync();
+
+        Assert.True(viewModel.HasAgentOptionsReloadError);
+        Assert.Contains("ReloadConfig request failed", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
+        Assert.Contains("<path>", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\Users\Alice\runtime\agent_control.json", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_RestoreBackupDoesNotReloadAutomatically()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var store = new WindowsAgentOptionsStore();
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 3,
+                IdleThresholdSeconds = 60
+            });
+
+        await store.WriteAsync(
+            paths.AgentOptionsPath + ".bak",
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 7,
+                IdleThresholdSeconds = 120
+            });
+
+        var reloadRequested = false;
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            async _ => await store.ReadAsync(paths.AgentOptionsPath) ?? new WindowsAgentOptions(),
+            (_, _) => Task.CompletedTask,
+            _ => store.RestoreBackupAsync(paths.AgentOptionsPath),
+            _ => Task.FromResult(new AgentStatusSnapshot
+            {
+                IsRunning = true,
+                ActualState = AgentActualState.Running
+            }),
+            _ =>
+            {
+                reloadRequested = true;
+                return Task.FromResult(new AgentCommandResult { Accepted = true });
+            },
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+        await viewModel.RestoreAgentOptionsBackupAsync();
+
+        Assert.False(reloadRequested);
+        Assert.Equal(7, viewModel.AgentOptions.SamplingIntervalSeconds);
+        Assert.Contains("ReloadConfig or next Agent start", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2652,6 +3691,106 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("session_id", sessionColumns);
     }
 
+    [Fact]
+    public async Task AgentStateMachine_ReloadConfigAppliesUpdatedExcludedTitlePatterns()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        // Initial config: no title exclusion
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedTitlePatterns = []
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Code",
+                        WindowTitle = "My Secret Notes",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    },
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "Browser",
+                        WindowTitle = "Another Secret Project",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        // First sample should be written (no exclusion yet)
+        await using (var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath))
+        {
+            Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+        }
+
+        // Now update config to include title pattern exclusion
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true,
+                ExcludedTitlePatterns = ["*Secret*"]
+            });
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ReloadConfig,
+                RequestId = "reload-title-patterns"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+
+        await Task.Delay(1100);
+        await stateMachine.TickAsync(CancellationToken.None);
+
+        // Second sample should be excluded (title matches *Secret*)
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var privacyFiltered = events.Where(x => x.EventType == AgentEventType.PrivacyFiltered).ToList();
+        Assert.Single(privacyFiltered);
+
+        var payload = privacyFiltered[0].PayloadJson ?? string.Empty;
+        Assert.Contains("\"ruleType\": \"Title\"", payload, StringComparison.Ordinal);
+        Assert.Contains("\"processName\": \"Browser\"", payload, StringComparison.Ordinal);
+        Assert.Contains("\"privacyReason\": \"Excluded by title privacy rule\"", payload, StringComparison.Ordinal);
+        // Must not leak the matched window title
+        Assert.DoesNotContain("Secret", payload, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Another", payload, StringComparison.OrdinalIgnoreCase);
+
+        // ConfigReloaded + CommandCompleted events must be present
+        Assert.Contains(events, x => x.EventType == AgentEventType.ConfigReloaded);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "reload-title-patterns");
+
+        // DB must still have only the first sample (second was excluded)
+        await using var connection2 = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(1, await CountAsync(connection2, "SELECT COUNT(*) FROM foreground_samples;"));
+    }
+
     private static AgentStateMachine CreateStateMachine(
         WindowsAgentPaths paths,
         ConfiguredForegroundSampleProvider sampleProvider)
@@ -2690,6 +3829,8 @@ public sealed class DataFlowTests
         var sessionAggregator = new SessionAggregator(new AppSessionRepository(paths.DatabasePath));
         var privacyFilter = new ForegroundSamplePrivacyFilter();
 
+        var optionsValidator = new AgentOptionsValidator();
+
         if (eventWriter is null)
         {
             return new AgentStateMachine(
@@ -2718,6 +3859,7 @@ public sealed class DataFlowTests
             privacyFilter,
             sampleProvider,
             eventWriter,
+            optionsValidator,
             logger ?? NullLogger<AgentStateMachine>.Instance);
     }
 
