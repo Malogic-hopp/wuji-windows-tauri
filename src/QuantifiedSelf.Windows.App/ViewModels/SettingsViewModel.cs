@@ -30,6 +30,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly AgentOptionsValidator _agentOptionsValidator;
     private readonly WindowsAgentPaths _paths;
 
+    internal int ReloadConfigPollMaxAttempts { get; set; } = 30;
+    internal TimeSpan ReloadConfigPollDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
     private AppSettings _appSettings = new();
     private WindowsAgentOptions _agentOptions = new();
     private string _statusText = "No settings loaded.";
@@ -429,13 +432,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string LastSelectedPageText
     {
         get => _lastSelectedPageText;
-        set
-        {
-            if (SetProperty(ref _lastSelectedPageText, value))
-            {
-                IsDirty = true;
-            }
-        }
+        set => SetProperty(ref _lastSelectedPageText, value);
     }
 
     public string SamplingIntervalSecondsText
@@ -885,13 +882,15 @@ public sealed partial class SettingsViewModel : ObservableObject
             return;
         }
 
-        const int maxAttempts = 30;
-        const int delayMilliseconds = 500;
+        var pollDelay = ReloadConfigPollDelay;
         var requestTime = DateTime.UtcNow.AddSeconds(-2);
 
-        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        for (var attempt = 0; attempt < ReloadConfigPollMaxAttempts; attempt++)
         {
-            await Task.Delay(delayMilliseconds, cancellationToken);
+            if (pollDelay > TimeSpan.Zero)
+            {
+                await Task.Delay(pollDelay, cancellationToken);
+            }
 
             IReadOnlyList<AgentEvent> events;
             try
@@ -927,7 +926,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 var reloadedEvent = events.FirstOrDefault(e =>
                     e.EventType == AgentEventType.ConfigReloaded &&
-                    e.EventTimeUtc >= requestTime);
+                    string.Equals(e.RequestId, requestId, StringComparison.OrdinalIgnoreCase));
                 if (reloadedEvent is not null)
                 {
                     AgentOptionsReloadStatusText = "ReloadConfig succeeded: Agent applied the saved configuration.";
@@ -1190,17 +1189,11 @@ public sealed partial class SettingsViewModel : ObservableObject
             return false;
         }
 
-        if (!IsKnownPage(LastSelectedPageText))
-        {
-            validationMessage = $"Last selected page must be one of: {string.Join(", ", LastSelectedPageOptions)}.";
-            return false;
-        }
-
         appSettings = new AppSettings
         {
             AutoStartAgentWhenAppStarts = AutoStartAgentWhenAppStarts,
             RefreshIntervalSeconds = refreshIntervalSeconds,
-            LastSelectedPage = NormalizeLastSelectedPage(LastSelectedPageText),
+            LastSelectedPage = AppSettings.LastSelectedPage,
             MinimizeToTray = AppSettings.MinimizeToTray,
             CloseToTray = AppSettings.CloseToTray,
             Theme = AppSettings.Theme

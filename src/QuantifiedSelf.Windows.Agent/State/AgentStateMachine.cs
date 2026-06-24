@@ -462,7 +462,8 @@ public sealed class AgentStateMachine
                     {
                         ["actualState"] = ActualState.ToString(),
                         ["processId"] = ProcessId
-                    });
+                    },
+                    requestId: command.RequestId);
                 result.Completed = true;
                 result.ActualState = ActualState;
                 result.Message = "Config reloaded";
@@ -607,7 +608,8 @@ public sealed class AgentStateMachine
         string message,
         CancellationToken cancellationToken,
         IReadOnlyDictionary<string, object?>? payload = null,
-        string[]? allowedPayloadKeys = null)
+        string[]? allowedPayloadKeys = null,
+        string? requestId = null)
     {
         return WriteAgentEventAsync(
             eventType,
@@ -616,6 +618,7 @@ public sealed class AgentStateMachine
             cancellationToken,
             payload,
             source: nameof(AgentStateMachine),
+            requestId: requestId,
             allowedPayloadKeys: allowedPayloadKeys ?? LifecyclePayloadKeys);
     }
 

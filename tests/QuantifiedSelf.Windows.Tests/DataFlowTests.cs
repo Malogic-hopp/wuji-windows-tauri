@@ -2205,20 +2205,20 @@ public sealed class DataFlowTests
 
         viewModel.RefreshIntervalSecondsText = "45";
         viewModel.AutoStartAgentWhenAppStarts = true;
-        viewModel.LastSelectedPageText = "Diagnostics";
 
         await viewModel.SaveAppSettingsAsync();
 
         var saved = await settingsService.ReadAppSettingsAsync();
         Assert.Equal(45, saved.RefreshIntervalSeconds);
         Assert.True(saved.AutoStartAgentWhenAppStarts);
-        Assert.Equal("Diagnostics", saved.LastSelectedPage);
+        // lastSelectedPage is read-only in Settings; preserved from loaded value
+        Assert.Equal("Dashboard", saved.LastSelectedPage);
         Assert.Equal("App settings saved.", viewModel.SaveStatusText);
         Assert.False(viewModel.HasValidationError);
         Assert.False(viewModel.HasSaveError);
         Assert.Equal("45", viewModel.RefreshIntervalSecondsText);
         Assert.True(viewModel.AutoStartAgentWhenAppStarts);
-        Assert.Equal("Diagnostics", viewModel.LastSelectedPageText);
+        Assert.Equal("Dashboard", viewModel.LastSelectedPageText);
     }
 
     [Fact]
@@ -2260,7 +2260,7 @@ public sealed class DataFlowTests
     }
 
     [Fact]
-    public async Task SettingsViewModel_RejectsUnknownLastSelectedPage()
+    public async Task SettingsViewModel_PreservesLastSelectedPageAsReadOnly()
     {
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
@@ -2275,20 +2275,20 @@ public sealed class DataFlowTests
             {
                 RefreshIntervalSeconds = 15,
                 AutoStartAgentWhenAppStarts = false,
-                LastSelectedPage = "Dashboard"
+                LastSelectedPage = "Diagnostics"
             });
 
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
+        Assert.Equal("Diagnostics", viewModel.LastSelectedPageText);
+
         viewModel.RefreshIntervalSecondsText = "20";
-        viewModel.LastSelectedPageText = "Tray";
         await viewModel.SaveAppSettingsAsync();
 
         var saved = await settingsService.ReadAppSettingsAsync();
-        Assert.Equal("Dashboard", saved.LastSelectedPage);
-        Assert.True(viewModel.HasValidationError);
-        Assert.Contains("Last selected page must be one of", viewModel.SaveStatusText, StringComparison.Ordinal);
+        Assert.Equal("Diagnostics", saved.LastSelectedPage);
+        Assert.False(viewModel.HasValidationError);
     }
 
     [Fact]
@@ -2767,7 +2767,6 @@ public sealed class DataFlowTests
 
         viewModel.RefreshIntervalSecondsText = "30";
         viewModel.AutoStartAgentWhenAppStarts = true;
-        viewModel.LastSelectedPageText = "Diagnostics";
         viewModel.SamplingIntervalSecondsText = "7";
         viewModel.EnableJsonlJournal = true;
         viewModel.ExcludedProcessesText = "calc.exe";
@@ -2779,7 +2778,7 @@ public sealed class DataFlowTests
 
         Assert.Equal(30, savedAppSettings.RefreshIntervalSeconds);
         Assert.True(savedAppSettings.AutoStartAgentWhenAppStarts);
-        Assert.Equal("Diagnostics", savedAppSettings.LastSelectedPage);
+        Assert.Equal("Dashboard", savedAppSettings.LastSelectedPage);
         Assert.Equal(11, savedAgentOptions.SamplingIntervalSeconds);
         Assert.False(savedAgentOptions.EnableJsonlJournal);
         Assert.Equal(["Notepad"], savedAgentOptions.ExcludedProcesses);
@@ -3574,6 +3573,131 @@ public sealed class DataFlowTests
         Assert.Contains("ReloadConfig request failed", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
         Assert.Contains("<path>", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
         Assert.DoesNotContain(@"C:\Users\Alice\runtime\agent_control.json", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_PollsUntilConfigReloadedObserved()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var requestId = string.Empty;
+        var reloadObserved = false;
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot
+            {
+                IsRunning = true,
+                ActualState = AgentActualState.Running
+            }),
+            _ =>
+            {
+                var cmd = new AgentControlCommand { Command = AgentCommandType.ReloadConfig };
+                requestId = cmd.RequestId;
+                return Task.FromResult(new AgentCommandResult
+                {
+                    RequestId = requestId,
+                    Accepted = true,
+                    Completed = false,
+                    ActualState = AgentActualState.Running
+                });
+            },
+            _ =>
+            {
+                reloadObserved = true;
+                return Task.FromResult<IReadOnlyList<AgentEvent>>(new[]
+                {
+                    new AgentEvent
+                    {
+                        EventType = AgentEventType.CommandCompleted,
+                        RequestId = requestId,
+                        EventLevel = AgentEventLevel.Info,
+                        Message = "Command completed"
+                    },
+                    new AgentEvent
+                    {
+                        EventType = AgentEventType.ConfigReloaded,
+                        RequestId = requestId,
+                        EventLevel = AgentEventLevel.Info,
+                        Message = "Config reloaded"
+                    }
+                });
+            },
+            new AgentOptionsValidator(),
+            paths);
+
+        viewModel.ReloadConfigPollMaxAttempts = 5;
+        viewModel.ReloadConfigPollDelay = TimeSpan.Zero;
+
+        await viewModel.LoadAsync();
+        await viewModel.ReloadAgentConfigAsync();
+
+        Assert.True(reloadObserved);
+        Assert.Contains("ReloadConfig succeeded", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
+        Assert.False(viewModel.HasAgentOptionsReloadError);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_PollsCommandFailedAndShowsError()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var requestId = string.Empty;
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot
+            {
+                IsRunning = true,
+                ActualState = AgentActualState.Running
+            }),
+            _ =>
+            {
+                var cmd = new AgentControlCommand { Command = AgentCommandType.ReloadConfig };
+                requestId = cmd.RequestId;
+                return Task.FromResult(new AgentCommandResult
+                {
+                    RequestId = requestId,
+                    Accepted = true,
+                    Completed = false,
+                    ActualState = AgentActualState.Running
+                });
+            },
+            _ => Task.FromResult<IReadOnlyList<AgentEvent>>(new[]
+            {
+                new AgentEvent
+                {
+                    EventType = AgentEventType.CommandFailed,
+                    RequestId = requestId,
+                    ErrorCode = "ReloadConfigValidationFailed",
+                    EventLevel = AgentEventLevel.Error,
+                    Message = "Reloaded agent options configuration is invalid."
+                }
+            }),
+            new AgentOptionsValidator(),
+            paths);
+
+        viewModel.ReloadConfigPollMaxAttempts = 5;
+        viewModel.ReloadConfigPollDelay = TimeSpan.Zero;
+
+        await viewModel.LoadAsync();
+        await viewModel.ReloadAgentConfigAsync();
+
+        Assert.True(viewModel.HasAgentOptionsReloadError);
+        Assert.Contains("ReloadConfig failed", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
+        Assert.Contains("ReloadConfigValidationFailed", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
     }
 
     [Fact]

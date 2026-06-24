@@ -58,6 +58,21 @@ public sealed class AgentControlService
         AgentDesiredState? desiredState,
         CancellationToken cancellationToken)
     {
+        if (commandType == AgentCommandType.ReloadConfig)
+        {
+            var reloadStatus = await _statusService.GetStatusAsync(cancellationToken);
+            if (!reloadStatus.IsRunning)
+            {
+                return new AgentCommandResult
+                {
+                    Accepted = false,
+                    Completed = false,
+                    Message = "Agent is not running. Configuration will take effect on next Agent start.",
+                    ActualState = reloadStatus.ActualState
+                };
+            }
+        }
+
         var command = new AgentControlCommand
         {
             Command = commandType,
