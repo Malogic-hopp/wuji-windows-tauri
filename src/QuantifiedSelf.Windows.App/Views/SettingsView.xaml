@@ -33,6 +33,26 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+
+        <Style x:Key="SaveStatusTextStyle" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasAgentOptionsSaveError}" Value="True">
+                    <Setter Property="Foreground" Value="#B42318" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <Style x:Key="ReloadStatusTextStyle" TargetType="TextBlock">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding HasAgentOptionsReloadError}" Value="True">
+                    <Setter Property="Foreground" Value="#B42318" />
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
 
     <ScrollViewer VerticalScrollBarVisibility="Auto">
@@ -246,6 +266,18 @@
                                  FontFamily="Consolas" />
 
                         <WrapPanel Margin="0,16,0,0">
+                            <Button Content="Save Agent Options"
+                                    Command="{Binding SaveAgentOptionsCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                            <Button Content="Save and Reload"
+                                    Command="{Binding SaveAndReloadAgentOptionsCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                            <Button Content="Reload Agent Config"
+                                    Command="{Binding ReloadAgentConfigCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                            <Button Content="Restore Backup"
+                                    Command="{Binding RestoreAgentOptionsBackupCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
                             <Button Content="Validate Agent Options"
                                     Command="{Binding ValidateAgentOptionsCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
@@ -260,6 +292,12 @@
                         <TextBlock Text="{Binding AgentOptionsValidationDetailsText}"
                                    Margin="0,6,0,0"
                                    Style="{StaticResource ValidationStatusTextStyle}" />
+                        <TextBlock Text="{Binding AgentOptionsSaveStatusText}"
+                                   Margin="0,10,0,0"
+                                   Style="{StaticResource SaveStatusTextStyle}" />
+                        <TextBlock Text="{Binding AgentOptionsReloadStatusText}"
+                                   Margin="0,10,0,0"
+                                   Style="{StaticResource ReloadStatusTextStyle}" />
 
                         <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,16,0,0">
                             <StackPanel>

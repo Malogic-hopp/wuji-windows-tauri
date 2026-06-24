@@ -12,6 +12,7 @@ using QuantifiedSelf.Windows.Infrastructure.Events;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
+using QuantifiedSelf.Windows.Core.Options;
 
 var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
 var mutexName = $@"Local\QuantifiedSelf.Windows.Agent.{userSid}";
@@ -38,6 +39,7 @@ builder.Services.AddSingleton<RuntimeStateStore>();
 builder.Services.AddSingleton<AgentHealthStateStore>();
 builder.Services.AddSingleton<AgentControlFileStore>();
 builder.Services.AddSingleton<WindowsAgentOptionsStore>();
+builder.Services.AddSingleton<AgentOptionsValidator>();
 builder.Services.AddSingleton<SqliteDatabaseInitializer>(sp =>
 {
     var paths = sp.GetRequiredService<WindowsAgentPaths>();

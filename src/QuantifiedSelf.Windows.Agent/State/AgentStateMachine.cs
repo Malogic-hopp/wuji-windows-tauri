@@ -38,6 +38,7 @@ public sealed class AgentStateMachine
     private readonly ConfiguredForegroundSampleProvider _foregroundSampleProvider;
     private readonly AgentEventWriter? _eventWriter;
     private readonly AgentEventRateLimiter _eventRateLimiter = new();
+    private readonly AgentOptionsValidator _optionsValidator;
     private readonly ILogger<AgentStateMachine> _logger;
 
     private WindowsAgentOptions _options = new();
@@ -62,6 +63,37 @@ public sealed class AgentStateMachine
         ConfiguredForegroundSampleProvider foregroundSampleProvider,
         AgentEventWriter? eventWriter,
         ILogger<AgentStateMachine> logger)
+        : this(
+            paths,
+            runtimeStateStore,
+            healthStateStore,
+            controlFileStore,
+            optionsStore,
+            databaseInitializer,
+            foregroundSampleRepository,
+            sessionAggregator,
+            privacyFilter,
+            foregroundSampleProvider,
+            eventWriter,
+            new AgentOptionsValidator(),
+            logger)
+    {
+    }
+
+    public AgentStateMachine(
+        WindowsAgentPaths paths,
+        RuntimeStateStore runtimeStateStore,
+        AgentHealthStateStore healthStateStore,
+        AgentControlFileStore controlFileStore,
+        WindowsAgentOptionsStore optionsStore,
+        SqliteDatabaseInitializer databaseInitializer,
+        ForegroundSampleRepository foregroundSampleRepository,
+        SessionAggregator sessionAggregator,
+        ForegroundSamplePrivacyFilter privacyFilter,
+        ConfiguredForegroundSampleProvider foregroundSampleProvider,
+        AgentEventWriter? eventWriter,
+        AgentOptionsValidator optionsValidator,
+        ILogger<AgentStateMachine> logger)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
@@ -74,6 +106,7 @@ public sealed class AgentStateMachine
         _privacyFilter = privacyFilter;
         _foregroundSampleProvider = foregroundSampleProvider;
         _eventWriter = eventWriter;
+        _optionsValidator = optionsValidator;
         _logger = logger;
     }
 
@@ -101,6 +134,7 @@ public sealed class AgentStateMachine
             privacyFilter,
             foregroundSampleProvider,
             null,
+            new AgentOptionsValidator(),
             logger)
     {
     }
@@ -120,6 +154,18 @@ public sealed class AgentStateMachine
         _paths.EnsureDirectories();
         await _databaseInitializer.InitializeAsync(cancellationToken);
         _options = await _optionsStore.ReadAsync(_paths.AgentOptionsPath, cancellationToken) ?? new WindowsAgentOptions();
+        var startupValidation = _optionsValidator.Validate(_options);
+        if (!startupValidation.IsValid)
+        {
+            _logger.LogWarning(
+                "Agent options validation failed on startup, falling back to defaults: {Errors}",
+                string.Join("; ", startupValidation.Issues.Select(issue => issue.SafeText)));
+            _options = new WindowsAgentOptions();
+        }
+        else
+        {
+            _options = startupValidation.NormalizedOptions;
+        }
 
         StartedAtUtc = DateTime.UtcNow;
         ActualState = AgentActualState.Starting;
@@ -353,7 +399,59 @@ public sealed class AgentStateMachine
 
             case AgentCommandType.ReloadConfig:
                 await WriteCommandAcceptedEventAsync(command, cancellationToken);
-                _options = await _optionsStore.ReadAsync(_paths.AgentOptionsPath, cancellationToken) ?? new WindowsAgentOptions();
+
+                WindowsAgentOptions? reloadedOptions = null;
+                Exception? readException = null;
+                try
+                {
+                    reloadedOptions = await _optionsStore.ReadAsync(_paths.AgentOptionsPath, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    readException = ex;
+                }
+
+                if (readException is not null || reloadedOptions is null)
+                {
+                    const string readErrorCode = "ReloadConfigReadFailed";
+                    var readSafeMessage = "Failed to read or parse agent options configuration.";
+                    if (readException is not null)
+                    {
+                        var sanitizedReadMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(readException, 160);
+                        if (!string.IsNullOrWhiteSpace(sanitizedReadMessage))
+                        {
+                            readSafeMessage = $"{readSafeMessage} {sanitizedReadMessage}";
+                        }
+                    }
+
+                    await WriteCommandFailedEventAsync(command, readErrorCode, readSafeMessage, cancellationToken, readException);
+                    result.Accepted = true;
+                    result.Completed = false;
+                    result.ErrorCode = readErrorCode;
+                    result.Message = readSafeMessage;
+                    return result;
+                }
+
+                var validationResult = _optionsValidator.Validate(reloadedOptions);
+                if (!validationResult.IsValid)
+                {
+                    const string validationErrorCode = "ReloadConfigValidationFailed";
+                    var validationSafeMessage = "Reloaded agent options configuration is invalid.";
+                    var issueMessage = string.Join("; ", validationResult.Issues.Select(issue => issue.SafeText));
+                    if (!string.IsNullOrWhiteSpace(issueMessage))
+                    {
+                        validationSafeMessage = $"{validationSafeMessage} {issueMessage}";
+                    }
+
+                    await WriteCommandFailedEventAsync(command, validationErrorCode, validationSafeMessage, cancellationToken);
+                    result.Accepted = true;
+                    result.Completed = false;
+                    result.ErrorCode = validationErrorCode;
+                    result.Message = validationSafeMessage;
+                    return result;
+                }
+
+                _options = validationResult.NormalizedOptions;
                 await PersistAsync("Config reloaded", cancellationToken);
                 await WriteLifecycleEventAsync(
                     AgentEventType.ConfigReloaded,

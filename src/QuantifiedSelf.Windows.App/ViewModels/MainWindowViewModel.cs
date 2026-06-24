@@ -360,8 +360,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 await RefreshDiagnosticsAsync(status, cancellationToken);
                 break;
             case "Settings":
-                await _settingsViewModel.LoadAsync(cancellationToken);
-                ApplyAppSettings(_settingsViewModel.AppSettings);
+                if (!_settingsViewModel.IsDirty)
+                {
+                    await _settingsViewModel.LoadAsync(cancellationToken);
+                    ApplyAppSettings(_settingsViewModel.AppSettings);
+                }
                 break;
         }
     }

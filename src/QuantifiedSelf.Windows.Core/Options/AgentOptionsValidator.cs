@@ -16,15 +16,21 @@ public sealed class AgentOptionsValidator
     public const int RetentionDaysMin = 1;
     public const int RetentionDaysMax = 3650;
 
+    public const int ExcludedProcessesMaxItemLength = 100;
+    public const int ExcludedProcessesMaxCount = 50;
+    public const int ExcludedTitlePatternsMaxItemLength = 200;
+    public const int ExcludedTitlePatternsMaxCount = 50;
+
     public AgentOptionsValidationResult Validate(WindowsAgentOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
 
         var normalizedExcludedProcesses = NormalizeExcludedProcesses(options.ExcludedProcesses, out var excludedProcessesIssues);
-        var normalizedExcludedTitlePatterns = NormalizeExcludedTitlePatterns(options.ExcludedTitlePatterns);
+        var normalizedExcludedTitlePatterns = NormalizeExcludedTitlePatterns(options.ExcludedTitlePatterns, out var titlePatternsIssues);
 
         var issues = new List<AgentOptionsValidationIssue>();
         issues.AddRange(excludedProcessesIssues);
+        issues.AddRange(titlePatternsIssues);
 
         ValidateRange(
             options.SamplingIntervalSeconds,
@@ -145,6 +151,22 @@ public sealed class AgentOptionsValidator
                 continue;
             }
 
+            if (trimmed.Length > ExcludedProcessesMaxItemLength)
+            {
+                issues.Add(new AgentOptionsValidationIssue(
+                    "excludedProcesses",
+                    $"item {index} exceeds max length of {ExcludedProcessesMaxItemLength}."));
+                continue;
+            }
+
+            if (normalized.Count >= ExcludedProcessesMaxCount)
+            {
+                issues.Add(new AgentOptionsValidationIssue(
+                    "excludedProcesses",
+                    $"exceeds max count of {ExcludedProcessesMaxCount}."));
+                break;
+            }
+
             var normalizedItem = NormalizeProcessName(trimmed);
             if (string.IsNullOrWhiteSpace(normalizedItem))
             {
@@ -163,8 +185,11 @@ public sealed class AgentOptionsValidator
         return normalized;
     }
 
-    private static List<string> NormalizeExcludedTitlePatterns(IEnumerable<string>? rawValues)
+    private static List<string> NormalizeExcludedTitlePatterns(
+        IEnumerable<string>? rawValues,
+        out List<AgentOptionsValidationIssue> issues)
     {
+        issues = new List<AgentOptionsValidationIssue>();
         var normalized = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -173,14 +198,33 @@ public sealed class AgentOptionsValidator
             return normalized;
         }
 
+        var index = 0;
         foreach (var rawValue in rawValues)
         {
+            index++;
+
             if (string.IsNullOrWhiteSpace(rawValue))
             {
                 continue;
             }
 
             var trimmed = rawValue.Trim();
+            if (trimmed.Length > ExcludedTitlePatternsMaxItemLength)
+            {
+                issues.Add(new AgentOptionsValidationIssue(
+                    "excludedTitlePatterns",
+                    $"item {index} exceeds max length of {ExcludedTitlePatternsMaxItemLength}."));
+                continue;
+            }
+
+            if (normalized.Count >= ExcludedTitlePatternsMaxCount)
+            {
+                issues.Add(new AgentOptionsValidationIssue(
+                    "excludedTitlePatterns",
+                    $"exceeds max count of {ExcludedTitlePatternsMaxCount}."));
+                break;
+            }
+
             if (seen.Add(trimmed))
             {
                 normalized.Add(trimmed);

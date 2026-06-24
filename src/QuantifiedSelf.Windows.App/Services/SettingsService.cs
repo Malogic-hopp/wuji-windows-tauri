@@ -46,4 +46,15 @@ public sealed class SettingsService
         ArgumentNullException.ThrowIfNull(options);
         return _agentOptionsStore.WriteAsync(_paths.AgentOptionsPath, options, cancellationToken);
     }
+
+    public Task SaveAgentOptionsWithBackupAsync(WindowsAgentOptions options, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        return _agentOptionsStore.WriteWithBackupAsync(_paths.AgentOptionsPath, options, cancellationToken);
+    }
+
+    public Task RestoreAgentOptionsBackupAsync(CancellationToken cancellationToken = default)
+    {
+        return _agentOptionsStore.RestoreBackupAsync(_paths.AgentOptionsPath, cancellationToken);
+    }
 }

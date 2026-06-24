@@ -1,10 +1,13 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuantifiedSelf.Windows.App.Models;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -19,6 +22,11 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Func<CancellationToken, Task<AppSettings>> _readAppSettingsAsync;
     private readonly Func<AppSettings, CancellationToken, Task> _saveAppSettingsAsync;
     private readonly Func<CancellationToken, Task<WindowsAgentOptions>> _readAgentOptionsAsync;
+    private readonly Func<WindowsAgentOptions, CancellationToken, Task> _saveAgentOptionsAsync;
+    private readonly Func<CancellationToken, Task> _restoreAgentOptionsBackupAsync;
+    private readonly Func<CancellationToken, Task<AgentStatusSnapshot>>? _getAgentStatusAsync;
+    private readonly Func<CancellationToken, Task<AgentCommandResult>>? _requestReloadConfigAsync;
+    private readonly Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? _getRecentAgentEventsAsync;
     private readonly AgentOptionsValidator _agentOptionsValidator;
     private readonly WindowsAgentPaths _paths;
 
@@ -29,12 +37,18 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _saveStatusText = "Ready to save App Settings.";
     private string _agentOptionsValidationText = "Agent options not validated yet.";
     private string _agentOptionsValidationDetailsText = "Validate Agent Options to review ranges and normalized privacy rules.";
+    private string _agentOptionsSaveStatusText = "Ready to save Agent Options.";
+    private string _agentOptionsReloadStatusText = "Agent status will be checked when Settings loads.";
     private string _normalizedExcludedProcessesText = "(none)";
     private string _normalizedExcludedTitlePatternsText = "(none)";
     private bool _hasLoadError;
     private bool _hasSaveError;
     private bool _hasValidationError;
     private bool _hasAgentOptionsValidationError;
+    private bool _hasAgentOptionsSaveError;
+    private bool _hasAgentOptionsReloadError;
+    private bool _canReloadAgentConfig;
+    private bool _isDirty;
     private bool _isLoading;
     private bool _isSaving;
     private string _refreshIntervalSecondsText = "15";
@@ -60,7 +74,37 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _useMockCaptureText = "Disabled";
 
     public SettingsViewModel(SettingsService settingsService, WindowsAgentPaths paths)
-        : this(settingsService.ReadAppSettingsAsync, settingsService.SaveAppSettingsAsync, settingsService.ReadAgentOptionsAsync, new AgentOptionsValidator(), paths)
+        : this(
+            settingsService.ReadAppSettingsAsync,
+            settingsService.SaveAppSettingsAsync,
+            settingsService.ReadAgentOptionsAsync,
+            settingsService.SaveAgentOptionsWithBackupAsync,
+            settingsService.RestoreAgentOptionsBackupAsync,
+            null,
+            null,
+            null,
+            new AgentOptionsValidator(),
+            paths)
+    {
+    }
+
+    public SettingsViewModel(
+        SettingsService settingsService,
+        AgentStatusService statusService,
+        AgentControlService controlService,
+        DiagnosticsDataService diagnosticsDataService,
+        WindowsAgentPaths paths)
+        : this(
+            settingsService.ReadAppSettingsAsync,
+            settingsService.SaveAppSettingsAsync,
+            settingsService.ReadAgentOptionsAsync,
+            settingsService.SaveAgentOptionsWithBackupAsync,
+            settingsService.RestoreAgentOptionsBackupAsync,
+            statusService.GetStatusAsync,
+            controlService.ReloadConfigAsync,
+            ct => diagnosticsDataService.GetRecentEventsAsync(cancellationToken: ct),
+            new AgentOptionsValidator(),
+            paths)
     {
     }
 
@@ -79,16 +123,59 @@ public sealed partial class SettingsViewModel : ObservableObject
         Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
         AgentOptionsValidator agentOptionsValidator,
         WindowsAgentPaths paths)
+        : this(
+            readAppSettingsAsync,
+            saveAppSettingsAsync,
+            readAgentOptionsAsync,
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            null,
+            null,
+            null,
+            agentOptionsValidator,
+            paths)
+    {
+    }
+
+    public SettingsViewModel(
+        Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
+        Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
+        Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
+        Func<WindowsAgentOptions, CancellationToken, Task> saveAgentOptionsAsync,
+        Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
+        WindowsAgentPaths paths)
+        : this(readAppSettingsAsync, saveAppSettingsAsync, readAgentOptionsAsync, saveAgentOptionsAsync, restoreAgentOptionsBackupAsync, null, null, null, new AgentOptionsValidator(), paths)
+    {
+    }
+
+    public SettingsViewModel(
+        Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
+        Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
+        Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
+        Func<WindowsAgentOptions, CancellationToken, Task> saveAgentOptionsAsync,
+        Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
+        Func<CancellationToken, Task<AgentStatusSnapshot>>? getAgentStatusAsync,
+        Func<CancellationToken, Task<AgentCommandResult>>? requestReloadConfigAsync,
+        Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? getRecentAgentEventsAsync,
+        AgentOptionsValidator agentOptionsValidator,
+        WindowsAgentPaths paths)
     {
         ArgumentNullException.ThrowIfNull(readAppSettingsAsync);
         ArgumentNullException.ThrowIfNull(saveAppSettingsAsync);
         ArgumentNullException.ThrowIfNull(readAgentOptionsAsync);
+        ArgumentNullException.ThrowIfNull(saveAgentOptionsAsync);
+        ArgumentNullException.ThrowIfNull(restoreAgentOptionsBackupAsync);
         ArgumentNullException.ThrowIfNull(agentOptionsValidator);
         ArgumentNullException.ThrowIfNull(paths);
 
         _readAppSettingsAsync = readAppSettingsAsync;
         _saveAppSettingsAsync = saveAppSettingsAsync;
         _readAgentOptionsAsync = readAgentOptionsAsync;
+        _saveAgentOptionsAsync = saveAgentOptionsAsync;
+        _restoreAgentOptionsBackupAsync = restoreAgentOptionsBackupAsync;
+        _getAgentStatusAsync = getAgentStatusAsync;
+        _requestReloadConfigAsync = requestReloadConfigAsync;
+        _getRecentAgentEventsAsync = getRecentAgentEventsAsync;
         _agentOptionsValidator = agentOptionsValidator;
         _paths = paths;
 
@@ -102,6 +189,10 @@ public sealed partial class SettingsViewModel : ObservableObject
 
         RefreshCommand = new AsyncRelayCommand(LoadAsync, () => !IsLoading && !IsSaving);
         SaveAppSettingsCommand = new AsyncRelayCommand(SaveAppSettingsAsync, () => !IsLoading && !IsSaving);
+        SaveAgentOptionsCommand = new AsyncRelayCommand(SaveAgentOptionsAsync, () => !IsLoading && !IsSaving);
+        SaveAndReloadAgentOptionsCommand = new AsyncRelayCommand(SaveAndReloadAgentOptionsAsync, () => !IsLoading && !IsSaving && CanReloadAgentConfig);
+        ReloadAgentConfigCommand = new AsyncRelayCommand(ReloadAgentConfigAsync, () => !IsLoading && !IsSaving && CanReloadAgentConfig);
+        RestoreAgentOptionsBackupCommand = new AsyncRelayCommand(RestoreAgentOptionsBackupAsync, () => !IsLoading && !IsSaving);
         ValidateAgentOptionsCommand = new RelayCommand(ValidateAgentOptions, () => !IsLoading && !IsSaving);
         ResetAgentOptionsEditorCommand = new RelayCommand(ResetAgentOptionsEditor, () => !IsLoading && !IsSaving);
         OpenDataFolderCommand = new RelayCommand(() => OpenFolder(_paths.Root));
@@ -138,6 +229,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     public IAsyncRelayCommand RefreshCommand { get; }
 
     public IAsyncRelayCommand SaveAppSettingsCommand { get; }
+
+    public IAsyncRelayCommand SaveAgentOptionsCommand { get; }
+
+    public IAsyncRelayCommand SaveAndReloadAgentOptionsCommand { get; }
+
+    public IAsyncRelayCommand ReloadAgentConfigCommand { get; }
+
+    public IAsyncRelayCommand RestoreAgentOptionsBackupCommand { get; }
 
     public IRelayCommand ValidateAgentOptionsCommand { get; }
 
@@ -179,6 +278,43 @@ public sealed partial class SettingsViewModel : ObservableObject
         private set => SetProperty(ref _agentOptionsValidationDetailsText, value);
     }
 
+    public string AgentOptionsSaveStatusText
+    {
+        get => _agentOptionsSaveStatusText;
+        private set => SetProperty(ref _agentOptionsSaveStatusText, value);
+    }
+
+    public string AgentOptionsReloadStatusText
+    {
+        get => _agentOptionsReloadStatusText;
+        private set => SetProperty(ref _agentOptionsReloadStatusText, value);
+    }
+
+    public bool CanReloadAgentConfig
+    {
+        get => _canReloadAgentConfig;
+        private set
+        {
+            if (SetProperty(ref _canReloadAgentConfig, value))
+            {
+                SaveAndReloadAgentOptionsCommand.NotifyCanExecuteChanged();
+                ReloadAgentConfigCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool HasAgentOptionsReloadError
+    {
+        get => _hasAgentOptionsReloadError;
+        private set => SetProperty(ref _hasAgentOptionsReloadError, value);
+    }
+
+    public bool IsDirty
+    {
+        get => _isDirty;
+        private set => SetProperty(ref _isDirty, value);
+    }
+
     public string NormalizedExcludedProcessesText
     {
         get => _normalizedExcludedProcessesText;
@@ -215,6 +351,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         private set => SetProperty(ref _hasAgentOptionsValidationError, value);
     }
 
+    public bool HasAgentOptionsSaveError
+    {
+        get => _hasAgentOptionsSaveError;
+        private set => SetProperty(ref _hasAgentOptionsSaveError, value);
+    }
+
     public bool IsLoading
     {
         get => _isLoading;
@@ -224,6 +366,10 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 RefreshCommand.NotifyCanExecuteChanged();
                 SaveAppSettingsCommand.NotifyCanExecuteChanged();
+                SaveAgentOptionsCommand.NotifyCanExecuteChanged();
+                SaveAndReloadAgentOptionsCommand.NotifyCanExecuteChanged();
+                ReloadAgentConfigCommand.NotifyCanExecuteChanged();
+                RestoreAgentOptionsBackupCommand.NotifyCanExecuteChanged();
                 ValidateAgentOptionsCommand.NotifyCanExecuteChanged();
                 ResetAgentOptionsEditorCommand.NotifyCanExecuteChanged();
             }
@@ -239,6 +385,10 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 SaveAppSettingsCommand.NotifyCanExecuteChanged();
                 RefreshCommand.NotifyCanExecuteChanged();
+                SaveAgentOptionsCommand.NotifyCanExecuteChanged();
+                SaveAndReloadAgentOptionsCommand.NotifyCanExecuteChanged();
+                ReloadAgentConfigCommand.NotifyCanExecuteChanged();
+                RestoreAgentOptionsBackupCommand.NotifyCanExecuteChanged();
                 ValidateAgentOptionsCommand.NotifyCanExecuteChanged();
                 ResetAgentOptionsEditorCommand.NotifyCanExecuteChanged();
             }
@@ -248,7 +398,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string RefreshIntervalSecondsText
     {
         get => _refreshIntervalSecondsText;
-        set => SetProperty(ref _refreshIntervalSecondsText, value);
+        set
+        {
+            if (SetProperty(ref _refreshIntervalSecondsText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public bool AutoStartAgentWhenAppStarts
@@ -259,6 +415,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             if (SetProperty(ref _autoStartAgentWhenAppStarts, value))
             {
                 AutoStartAgentWhenAppStartsText = FormatSwitch(value);
+                IsDirty = true;
             }
         }
     }
@@ -272,37 +429,73 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string LastSelectedPageText
     {
         get => _lastSelectedPageText;
-        set => SetProperty(ref _lastSelectedPageText, value);
+        set
+        {
+            if (SetProperty(ref _lastSelectedPageText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string SamplingIntervalSecondsText
     {
         get => _samplingIntervalSecondsText;
-        set => SetProperty(ref _samplingIntervalSecondsText, value);
+        set
+        {
+            if (SetProperty(ref _samplingIntervalSecondsText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string IdleThresholdSecondsText
     {
         get => _idleThresholdSecondsText;
-        set => SetProperty(ref _idleThresholdSecondsText, value);
+        set
+        {
+            if (SetProperty(ref _idleThresholdSecondsText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string HeartbeatIntervalSecondsText
     {
         get => _heartbeatIntervalSecondsText;
-        set => SetProperty(ref _heartbeatIntervalSecondsText, value);
+        set
+        {
+            if (SetProperty(ref _heartbeatIntervalSecondsText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string StaleThresholdSecondsText
     {
         get => _staleThresholdSecondsText;
-        set => SetProperty(ref _staleThresholdSecondsText, value);
+        set
+        {
+            if (SetProperty(ref _staleThresholdSecondsText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string RetentionDaysText
     {
         get => _retentionDaysText;
-        set => SetProperty(ref _retentionDaysText, value);
+        set
+        {
+            if (SetProperty(ref _retentionDaysText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string IdleSummaryIntervalMinutesText
@@ -319,6 +512,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             if (SetProperty(ref _enableJsonlJournal, value))
             {
                 EnableJsonlJournalText = FormatSwitch(value);
+                IsDirty = true;
             }
         }
     }
@@ -337,6 +531,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             if (SetProperty(ref _enableAgentEventJournal, value))
             {
                 EnableAgentEventJournalText = FormatSwitch(value);
+                IsDirty = true;
             }
         }
     }
@@ -355,6 +550,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             if (SetProperty(ref _enableSessionMerge, value))
             {
                 EnableSessionMergeText = FormatSwitch(value);
+                IsDirty = true;
             }
         }
     }
@@ -373,6 +569,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             if (SetProperty(ref _maskWindowTitles, value))
             {
                 MaskWindowTitlesText = FormatSwitch(value);
+                IsDirty = true;
             }
         }
     }
@@ -386,13 +583,25 @@ public sealed partial class SettingsViewModel : ObservableObject
     public string ExcludedProcessesText
     {
         get => _excludedProcessesText;
-        set => SetProperty(ref _excludedProcessesText, value);
+        set
+        {
+            if (SetProperty(ref _excludedProcessesText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string ExcludedTitlePatternsText
     {
         get => _excludedTitlePatternsText;
-        set => SetProperty(ref _excludedTitlePatternsText, value);
+        set
+        {
+            if (SetProperty(ref _excludedTitlePatternsText, value))
+            {
+                IsDirty = true;
+            }
+        }
     }
 
     public string UseMockCaptureText
@@ -445,8 +654,14 @@ public sealed partial class SettingsViewModel : ObservableObject
                 ? "Manage App Settings and Agent Options from this page."
                 : "Settings could not be fully loaded. Refresh to retry.";
             SaveStatusText = "Ready to save App Settings.";
+            AgentOptionsSaveStatusText = "Ready to save Agent Options.";
             HasSaveError = false;
             HasValidationError = false;
+            HasAgentOptionsSaveError = false;
+            HasAgentOptionsReloadError = false;
+            IsDirty = false;
+
+            await UpdateAgentStatusAsync(cancellationToken);
         }
         finally
         {
@@ -474,6 +689,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             ApplyAppSettingsToEditor(appSettings);
             SaveStatusText = "App settings saved.";
             HasSaveError = false;
+            IsDirty = false;
             AppSettingsSaved?.Invoke(appSettings);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -496,6 +712,271 @@ public sealed partial class SettingsViewModel : ObservableObject
 
     public event Action<AppSettings>? AppSettingsSaved;
 
+    public async Task SaveAgentOptionsAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            IsSaving = true;
+
+            var draft = BuildAgentOptionsDraft(out var parseErrors);
+            if (parseErrors.Count > 0)
+            {
+                SetAgentOptionsValidationFailure(parseErrors);
+                AgentOptionsSaveStatusText = "Cannot save: fix validation errors first.";
+                HasAgentOptionsSaveError = false;
+                return;
+            }
+
+            var validationResult = _agentOptionsValidator.Validate(draft);
+            if (!validationResult.IsValid)
+            {
+                SetAgentOptionsValidationFailure(validationResult.Errors);
+                AgentOptionsSaveStatusText = "Cannot save: fix validation errors first.";
+                HasAgentOptionsSaveError = false;
+                RefreshNormalizedPreview(validationResult.NormalizedOptions);
+                return;
+            }
+
+            var normalized = validationResult.NormalizedOptions;
+            await _saveAgentOptionsAsync(normalized, cancellationToken);
+
+            AgentOptions = normalized;
+            ApplyAgentOptionsToEditor(normalized);
+            HasAgentOptionsValidationError = false;
+            HasAgentOptionsSaveError = false;
+            AgentOptionsValidationText = "Agent options saved.";
+            AgentOptionsValidationDetailsText = "Configuration file written. The running Agent has not applied it yet; use ReloadConfig or restart the Agent.";
+            AgentOptionsSaveStatusText = "Saved to file. Running Agent has not applied the change; ReloadConfig or next Agent start required.";
+            RefreshNormalizedPreview(normalized);
+            IsDirty = false;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            HasAgentOptionsSaveError = true;
+            HasAgentOptionsValidationError = false;
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            AgentOptionsSaveStatusText = string.IsNullOrWhiteSpace(safeMessage)
+                ? "Agent options save failed."
+                : $"Agent options save failed: {safeMessage}";
+            AgentOptionsValidationText = "Agent options save failed.";
+            AgentOptionsValidationDetailsText = AgentOptionsSaveStatusText;
+        }
+        finally
+        {
+            IsSaving = false;
+        }
+    }
+
+    public async Task SaveAndReloadAgentOptionsAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            IsSaving = true;
+            HasAgentOptionsReloadError = false;
+
+            var draft = BuildAgentOptionsDraft(out var parseErrors);
+            if (parseErrors.Count > 0)
+            {
+                SetAgentOptionsValidationFailure(parseErrors);
+                AgentOptionsSaveStatusText = "Cannot save: fix validation errors first.";
+                AgentOptionsReloadStatusText = "Cannot reload: current draft has validation errors.";
+                HasAgentOptionsReloadError = true;
+                return;
+            }
+
+            var validationResult = _agentOptionsValidator.Validate(draft);
+            if (!validationResult.IsValid)
+            {
+                SetAgentOptionsValidationFailure(validationResult.Errors);
+                AgentOptionsSaveStatusText = "Cannot save: fix validation errors first.";
+                AgentOptionsReloadStatusText = "Cannot reload: current draft has validation errors.";
+                HasAgentOptionsReloadError = true;
+                RefreshNormalizedPreview(validationResult.NormalizedOptions);
+                return;
+            }
+
+            var normalized = validationResult.NormalizedOptions;
+            await _saveAgentOptionsAsync(normalized, cancellationToken);
+
+            AgentOptions = normalized;
+            ApplyAgentOptionsToEditor(normalized);
+            HasAgentOptionsValidationError = false;
+            HasAgentOptionsSaveError = false;
+            AgentOptionsValidationText = "Agent options saved.";
+            AgentOptionsValidationDetailsText = "Configuration file written. Sending ReloadConfig to running Agent.";
+            AgentOptionsSaveStatusText = "Saved to file. Sending ReloadConfig to running Agent.";
+            RefreshNormalizedPreview(normalized);
+            IsDirty = false;
+
+            if (_requestReloadConfigAsync is null)
+            {
+                AgentOptionsReloadStatusText = "ReloadConfig is not available in this configuration.";
+                HasAgentOptionsReloadError = true;
+                return;
+            }
+
+            var result = await _requestReloadConfigAsync(cancellationToken);
+            AgentOptionsReloadStatusText = "ReloadConfig command queued. Waiting for Agent to apply the saved configuration...";
+            await PollForReloadConfigResultAsync(result.RequestId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            HasAgentOptionsReloadError = true;
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            AgentOptionsReloadStatusText = string.IsNullOrWhiteSpace(safeMessage)
+                ? "Save and Reload failed."
+                : $"Save and Reload failed: {safeMessage}";
+        }
+        finally
+        {
+            IsSaving = false;
+        }
+    }
+
+    public async Task ReloadAgentConfigAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            IsSaving = true;
+            HasAgentOptionsReloadError = false;
+
+            if (_requestReloadConfigAsync is null)
+            {
+                AgentOptionsReloadStatusText = "ReloadConfig is not available in this configuration.";
+                HasAgentOptionsReloadError = true;
+                return;
+            }
+
+            var result = await _requestReloadConfigAsync(cancellationToken);
+            AgentOptionsReloadStatusText = "ReloadConfig command queued. Waiting for Agent to reload the saved configuration...";
+            await PollForReloadConfigResultAsync(result.RequestId, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            HasAgentOptionsReloadError = true;
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            AgentOptionsReloadStatusText = string.IsNullOrWhiteSpace(safeMessage)
+                ? "ReloadConfig request failed."
+                : $"ReloadConfig request failed: {safeMessage}";
+        }
+        finally
+        {
+            IsSaving = false;
+        }
+    }
+
+    private async Task PollForReloadConfigResultAsync(string requestId, CancellationToken cancellationToken)
+    {
+        if (_getRecentAgentEventsAsync is null)
+        {
+            AgentOptionsReloadStatusText = "ReloadConfig command queued. Agent event store is unavailable; check Diagnostics for the result.";
+            return;
+        }
+
+        const int maxAttempts = 30;
+        const int delayMilliseconds = 500;
+        var requestTime = DateTime.UtcNow.AddSeconds(-2);
+
+        for (var attempt = 0; attempt < maxAttempts; attempt++)
+        {
+            await Task.Delay(delayMilliseconds, cancellationToken);
+
+            IReadOnlyList<AgentEvent> events;
+            try
+            {
+                events = await _getRecentAgentEventsAsync(cancellationToken);
+            }
+            catch
+            {
+                continue;
+            }
+
+            var failureEvent = events.FirstOrDefault(e =>
+                e.EventType == AgentEventType.CommandFailed &&
+                string.Equals(e.RequestId, requestId, StringComparison.OrdinalIgnoreCase));
+            if (failureEvent is not null)
+            {
+                HasAgentOptionsReloadError = true;
+                var code = failureEvent.ErrorCode;
+                var message = failureEvent.Message;
+                var detail = string.IsNullOrWhiteSpace(message)
+                    ? (string.IsNullOrWhiteSpace(code) ? "" : $" ({code})")
+                    : $" ({code}): {message}";
+                AgentOptionsReloadStatusText = string.IsNullOrWhiteSpace(detail)
+                    ? "ReloadConfig failed."
+                    : $"ReloadConfig failed{detail}";
+                return;
+            }
+
+            var completedEvent = events.FirstOrDefault(e =>
+                e.EventType == AgentEventType.CommandCompleted &&
+                string.Equals(e.RequestId, requestId, StringComparison.OrdinalIgnoreCase));
+            if (completedEvent is not null)
+            {
+                var reloadedEvent = events.FirstOrDefault(e =>
+                    e.EventType == AgentEventType.ConfigReloaded &&
+                    e.EventTimeUtc >= requestTime);
+                if (reloadedEvent is not null)
+                {
+                    AgentOptionsReloadStatusText = "ReloadConfig succeeded: Agent applied the saved configuration.";
+                    return;
+                }
+            }
+        }
+
+        AgentOptionsReloadStatusText = "ReloadConfig command queued. Agent did not report completion within the polling window; check Diagnostics for the result.";
+    }
+
+    public async Task RestoreAgentOptionsBackupAsync(CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            IsSaving = true;
+
+            await _restoreAgentOptionsBackupAsync(cancellationToken);
+            AgentOptions = await _readAgentOptionsAsync(cancellationToken) ?? new WindowsAgentOptions();
+            ApplyAgentOptionsToEditor(AgentOptions);
+
+            HasAgentOptionsValidationError = false;
+            HasAgentOptionsSaveError = false;
+            AgentOptionsValidationText = "Agent options restored from backup.";
+            AgentOptionsValidationDetailsText = "Configuration file restored. The running Agent has not applied it yet; use ReloadConfig or restart the Agent.";
+            AgentOptionsSaveStatusText = "Restored from backup. Running Agent has not applied the change; ReloadConfig or next Agent start required.";
+            IsDirty = false;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            HasAgentOptionsSaveError = true;
+            HasAgentOptionsValidationError = false;
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            AgentOptionsSaveStatusText = string.IsNullOrWhiteSpace(safeMessage)
+                ? "Agent options restore failed."
+                : $"Agent options restore failed: {safeMessage}";
+            AgentOptionsValidationText = "Agent options restore failed.";
+            AgentOptionsValidationDetailsText = AgentOptionsSaveStatusText;
+        }
+        finally
+        {
+            IsSaving = false;
+        }
+    }
+
     public void ValidateAgentOptions()
     {
         var draft = BuildAgentOptionsDraft(out var parseErrors);
@@ -513,6 +994,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             ? "Normalized preview updated."
             : string.Join(Environment.NewLine, issues);
         RefreshNormalizedPreview(validationResult.NormalizedOptions);
+        HasAgentOptionsSaveError = false;
     }
 
     public void ResetAgentOptionsEditor()
@@ -521,6 +1003,40 @@ public sealed partial class SettingsViewModel : ObservableObject
         AgentOptionsValidationText = "Agent options editor reset to loaded values.";
         AgentOptionsValidationDetailsText = "Validate Agent Options to review ranges and normalized privacy rules.";
         HasAgentOptionsValidationError = false;
+        HasAgentOptionsSaveError = false;
+        IsDirty = false;
+    }
+
+    private async Task UpdateAgentStatusAsync(CancellationToken cancellationToken)
+    {
+        if (_getAgentStatusAsync is null)
+        {
+            CanReloadAgentConfig = false;
+            AgentOptionsReloadStatusText = "Agent status unavailable.";
+            return;
+        }
+
+        try
+        {
+            var status = await _getAgentStatusAsync(cancellationToken);
+            var canReload = status.IsRunning && (status.ActualState == AgentActualState.Running || status.ActualState == AgentActualState.Paused);
+            CanReloadAgentConfig = canReload;
+            AgentOptionsReloadStatusText = status.ActualState switch
+            {
+                AgentActualState.NotRunning or AgentActualState.Stopped => "Agent is not running. Saved configuration will take effect on next Agent start.",
+                AgentActualState.Running or AgentActualState.Paused => "Agent is running. You can apply the saved configuration with Reload Config.",
+                _ => "Agent status changed. Reload availability will update shortly."
+            };
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            CanReloadAgentConfig = false;
+            AgentOptionsReloadStatusText = "Unable to determine Agent status. Reload is unavailable.";
+        }
     }
 
     private void UpdatePresentation()
@@ -548,6 +1064,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         AgentOptionsValidationText = "Ready to validate Agent options.";
         AgentOptionsValidationDetailsText = "Validate Agent Options to review ranges and normalized privacy rules.";
         HasAgentOptionsValidationError = false;
+        HasAgentOptionsSaveError = false;
     }
 
     private void RefreshNormalizedPreview(WindowsAgentOptions agentOptions)
@@ -607,6 +1124,13 @@ public sealed partial class SettingsViewModel : ObservableObject
             ExcludedProcesses = ParseMultilineText(ExcludedProcessesText),
             ExcludedTitlePatterns = ParseMultilineText(ExcludedTitlePatternsText)
         };
+    }
+
+    private void SetAgentOptionsValidationFailure(IEnumerable<string> issues)
+    {
+        HasAgentOptionsValidationError = true;
+        AgentOptionsValidationText = "Agent options validation failed.";
+        AgentOptionsValidationDetailsText = string.Join(Environment.NewLine, issues);
     }
 
     private static int ParseEditorInt(
