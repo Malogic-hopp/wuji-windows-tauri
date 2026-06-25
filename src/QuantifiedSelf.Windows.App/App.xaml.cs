@@ -1,4 +1,5 @@
 using System.Windows;
+using System.Windows.Controls;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
@@ -35,6 +36,8 @@ public partial class App : Application
         var samplesViewModel = new SamplesViewModel(samplesDataService);
         var sessionsViewModel = new SessionsViewModel(sessionsDataService);
         var appsViewModel = new AppsViewModel(appsDataService);
+        Resources.Add("BooleanToVisibilityConverter", new BooleanToVisibilityConverter());
+
         var settingsViewModel = new SettingsViewModel(settingsService, statusService, controlService, diagnosticsDataService, paths);
         var viewModel = new MainWindowViewModel(
             processService,

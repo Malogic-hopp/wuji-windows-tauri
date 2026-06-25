@@ -26,6 +26,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Func<CancellationToken, Task> _restoreAgentOptionsBackupAsync;
     private readonly Func<CancellationToken, Task<AgentStatusSnapshot>>? _getAgentStatusAsync;
     private readonly Func<CancellationToken, Task<AgentCommandResult>>? _requestReloadConfigAsync;
+    private readonly Func<CancellationToken, Task<AgentCommandResult>>? _requestPruneDataAsync;
+    private readonly Func<CancellationToken, Task<AgentCommandResult>>? _requestClearHistoryAsync;
     private readonly Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? _getRecentAgentEventsAsync;
     private readonly AgentOptionsValidator _agentOptionsValidator;
     private readonly WindowsAgentPaths _paths;
@@ -51,6 +53,14 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool _hasAgentOptionsSaveError;
     private bool _hasAgentOptionsReloadError;
     private bool _canReloadAgentConfig;
+    private bool _canExecuteDataCleanup;
+    private string _pruneDataStatusText = "Prune expired data based on retentionDays.";
+    private string _lastMaintenanceStatusText = "No maintenance performed in this session.";
+    private bool _isClearHistoryConfirming;
+    private string _clearHistoryConfirmationInput = string.Empty;
+    private string _clearHistoryStatusText = "Ready for data management.";
+    private bool _hasClearHistoryError;
+
     private bool _isDirty;
     private bool _isLoading;
     private bool _isSaving;
@@ -86,6 +96,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             null,
             null,
             null,
+            null,
+            null,
             new AgentOptionsValidator(),
             paths)
     {
@@ -105,6 +117,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             settingsService.RestoreAgentOptionsBackupAsync,
             statusService.GetStatusAsync,
             controlService.ReloadConfigAsync,
+            controlService.PruneDataAsync,
+            controlService.ClearHistoryAsync,
             ct => diagnosticsDataService.GetRecentEventsAsync(cancellationToken: ct),
             new AgentOptionsValidator(),
             paths)
@@ -135,6 +149,8 @@ public sealed partial class SettingsViewModel : ObservableObject
             null,
             null,
             null,
+            null,
+            null,
             agentOptionsValidator,
             paths)
     {
@@ -147,7 +163,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Func<WindowsAgentOptions, CancellationToken, Task> saveAgentOptionsAsync,
         Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
         WindowsAgentPaths paths)
-        : this(readAppSettingsAsync, saveAppSettingsAsync, readAgentOptionsAsync, saveAgentOptionsAsync, restoreAgentOptionsBackupAsync, null, null, null, new AgentOptionsValidator(), paths)
+        : this(readAppSettingsAsync, saveAppSettingsAsync, readAgentOptionsAsync, saveAgentOptionsAsync, restoreAgentOptionsBackupAsync, null, null, null, null, null, new AgentOptionsValidator(), paths)
     {
     }
 
@@ -159,6 +175,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
         Func<CancellationToken, Task<AgentStatusSnapshot>>? getAgentStatusAsync,
         Func<CancellationToken, Task<AgentCommandResult>>? requestReloadConfigAsync,
+        Func<CancellationToken, Task<AgentCommandResult>>? requestPruneDataAsync,
+        Func<CancellationToken, Task<AgentCommandResult>>? requestClearHistoryAsync,
         Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? getRecentAgentEventsAsync,
         AgentOptionsValidator agentOptionsValidator,
         WindowsAgentPaths paths)
@@ -178,6 +196,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         _restoreAgentOptionsBackupAsync = restoreAgentOptionsBackupAsync;
         _getAgentStatusAsync = getAgentStatusAsync;
         _requestReloadConfigAsync = requestReloadConfigAsync;
+        _requestPruneDataAsync = requestPruneDataAsync;
+        _requestClearHistoryAsync = requestClearHistoryAsync;
         _getRecentAgentEventsAsync = getRecentAgentEventsAsync;
         _agentOptionsValidator = agentOptionsValidator;
         _paths = paths;
@@ -198,6 +218,9 @@ public sealed partial class SettingsViewModel : ObservableObject
         RestoreAgentOptionsBackupCommand = new AsyncRelayCommand(RestoreAgentOptionsBackupAsync, () => !IsLoading && !IsSaving);
         ValidateAgentOptionsCommand = new RelayCommand(ValidateAgentOptions, () => !IsLoading && !IsSaving);
         ResetAgentOptionsEditorCommand = new RelayCommand(ResetAgentOptionsEditor, () => !IsLoading && !IsSaving);
+        ClearHistoryCommand = new AsyncRelayCommand(ClearHistoryAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup);
+        ConfirmClearHistoryCommand = new AsyncRelayCommand(ConfirmClearHistoryAsync, () => !IsLoading && !IsSaving && !string.IsNullOrWhiteSpace(ClearHistoryConfirmationInput));
+        PruneDataCommand = new AsyncRelayCommand(PruneDataAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup);
         OpenDataFolderCommand = new RelayCommand(() => OpenFolder(_paths.Root));
         OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(_paths.LogsDir));
         OpenConfigFolderCommand = new RelayCommand(() => OpenFolder(_paths.ConfigDir));
@@ -212,7 +235,13 @@ public sealed partial class SettingsViewModel : ObservableObject
     public WindowsAgentOptions AgentOptions
     {
         get => _agentOptions;
-        private set => SetProperty(ref _agentOptions, value);
+        private set
+        {
+            if (SetProperty(ref _agentOptions, value))
+            {
+                OnPropertyChanged(nameof(CurrentRetentionDaysText));
+            }
+        }
     }
 
     public string AppSettingsPathText { get; }
@@ -244,6 +273,12 @@ public sealed partial class SettingsViewModel : ObservableObject
     public IRelayCommand ValidateAgentOptionsCommand { get; }
 
     public IRelayCommand ResetAgentOptionsEditorCommand { get; }
+
+    public IAsyncRelayCommand ClearHistoryCommand { get; }
+
+    public IAsyncRelayCommand ConfirmClearHistoryCommand { get; }
+
+    public IAsyncRelayCommand PruneDataCommand { get; }
 
     public ICommand OpenDataFolderCommand { get; }
 
@@ -302,6 +337,19 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 SaveAndReloadAgentOptionsCommand.NotifyCanExecuteChanged();
                 ReloadAgentConfigCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public bool CanExecuteDataCleanup
+    {
+        get => _canExecuteDataCleanup;
+        private set
+        {
+            if (SetProperty(ref _canExecuteDataCleanup, value))
+            {
+                PruneDataCommand.NotifyCanExecuteChanged();
+                ClearHistoryCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -375,6 +423,9 @@ public sealed partial class SettingsViewModel : ObservableObject
                 RestoreAgentOptionsBackupCommand.NotifyCanExecuteChanged();
                 ValidateAgentOptionsCommand.NotifyCanExecuteChanged();
                 ResetAgentOptionsEditorCommand.NotifyCanExecuteChanged();
+                ClearHistoryCommand.NotifyCanExecuteChanged();
+                ConfirmClearHistoryCommand.NotifyCanExecuteChanged();
+                PruneDataCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -394,6 +445,9 @@ public sealed partial class SettingsViewModel : ObservableObject
                 RestoreAgentOptionsBackupCommand.NotifyCanExecuteChanged();
                 ValidateAgentOptionsCommand.NotifyCanExecuteChanged();
                 ResetAgentOptionsEditorCommand.NotifyCanExecuteChanged();
+                ClearHistoryCommand.NotifyCanExecuteChanged();
+                ConfirmClearHistoryCommand.NotifyCanExecuteChanged();
+                PruneDataCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -1011,6 +1065,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (_getAgentStatusAsync is null)
         {
             CanReloadAgentConfig = false;
+            CanExecuteDataCleanup = false;
             AgentOptionsReloadStatusText = "Agent status unavailable.";
             return;
         }
@@ -1018,12 +1073,17 @@ public sealed partial class SettingsViewModel : ObservableObject
         try
         {
             var status = await _getAgentStatusAsync(cancellationToken);
-            var canReload = status.IsRunning && (status.ActualState == AgentActualState.Running || status.ActualState == AgentActualState.Paused);
+            var canReload = status.IsRunning
+                && (status.ActualState == AgentActualState.Running || status.ActualState == AgentActualState.Paused)
+                && status.ActualState != AgentActualState.Maintenance;
             CanReloadAgentConfig = canReload;
+            CanExecuteDataCleanup = status.IsRunning
+                && (status.ActualState == AgentActualState.Running || status.ActualState == AgentActualState.Paused);
             AgentOptionsReloadStatusText = status.ActualState switch
             {
                 AgentActualState.NotRunning or AgentActualState.Stopped => "Agent is not running. Saved configuration will take effect on next Agent start.",
                 AgentActualState.Running or AgentActualState.Paused => "Agent is running. You can apply the saved configuration with Reload Config.",
+                AgentActualState.Maintenance => "Agent is performing maintenance. Reload is temporarily unavailable.",
                 _ => "Agent status changed. Reload availability will update shortly."
             };
         }
@@ -1034,6 +1094,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         catch
         {
             CanReloadAgentConfig = false;
+            CanExecuteDataCleanup = false;
             AgentOptionsReloadStatusText = "Unable to determine Agent status. Reload is unavailable.";
         }
     }
@@ -1042,6 +1103,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         ApplyAppSettingsToEditor(AppSettings);
         ApplyAgentOptionsToEditor(AgentOptions);
+        OnPropertyChanged(nameof(CurrentRetentionDaysText));
     }
 
     private void ApplyAgentOptionsToEditor(WindowsAgentOptions agentOptions)
@@ -1242,6 +1304,168 @@ public sealed partial class SettingsViewModel : ObservableObject
         return string.IsNullOrWhiteSpace(safeMessage)
             ? $"{section} load failed."
             : $"{section} load failed: {safeMessage}.";
+    }
+
+    public bool IsClearHistoryConfirming
+    {
+        get => _isClearHistoryConfirming;
+        set
+        {
+            if (SetProperty(ref _isClearHistoryConfirming, value))
+            {
+                ClearHistoryCommand.NotifyCanExecuteChanged();
+                ConfirmClearHistoryCommand.NotifyCanExecuteChanged();
+                if (!value)
+                {
+                    ClearHistoryConfirmationInput = string.Empty;
+                }
+            }
+        }
+    }
+
+    public string ClearHistoryConfirmationInput
+    {
+        get => _clearHistoryConfirmationInput;
+        set
+        {
+            if (SetProperty(ref _clearHistoryConfirmationInput, value))
+            {
+                ConfirmClearHistoryCommand.NotifyCanExecuteChanged();
+            }
+        }
+    }
+
+    public string ClearHistoryStatusText
+    {
+        get => _clearHistoryStatusText;
+        private set => SetProperty(ref _clearHistoryStatusText, value);
+    }
+
+    public bool HasClearHistoryError
+    {
+        get => _hasClearHistoryError;
+        private set => SetProperty(ref _hasClearHistoryError, value);
+    }
+
+    public string PruneDataStatusText
+    {
+        get => _pruneDataStatusText;
+        private set => SetProperty(ref _pruneDataStatusText, value);
+    }
+
+    public string LastMaintenanceStatusText
+    {
+        get => _lastMaintenanceStatusText;
+        private set => SetProperty(ref _lastMaintenanceStatusText, value);
+    }
+
+    public string CurrentRetentionDaysText
+    {
+        get => _agentOptions.RetentionDays > 0
+            ? $"Current retention: {_agentOptions.RetentionDays} days"
+            : "Retention is disabled.";
+    }
+
+    public async Task ClearHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        if (IsClearHistoryConfirming)
+        {
+            IsClearHistoryConfirming = false;
+            ClearHistoryStatusText = "Ready for data management.";
+            return;
+        }
+        IsClearHistoryConfirming = true;
+        ClearHistoryStatusText = "This will clear all historical samples, sessions, app usage, and diagnostic events. Configuration files will not be removed. This cannot be undone. Type CLEAR to continue.";
+        HasClearHistoryError = false;
+        await Task.CompletedTask;
+    }
+
+    public async Task ConfirmClearHistoryAsync(CancellationToken cancellationToken = default)
+    {
+        if (ClearHistoryConfirmationInput.Trim() != "CLEAR")
+        {
+            ClearHistoryStatusText = "Confirmation text does not match. Type CLEAR to confirm.";
+            HasClearHistoryError = true;
+            return;
+        }
+
+        if (_requestClearHistoryAsync is null)
+        {
+            ClearHistoryStatusText = "ClearHistory is not available in this configuration.";
+            HasClearHistoryError = true;
+            IsClearHistoryConfirming = false;
+            return;
+        }
+
+        try
+        {
+            IsSaving = true;
+            HasClearHistoryError = false;
+            var result = await _requestClearHistoryAsync(cancellationToken);
+            if (result.Accepted)
+            {
+                ClearHistoryStatusText = "ClearHistory command queued. Check Diagnostics for results.";
+            }
+            else
+            {
+                ClearHistoryStatusText = result.Message ?? "ClearHistory request was not accepted.";
+                HasClearHistoryError = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            ClearHistoryStatusText = string.IsNullOrWhiteSpace(safeMessage)
+                ? "ClearHistory request failed."
+                : $"ClearHistory request failed: {safeMessage}";
+            HasClearHistoryError = true;
+        }
+        finally
+        {
+            IsClearHistoryConfirming = false;
+            IsSaving = false;
+        }
+    }
+
+    public async Task PruneDataAsync(CancellationToken cancellationToken = default)
+    {
+        if (_requestPruneDataAsync is null)
+        {
+            PruneDataStatusText = "PruneData is not available in this configuration.";
+            return;
+        }
+
+        if (!CanExecuteDataCleanup)
+        {
+            PruneDataStatusText = "Cannot prune data while the Agent is not running or is in maintenance.";
+            return;
+        }
+
+        try
+        {
+            IsSaving = true;
+            var result = await _requestPruneDataAsync(cancellationToken);
+            if (result.Accepted)
+            {
+                PruneDataStatusText = "PruneData command queued. Check Diagnostics for results.";
+                LastMaintenanceStatusText = $"PruneData queued at {DateTime.Now:HH:mm:ss}";
+            }
+            else
+            {
+                PruneDataStatusText = result.Message ?? "PruneData request was not accepted.";
+            }
+        }
+        catch (Exception ex)
+        {
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            PruneDataStatusText = string.IsNullOrWhiteSpace(safeMessage)
+                ? "PruneData request failed."
+                : $"PruneData request failed: {safeMessage}";
+        }
+        finally
+        {
+            IsSaving = false;
+        }
     }
 
     private void OpenFolder(string folderPath)

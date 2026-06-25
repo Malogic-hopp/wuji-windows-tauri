@@ -53,6 +53,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _todayUnknownText = "-";
     private string _todaySessionCountText = "-";
     private bool _isBusy;
+    private bool _isMaintenance;
     private string _currentPage = "Dashboard";
     private int _selectedTabIndex;
     private string _runtimeStateJson = "{}";
@@ -91,10 +92,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _settingsService = settingsService;
         _settingsViewModel.AppSettingsSaved += HandleAppSettingsSaved;
 
-        StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy);
-        StopAgentCommand = new AsyncRelayCommand(StopAgentAsync, () => !IsBusy);
-        PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy);
-        ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy);
+        StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy && !_isMaintenance);
+        StopAgentCommand = new AsyncRelayCommand(StopAgentAsync, () => !IsBusy && !_isMaintenance);
+        PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy && !_isMaintenance);
+        ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy && !_isMaintenance);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
         OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = GetPageIndex("Settings"));
 
@@ -418,6 +419,16 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AgentStatusSnapshot status,
         AgentProcessInfo? processInfo)
     {
+        var wasMaintenance = _isMaintenance;
+        _isMaintenance = status.ActualState == AgentActualState.Maintenance;
+        if (wasMaintenance != _isMaintenance)
+        {
+            ((AsyncRelayCommand)StartAgentCommand).NotifyCanExecuteChanged();
+            ((AsyncRelayCommand)StopAgentCommand).NotifyCanExecuteChanged();
+            ((AsyncRelayCommand)PauseCollectionCommand).NotifyCanExecuteChanged();
+            ((AsyncRelayCommand)ResumeCollectionCommand).NotifyCanExecuteChanged();
+        }
+
         AgentStatusText = status.StatusText;
         LastHeartbeatText = status.LastHeartbeatText;
         LastSampleText = status.LastSampleText;
@@ -440,6 +451,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (status.IsStale)
         {
             Messages.Add("Agent heartbeat is stale.");
+        }
+        else if (status.ActualState == AgentActualState.Maintenance)
+        {
+            Messages.Add("Agent is performing maintenance. Control commands are temporarily unavailable.");
         }
         else if (status.ActualState == AgentActualState.Stopped)
         {

@@ -61,6 +61,7 @@
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Border Style="{DynamicResource CardBorderStyle}">
@@ -201,7 +202,7 @@
                                      Margin="0,8,0,0" />
                         </Grid>
 
-                        <TextBlock Text="Note: retentionDays only saves configuration in stage 6. Actual history cleanup is deferred to stage 7."
+                        <TextBlock Text="Note: retentionDays configures how long data is kept. PruneData and ClearHistory are available under Data Management."
                                    Margin="0,10,0,0"
                                    Foreground="{DynamicResource MutedTextBrush}"
                                    TextWrapping="Wrap" />
@@ -318,7 +319,49 @@
                 </Border>
             </Grid>
 
-            <Border Grid.Row="2" Style="{DynamicResource CardBorderStyle}">
+            <Border Grid.Row="2" Style="{DynamicResource CardBorderStyle}" Margin="0,16,0,16">
+                <StackPanel>
+                    <TextBlock Text="Data Management" Style="{StaticResource SettingsSectionTitleStyle}" />
+
+                    <TextBlock Text="{Binding CurrentRetentionDaysText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+
+                    <TextBlock Text="{Binding PruneDataStatusText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+
+                    <Button Content="Prune Old Data"
+                            Command="{Binding PruneDataCommand}"
+                            Style="{DynamicResource SecondaryButtonStyle}"
+                            Margin="0,12,0,0"
+                            HorizontalAlignment="Left" />
+
+                    <TextBlock Text="{Binding ClearHistoryStatusText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+
+                    <Button Content="Clear All History"
+                            Command="{Binding ClearHistoryCommand}"
+                            Style="{DynamicResource SecondaryButtonStyle}"
+                            Margin="0,12,0,0"
+                            HorizontalAlignment="Left" />
+
+                    <StackPanel Margin="0,12,0,0"
+                                Visibility="{Binding IsClearHistoryConfirming, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="Type CLEAR to confirm:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource MutedTextBrush}" />
+                            <TextBox Text="{Binding ClearHistoryConfirmationInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="200"
+                                     Margin="0,0,8,0" />
+                            <Button Content="Confirm Clear All History"
+                                    Command="{Binding ConfirmClearHistoryCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                            <Button Content="Cancel"
+                                    Command="{Binding ClearHistoryCommand}"
+                                    Style="{DynamicResource SecondaryButtonStyle}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <TextBlock Text="{Binding LastMaintenanceStatusText}" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+                </StackPanel>
+            </Border>
+
+            <Border Grid.Row="3" Style="{DynamicResource CardBorderStyle}">
                 <StackPanel>
                     <TextBlock Text="Local Data" Style="{StaticResource SettingsSectionTitleStyle}" />
 
