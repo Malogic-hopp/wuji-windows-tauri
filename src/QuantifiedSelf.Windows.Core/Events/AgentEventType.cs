@@ -15,5 +15,7 @@ public enum AgentEventType
     PrivacyFiltered,
     CaptureFailed,
     SessionStarted,
-    SessionClosed
+    SessionClosed,
+    DataPruned,
+    HistoryCleared
 }

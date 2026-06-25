@@ -11,5 +11,6 @@ public enum AgentActualState
     Stopping,
     Stopped,
     Stale,
-    Error
+    Error,
+    Maintenance
 }
