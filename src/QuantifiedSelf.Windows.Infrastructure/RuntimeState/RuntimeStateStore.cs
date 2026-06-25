@@ -4,9 +4,9 @@ using QuantifiedSelf.Windows.Core.Serialization;
 
 namespace QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 
-public sealed class RuntimeStateStore
+public class RuntimeStateStore
 {
-    public async Task WriteAsync(
+    public virtual async Task WriteAsync(
         string path,
         CoreRuntimeState state,
         CancellationToken cancellationToken = default)
