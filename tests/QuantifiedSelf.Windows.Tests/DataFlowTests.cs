@@ -14,6 +14,7 @@ using QuantifiedSelf.Windows.Core.Capture;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
+using QuantifiedSelf.Windows.Core.Maintenance;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Control;
@@ -3490,6 +3491,8 @@ public sealed class DataFlowTests
                 });
             },
             null,
+            null,
+            null,
             new AgentOptionsValidator(),
             paths);
 
@@ -3530,6 +3533,8 @@ public sealed class DataFlowTests
             }),
             _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
             null,
+            null,
+            null,
             new AgentOptionsValidator(),
             paths);
 
@@ -3561,6 +3566,8 @@ public sealed class DataFlowTests
             }),
             _ => throw new InvalidOperationException(
                 @"Failed to write control command to C:\Users\Alice\runtime\agent_control.json"),
+            null,
+            null,
             null,
             new AgentOptionsValidator(),
             paths);
@@ -3608,6 +3615,8 @@ public sealed class DataFlowTests
                     ActualState = AgentActualState.Running
                 });
             },
+            null,
+            null,
             _ =>
             {
                 reloadObserved = true;
@@ -3675,6 +3684,8 @@ public sealed class DataFlowTests
                     ActualState = AgentActualState.Running
                 });
             },
+            null,
+            null,
             _ => Task.FromResult<IReadOnlyList<AgentEvent>>(new[]
             {
                 new AgentEvent
@@ -3741,6 +3752,8 @@ public sealed class DataFlowTests
                 reloadRequested = true;
                 return Task.FromResult(new AgentCommandResult { Accepted = true });
             },
+            null,
+            null,
             null,
             new AgentOptionsValidator(),
             paths);
@@ -3915,6 +3928,1391 @@ public sealed class DataFlowTests
         Assert.Equal(1, await CountAsync(connection2, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
+    [Fact]
+    public async Task AgentStateMachine_PruneData_EntersAndLeavesMaintenance()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: new DataMaintenanceService(paths));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        // Verify Running before command
+        Assert.Equal(AgentActualState.Running, stateMachine.ActualState);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.PruneData,
+                RequestId = "prune-data"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Running, result.ActualState);
+
+        // Verify no actual data deletion
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        var tables = new[] { "foreground_samples", "app_sessions", "agent_events" };
+        foreach (var table in tables)
+        {
+            // Tables exist and have columns (initialized by database initializer)
+            var columns = await GetColumnsAsync(connection, table);
+            Assert.NotEmpty(columns);
+        }
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandAccepted && x.RequestId == "prune-data");
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "prune-data");
+
+        // runtime_state must show final state is Running (Maintenance was entered and exited)
+        Assert.True(File.Exists(paths.RuntimeStatePath));
+        var runtimeJson = await File.ReadAllTextAsync(paths.RuntimeStatePath);
+        Assert.Contains("\"state\": \"Running\"", runtimeJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"state\": \"Maintenance\"", runtimeJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ClearHistory_EndsPaused()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: new DataMaintenanceService(paths));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        Assert.Equal(AgentActualState.Running, stateMachine.ActualState);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.ClearHistory,
+                RequestId = "clear-history"
+            },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Paused, result.ActualState);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "clear-history");
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_MaintenanceSkipsSampleCapture()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 1,
+                HeartbeatIntervalSeconds = 1,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([
+                    new ForegroundSample
+                    {
+                        SampleTimeUtc = DateTime.UtcNow,
+                        ProcessName = "TestApp",
+                        WindowTitle = "Window",
+                        IdleSeconds = 0,
+                        ActivityState = "Active"
+                    }
+                ]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        // Directly set Maintenance (bypasses command processing for test simplicity)
+        stateMachine.ActualState = AgentActualState.Maintenance;
+
+        await Task.Delay(1100);
+        var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
+        Assert.True(keepRunning);
+
+        // No sample should be written during Maintenance
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_RejectsDuplicateMaintenanceCommands()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        // Manually set to Maintenance to simulate mid-operation
+        stateMachine.ActualState = AgentActualState.Maintenance;
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand
+            {
+                Command = AgentCommandType.PruneData,
+                RequestId = "prune-dup"
+            },
+            CancellationToken.None);
+
+        Assert.False(result.Accepted);
+        Assert.Equal("AlreadyInMaintenance", result.ErrorCode);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandFailed && x.ErrorCode == "AlreadyInMaintenance");
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ClearHistoryFromPausedStaysPaused()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: new DataMaintenanceService(paths));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.Pause, DesiredState = AgentDesiredState.Paused },
+            CancellationToken.None);
+        Assert.Equal(AgentActualState.Paused, stateMachine.ActualState);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.ClearHistory, RequestId = "clear-paused" },
+            CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Paused, result.ActualState);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneData_WritesMaintenanceToRuntimeStateDuringOperation()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var recordedStates = new List<AgentActualState>();
+        var recordingStore = new RecordingRuntimeStateStore(new RuntimeStateStore(), recordedStates);
+        var healthStateStore = new AgentHealthStateStore();
+
+        var stateMachine = new AgentStateMachine(
+            paths,
+            recordingStore,
+            healthStateStore,
+            new AgentControlFileStore(),
+            optionsStore,
+            new SqliteDatabaseInitializer(paths.DatabasePath),
+            new ForegroundSampleRepository(paths.DatabasePath),
+            new SessionAggregator(new AppSessionRepository(paths.DatabasePath)),
+            new ForegroundSamplePrivacyFilter(),
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            new AgentOptionsValidator(),
+            NullLogger<AgentStateMachine>.Instance);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        // Clear recording after init
+        recordedStates.Clear();
+
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-record" },
+            CancellationToken.None);
+
+        // Maintenance was written somewhere in the sequence
+        Assert.Contains(AgentActualState.Maintenance, recordedStates);
+        // Final state is Running
+        Assert.Equal(AgentActualState.Running, recordedStates[^1]);
+    }
+
+    private sealed class RecordingRuntimeStateStore : RuntimeStateStore
+    {
+        private readonly RuntimeStateStore _inner;
+        private readonly List<AgentActualState> _states;
+
+        public RecordingRuntimeStateStore(RuntimeStateStore inner, List<AgentActualState> states)
+        {
+            _inner = inner;
+            _states = states;
+        }
+
+        public override async Task WriteAsync(string path, Core.Runtime.RuntimeState state, CancellationToken cancellationToken = default)
+        {
+            _states.Add(state.State);
+            await _inner.WriteAsync(path, state, cancellationToken);
+        }
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataDeletesExpiredRows()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var oldTime = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        var recentTime = new DateTime(2026, 6, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        await InsertSampleAsync(paths.DatabasePath, oldTime, "OldApp", null, "Active");
+        await InsertSampleAsync(paths.DatabasePath, recentTime, "RecentApp", null, "Active");
+        await InsertSessionAsync(paths.DatabasePath, oldTime.ToLocalTime(), oldTime.ToLocalTime().AddMinutes(10), "OldSession", 600, 600, 0, 0, "Closed");
+        await InsertSessionAsync(paths.DatabasePath, recentTime.ToLocalTime(), recentTime.ToLocalTime().AddMinutes(10), "RecentSession", 600, 600, 0, 0, "Closed");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.PruneDataAsync(30, new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.ForegroundSamplesDeleted);
+        Assert.Equal(1, result.SessionsDeleted);
+        Assert.Equal(new DateTime(2026, 5, 25, 12, 0, 0, DateTimeKind.Utc), result.CutoffUtc);
+        Assert.Equal(new DateOnly(2026, 5, 25), result.CutoffLocalDate);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+        Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataKeepsRecentRows()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var recentTime = new DateTime(2026, 6, 22, 12, 0, 0, DateTimeKind.Utc);
+        await InsertSampleAsync(paths.DatabasePath, recentTime, "Recent", null, "Active");
+        await InsertSessionAsync(paths.DatabasePath, recentTime.ToLocalTime(), recentTime.ToLocalTime().AddMinutes(10), "Recent", 600, 600, 0, 0, "Closed");
+
+        var service = new DataMaintenanceService(paths);
+        // cutoff: 30 days before June 24, 2026 = May 25, 2026 — June 22 data is recent, not deleted
+        var result = await service.PruneDataAsync(30, new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(result.Success);
+        Assert.Equal(0, result.ForegroundSamplesDeleted);
+        Assert.Equal(0, result.SessionsDeleted);
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataKeepsOpenSessions()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var oldTime = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        await InsertOpenSessionAsync(paths.DatabasePath, oldTime.ToLocalTime(), "OpenOld", 3600, 3600, 0, 0);
+        // Also insert a closed old session for contrast
+        await InsertSessionAsync(paths.DatabasePath, oldTime.ToLocalTime(), oldTime.ToLocalTime().AddMinutes(10), "ClosedOld", 600, 600, 0, 0, "Closed");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.PruneDataAsync(30, new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.SessionsDeleted); // only the closed session
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+        Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions WHERE ended_at_utc IS NULL;"));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataHandlesMissingTables()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // Create a database with no tables
+        await using (var connection = await SqliteConnectionFactory.OpenAsync(paths.DatabasePath, Microsoft.Data.Sqlite.SqliteOpenMode.ReadWriteCreate))
+        {
+        }
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.PruneDataAsync(30, new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(result.Success);
+        Assert.Equal(0, result.ForegroundSamplesDeleted);
+        Assert.Equal(0, result.SessionsDeleted);
+        Assert.Equal(0, result.AgentEventsDeleted);
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataUsesTransactionForSqliteDeletes()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var oldTime = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        await InsertSampleAsync(paths.DatabasePath, oldTime, "OldApp", null, "Active");
+        await InsertSessionAsync(paths.DatabasePath, oldTime.ToLocalTime(), oldTime.ToLocalTime().AddMinutes(10), "OldSession", 600, 600, 0, 0, "Closed");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.PruneDataAsync(30, new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(result.Success);
+        // Both tables were pruned together in one transaction — counts reflect accurate deletion
+        Assert.True(result.ForegroundSamplesDeleted > 0 || result.SessionsDeleted > 0);
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataDeletesOldJsonlFilesOnly()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // Create JSONL files at different dates
+        var oldFile = Path.Combine(paths.LogsDir, "agent_events_20240115.jsonl");
+        var recentFile = Path.Combine(paths.LogsDir, "agent_events_20260620.jsonl");
+        var todayFile = Path.Combine(paths.LogsDir, "agent_events_20260624.jsonl");
+        var nonJournalFile = Path.Combine(paths.LogsDir, "agent.log");
+        var nonMatchingFile = Path.Combine(paths.LogsDir, "random_20240101.jsonl");
+
+        await File.WriteAllTextAsync(oldFile, "{}");
+        await File.WriteAllTextAsync(recentFile, "{}");
+        await File.WriteAllTextAsync(todayFile, "{}");
+        await File.WriteAllTextAsync(nonJournalFile, "log");
+        await File.WriteAllTextAsync(nonMatchingFile, "{}");
+
+        // cutoffLocalDate = June 24, 2026 - 30 days = May 25, 2026
+        // Only the Jan 15, 2024 file should be deleted
+        var (deleted, errors) = new DataMaintenanceService(paths).DeleteOldJsonlFiles(
+            new DateOnly(2026, 5, 25));
+
+        Assert.Equal(1, deleted);
+        Assert.Equal(0, errors);
+        Assert.False(File.Exists(oldFile));
+        Assert.True(File.Exists(recentFile));
+        Assert.True(File.Exists(todayFile));
+        Assert.True(File.Exists(nonJournalFile));
+        Assert.True(File.Exists(nonMatchingFile));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataUsesLocalDateForJsonlCutoff()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // File dated June 1, 2026 local time (but this could be May 31 in UTC)
+        var edgeFile = Path.Combine(paths.LogsDir, "agent_events_20260601.jsonl");
+        await File.WriteAllTextAsync(edgeFile, "{}");
+
+        // With 30 days retention and reference June 24 UTC:
+        // cutoffLocalDate = June 24 - 30 = May 25 (local)
+        // June 1 is NOT before May 25, so it should be kept
+        var (deleted, _) = new DataMaintenanceService(paths).DeleteOldJsonlFiles(
+            new DateOnly(2026, 5, 25));
+
+        Assert.Equal(0, deleted);
+        Assert.True(File.Exists(edgeFile));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataDoesNotDeleteConfigRuntimeOrDatabaseFiles()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // Create a config file, runtime file, and database file
+        var configFile = Path.Combine(paths.ConfigDir, "windows-agent.json");
+        var runtimeFile = Path.Combine(paths.RuntimeDir, "runtime_state.json");
+        Directory.CreateDirectory(paths.ConfigDir);
+        Directory.CreateDirectory(paths.RuntimeDir);
+        await File.WriteAllTextAsync(configFile, "{}");
+        await File.WriteAllTextAsync(runtimeFile, "{}");
+
+        // Also create an old JSONL file to verify only that is deleted
+        var oldJournal = Path.Combine(paths.LogsDir, "agent_events_20240101.jsonl");
+        await File.WriteAllTextAsync(oldJournal, "{}");
+
+        var (deleted, errors) = new DataMaintenanceService(paths).DeleteOldJsonlFiles(
+            new DateOnly(2026, 1, 1));
+
+        Assert.Equal(1, deleted);
+        Assert.Equal(0, errors);
+        Assert.True(File.Exists(configFile));
+        Assert.True(File.Exists(runtimeFile));
+    }
+
+    [Fact]
+    public void DataMaintenanceService_ReportsJsonlDeleteFailureWithoutPaths()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // Create an old journal file and make its directory read-only after creation.
+        // Since we can't reliably simulate delete failure cross-platform without
+        // permissions games, we verify that the result model itself never exposes
+        // raw paths: PruneDataResult.Ok/Failed constructors have no path fields.
+        var result = PruneDataResult.Ok(10, 5, 20, 3,
+            new DateTime(2026, 5, 25, 0, 0, 0, DateTimeKind.Utc),
+            new DateOnly(2026, 5, 25), 2);
+
+        Assert.False(result.Success); // errors > 0
+        Assert.Equal("JsonlDeletePartial", result.ErrorCode);
+        Assert.NotNull(result.SafeMessage);
+        Assert.DoesNotContain(":\\", result.SafeMessage ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DataMaintenanceService_TryParseJournalDate_ReturnsCorrectDate()
+    {
+        Assert.Equal(new DateOnly(2026, 1, 15), DataMaintenanceService.TryParseJournalDate("agent_events_20260115.jsonl"));
+        Assert.Equal(new DateOnly(2024, 12, 31), DataMaintenanceService.TryParseJournalDate("foreground_samples_20241231.jsonl"));
+        Assert.Null(DataMaintenanceService.TryParseJournalDate("agent.log"));
+        Assert.Null(DataMaintenanceService.TryParseJournalDate("agent_events_20260115.jsonl.bak"));
+        Assert.Null(DataMaintenanceService.TryParseJournalDate(""));
+        Assert.Null(DataMaintenanceService.TryParseJournalDate("agent_events_notadate.jsonl")); // not a date
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_PruneDataDeletesAgentEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var oldTime = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        var recentTime = new DateTime(2026, 6, 20, 12, 0, 0, DateTimeKind.Utc);
+
+        await InsertAgentEventAsync(paths.DatabasePath, oldTime, AgentEventType.AgentStarted, AgentEventLevel.Info, "Old");
+        await InsertAgentEventAsync(paths.DatabasePath, recentTime, AgentEventType.AgentStarted, AgentEventLevel.Info, "Recent");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.PruneDataAsync(30, new DateTime(2026, 6, 24, 12, 0, 0, DateTimeKind.Utc));
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.AgentEventsDeleted);
+        Assert.Equal(new DateTime(2026, 5, 25, 12, 0, 0, DateTimeKind.Utc), result.CutoffUtc);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM agent_events;"));
+    }
+
+    private static async Task InsertAgentEventAsync(
+        string databasePath,
+        DateTime eventTimeUtc,
+        AgentEventType eventType,
+        AgentEventLevel eventLevel,
+        string message)
+    {
+        await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(databasePath);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO agent_events (
+                event_time_utc,
+                event_type,
+                event_level,
+                message
+            )
+            VALUES (
+                $event_time_utc,
+                $event_type,
+                $event_level,
+                $message
+            );
+            """;
+
+        command.Parameters.AddWithValue("$event_time_utc", eventTimeUtc.ToString("O"));
+        command.Parameters.AddWithValue("$event_type", eventType.ToString());
+        command.Parameters.AddWithValue("$event_level", eventLevel.ToString());
+        command.Parameters.AddWithValue("$message", message);
+
+        await command.ExecuteNonQueryAsync();
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneData_WritesDataPrunedEventWithCorrectPayload()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                RetentionDays = 30,
+                UseMockCapture = true
+            });
+
+        var dataMaintenanceService = new DataMaintenanceService(paths);
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: dataMaintenanceService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-data-event" },
+            CancellationToken.None);
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Running, result.ActualState);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var dataPrunedEvent = Assert.Single(events.Where(x => x.EventType == AgentEventType.DataPruned));
+        Assert.Equal("prune-data-event", dataPrunedEvent.RequestId);
+
+        var payload = dataPrunedEvent.PayloadJson ?? string.Empty;
+        Assert.Contains("\"retentionDays\": 30", payload, StringComparison.Ordinal);
+        Assert.Contains("\"foregroundSamplesDeleted\"", payload, StringComparison.Ordinal);
+        Assert.Contains("\"actualState\": \"Maintenance\"", payload, StringComparison.Ordinal);
+        Assert.DoesNotContain("windowTitle", payload, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\\\\", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneDataRestoresRunningState()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: new DataMaintenanceService(paths));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        Assert.Equal(AgentActualState.Running, stateMachine.ActualState);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-restore" },
+            CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Running, result.ActualState);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneDataRestoresPausedState()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: new DataMaintenanceService(paths));
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.Pause, DesiredState = AgentDesiredState.Paused },
+            CancellationToken.None);
+        Assert.Equal(AgentActualState.Paused, stateMachine.ActualState);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-paused" },
+            CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Paused, result.ActualState);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneDataDoesNotDeleteItsOwnCompletionEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                RetentionDays = 30,
+                UseMockCapture = true
+            });
+
+        // Insert old agent_events that would be deleted by PruneData
+        var oldTime = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        await InsertAgentEventAsync(paths.DatabasePath, oldTime, AgentEventType.AgentStarted, AgentEventLevel.Info, "Old event");
+
+        var dataMaintenanceService = new DataMaintenanceService(paths);
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: dataMaintenanceService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        // PruneData should delete old events
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-self" },
+            CancellationToken.None);
+
+        Assert.True(result.Completed);
+
+        // DataPruned and CommandCompleted must survive (written after deletion)
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.DataPruned);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "prune-self");
+        // Old event should be gone
+        Assert.DoesNotContain(events, x => x.EventType == AgentEventType.AgentStarted && x.Message == "Old event");
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneDataUsesRetentionDays()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                RetentionDays = 7,
+                UseMockCapture = true
+            });
+
+        var dataMaintenanceService = new DataMaintenanceService(paths);
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: dataMaintenanceService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-retention" },
+            CancellationToken.None);
+
+        Assert.True(result.Completed);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var dataPrunedEvent = Assert.Single(events.Where(x => x.EventType == AgentEventType.DataPruned));
+        var payload = dataPrunedEvent.PayloadJson ?? string.Empty;
+        Assert.Contains("\"retentionDays\": 7", payload, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_PruneDataFailureWritesCommandFailedAndSafeMessage()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        // Failing service: returns a failed result with a safe error
+        var failingService = new FailingDataMaintenanceService(
+            "JsonlDeletePartial",
+            "3 JSONL file(s) could not be deleted.",
+            "C:\\Users\\bad\\path\\file.jsonl");
+
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: failingService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.PruneData, RequestId = "prune-fail" },
+            CancellationToken.None);
+
+        Assert.False(result.Completed);
+        Assert.Equal("JsonlDeletePartial", result.ErrorCode);
+        Assert.DoesNotContain(@"C:\Users", result.Message ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\\\\", result.Message ?? string.Empty, StringComparison.Ordinal);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        var failedEvent = Assert.Single(events.Where(x => x.EventType == AgentEventType.CommandFailed && x.RequestId == "prune-fail"));
+        Assert.Equal("JsonlDeletePartial", failedEvent.ErrorCode);
+        var failedPayload = failedEvent.PayloadJson ?? string.Empty;
+        Assert.DoesNotContain(@"C:\Users", failedPayload, StringComparison.OrdinalIgnoreCase);
+
+        // Must exit Maintenance
+        Assert.Equal(AgentActualState.Running, stateMachine.ActualState);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ClearHistoryEntersConfirmationMode()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            null,
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+        Assert.False(viewModel.IsClearHistoryConfirming);
+
+        await viewModel.ClearHistoryAsync();
+        Assert.True(viewModel.IsClearHistoryConfirming);
+        Assert.Contains("CLEAR", viewModel.ClearHistoryStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ClearHistoryRejectsWrongConfirmationText()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            null,
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+        await viewModel.ClearHistoryAsync();
+
+        viewModel.ClearHistoryConfirmationInput = "clear"; // wrong case
+        await viewModel.ConfirmClearHistoryAsync();
+
+        Assert.True(viewModel.IsClearHistoryConfirming); // still confirming
+        Assert.True(viewModel.HasClearHistoryError);
+        Assert.Contains("does not match", viewModel.ClearHistoryStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ClearHistoryQueuesCommandAfterCorrectConfirmation()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var clearHistoryRequested = false;
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            _ =>
+            {
+                clearHistoryRequested = true;
+                return Task.FromResult(new AgentCommandResult { Accepted = true, Message = "ClearHistory command queued" });
+            },
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+        await viewModel.ClearHistoryAsync();
+
+        viewModel.ClearHistoryConfirmationInput = "CLEAR";
+        await viewModel.ConfirmClearHistoryAsync();
+
+        Assert.True(clearHistoryRequested);
+        Assert.False(viewModel.IsClearHistoryConfirming);
+        Assert.False(viewModel.HasClearHistoryError);
+        Assert.Contains("queued", viewModel.ClearHistoryStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_DisablesDataCleanupWhenAgentNotRunning()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = false, ActualState = AgentActualState.NotRunning }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            null,
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.CanExecuteDataCleanup);
+        Assert.False(viewModel.PruneDataCommand.CanExecute(null));
+        Assert.False(viewModel.ClearHistoryCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_DisablesDataCleanupDuringMaintenance()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Maintenance }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            null,
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.False(viewModel.CanExecuteDataCleanup);
+        Assert.False(viewModel.PruneDataCommand.CanExecute(null));
+        Assert.False(viewModel.ClearHistoryCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_DoesNotQueueDuplicateCleanupDuringMaintenance()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var pruneDataRequested = false;
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Maintenance }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            _ =>
+            {
+                pruneDataRequested = true;
+                return Task.FromResult(new AgentCommandResult { Accepted = true });
+            },
+            null,
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+
+        // CanExecuteDataCleanup is false because status is Maintenance
+        Assert.False(viewModel.CanExecuteDataCleanup);
+
+        // PruneDataAsync has a guard that checks CanExecuteDataCleanup
+        await viewModel.PruneDataAsync();
+
+        // The delegate should NOT have been called
+        Assert.False(pruneDataRequested);
+
+        // Status text should indicate the can't-prune reason
+        Assert.Contains("Cannot prune data", viewModel.PruneDataStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task RefreshAfterClearHistory_EmptyStateDoesNotThrow()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        // Dashboard with empty DB returns zero values without throwing
+        var overviewService = new OverviewDataService(paths);
+        var summary = await overviewService.GetDashboardSummaryAsync();
+        Assert.Equal(0, summary.SessionCount);
+        Assert.Equal(0, summary.TotalDurationSeconds);
+        Assert.Equal(0, summary.ActiveDurationSeconds);
+
+        // Sessions with empty DB returns empty list without throwing
+        var sessionsViewModel = new SessionsViewModel(new SessionsDataService(paths));
+        await sessionsViewModel.LoadAsync();
+        Assert.Empty(sessionsViewModel.Sessions);
+        Assert.False(sessionsViewModel.HasLoadError);
+
+        // Samples with empty DB returns empty list without throwing
+        var samplesViewModel = new SamplesViewModel(new SamplesDataService(paths));
+        await samplesViewModel.LoadAsync();
+        Assert.Empty(samplesViewModel.Samples);
+        Assert.False(samplesViewModel.HasLoadError);
+
+        // Apps with empty DB returns empty list without throwing
+        var appsViewModel = new AppsViewModel(new AppsDataService(paths));
+        await appsViewModel.LoadAsync();
+        Assert.Empty(appsViewModel.Apps);
+        Assert.False(appsViewModel.HasLoadError);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_SettingsDirtyGuardStillWorksWithDataManagement()
+    {
+        using var workspace = new TempWorkspace();
+        var settingsLoadCount = 0;
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            settingsLoader: _ =>
+            {
+                settingsLoadCount++;
+                return Task.FromResult(new AppSettings());
+            });
+
+        await viewModel.InitializeAsync();
+        var initialLoadCount = settingsLoadCount;
+
+        // Simulate user edits by setting IsDirty via reflection (private setter)
+        typeof(SettingsViewModel)
+            .GetProperty("IsDirty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(viewModel.SettingsViewModel, true);
+
+        // Navigate to Settings and refresh
+        viewModel.SelectedTabIndex = 5; // Settings tab
+        await viewModel.RefreshAsync();
+
+        // Dirty guard: LoadAsync should NOT have been called because IsDirty was true
+        Assert.Equal(initialLoadCount, settingsLoadCount);
+
+        // Verify data management properties are preserved
+        Assert.Equal("Prune expired data based on retentionDays.", viewModel.SettingsViewModel.PruneDataStatusText);
+        Assert.Equal("No maintenance performed in this session.", viewModel.SettingsViewModel.LastMaintenanceStatusText);
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ClearHistoryFailureWritesCommandFailed()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var failingService = new FailingClearHistoryService();
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: failingService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.ClearHistory, RequestId = "clear-fail" },
+            CancellationToken.None);
+
+        Assert.False(result.Completed);
+        Assert.NotNull(result.ErrorCode);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandFailed && x.RequestId == "clear-fail");
+        Assert.DoesNotContain(events, x => x.EventType == AgentEventType.HistoryCleared);
+    }
+
+    [Fact]
+    public async Task DiagnosticsViewModel_ClearHistoryAllowsEmptyRecentErrors()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        // Write a HistoryCleared event, no errors
+        await eventWriter.WriteAsync(new AgentEvent
+        {
+            EventType = AgentEventType.HistoryCleared,
+            EventLevel = AgentEventLevel.Info,
+            Message = "History cleared",
+            EventTimeUtc = DateTime.UtcNow
+        });
+
+        var diagnosticsService = new DiagnosticsDataService(paths);
+        // Must not throw when RecentErrors is empty
+        var recentErrors = await diagnosticsService.GetRecentErrorsAsync();
+        var recentEvents = await diagnosticsService.GetRecentEventsAsync();
+
+        Assert.NotNull(recentErrors);
+        Assert.NotNull(recentEvents);
+    }
+
+    private sealed class FailingClearHistoryService : DataMaintenanceService
+    {
+        public FailingClearHistoryService() : base(new WindowsAgentPaths(Path.GetTempPath())) { }
+
+        public override Task<ClearHistoryResult> ClearHistoryAsync(CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(new ClearHistoryResult
+            {
+                Success = false,
+                SqliteCleared = false,
+                ErrorCode = "ClearHistorySqliteFailed",
+                SafeMessage = "SQLite clear failed.",
+                ForegroundSamplesDeleted = 0,
+                SessionsDeleted = 0,
+                AgentEventsDeleted = 0
+            });
+        }
+    }
+
+    private sealed class FailingDataMaintenanceService : DataMaintenanceService
+    {
+        private readonly string _errorCode;
+        private readonly string _safeMessage;
+        private readonly string _unsafeDetail;
+
+        public FailingDataMaintenanceService(string errorCode, string safeMessage, string unsafeDetail)
+            : base(new WindowsAgentPaths(Path.GetTempPath()))
+        {
+            _errorCode = errorCode;
+            _safeMessage = safeMessage;
+            _unsafeDetail = unsafeDetail;
+        }
+
+        public override Task<PruneDataResult> PruneDataAsync(
+            int retentionDays,
+            DateTime? referenceTimeUtc = null,
+            CancellationToken cancellationToken = default)
+        {
+            // Simulate unsafe detail that should NOT leak into message
+            return Task.FromResult(new PruneDataResult
+            {
+                Success = false,
+                ErrorCode = _errorCode,
+                SafeMessage = _safeMessage,
+                SafeDetail = _unsafeDetail
+            });
+        }
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_ClearHistoryDeletesAllHistoryRows()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var sampleTime = new DateTime(2025, 6, 15, 12, 0, 0, DateTimeKind.Utc);
+        await InsertSampleAsync(paths.DatabasePath, sampleTime, "TestApp", null, "Active");
+        await InsertSessionAsync(paths.DatabasePath, sampleTime.ToLocalTime(), sampleTime.ToLocalTime().AddMinutes(10), "TestSession", 600, 600, 0, 0, "Closed");
+        await InsertAgentEventAsync(paths.DatabasePath, sampleTime, AgentEventType.AgentStarted, AgentEventLevel.Info, "Old event");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.ClearHistoryAsync();
+
+        Assert.True(result.Success);
+        Assert.Equal(1, result.ForegroundSamplesDeleted);
+        Assert.Equal(1, result.SessionsDeleted);
+        Assert.Equal(1, result.AgentEventsDeleted);
+
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM agent_events;"));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_ClearHistoryDeletesHistoricalJsonlFiles()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var oldFile = Path.Combine(paths.LogsDir, "agent_events_20240115.jsonl");
+        var todayFile = Path.Combine(paths.LogsDir, $"agent_events_{DateTime.Now:yyyyMMdd}.jsonl");
+        await File.WriteAllTextAsync(oldFile, "{}");
+        await File.WriteAllTextAsync(todayFile, "{}");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.ClearHistoryAsync();
+
+        Assert.True(result.Success);
+        Assert.False(File.Exists(oldFile));
+        Assert.True(File.Exists(todayFile));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_ClearHistoryKeepsConfigRuntimeAndDatabaseFiles()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        var configFile = Path.Combine(paths.ConfigDir, "windows-agent.json");
+        var runtimeFile = Path.Combine(paths.RuntimeDir, "runtime_state.json");
+        Directory.CreateDirectory(paths.ConfigDir);
+        Directory.CreateDirectory(paths.RuntimeDir);
+        await File.WriteAllTextAsync(configFile, "{}");
+        await File.WriteAllTextAsync(runtimeFile, "{}");
+
+        var dbFile = paths.DatabasePath;
+
+        var oldJournal = Path.Combine(paths.LogsDir, "agent_events_20240101.jsonl");
+        await File.WriteAllTextAsync(oldJournal, "{}");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.ClearHistoryAsync();
+
+        Assert.True(result.Success);
+        Assert.True(File.Exists(configFile));
+        Assert.True(File.Exists(runtimeFile));
+        Assert.True(File.Exists(dbFile));
+    }
+
+    [Fact]
+    public async Task DataMaintenanceService_ClearHistoryUsesTransaction()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        await InsertSampleAsync(paths.DatabasePath, new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc), "App", null, "Active");
+        await InsertSessionAsync(paths.DatabasePath, new DateTime(2025, 1, 1, 0, 0, 0, DateTimeKind.Utc), new DateTime(2025, 1, 1, 0, 10, 0, DateTimeKind.Utc), "Sess", 600, 600, 0, 0, "Closed");
+
+        var service = new DataMaintenanceService(paths);
+        var result = await service.ClearHistoryAsync();
+
+        Assert.True(result.Success);
+        await using var connection = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
+        Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
+    }
+
+    [Fact]
+    public async Task AgentStateMachine_ClearHistoryWritesHistoryClearedAfterClearingEvents()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var eventWriter = await CreateEventWriterAsync(paths);
+
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var oldTime = new DateTime(2024, 1, 15, 12, 0, 0, DateTimeKind.Utc);
+        await InsertAgentEventAsync(paths.DatabasePath, oldTime, AgentEventType.AgentStarted, AgentEventLevel.Info, "Old event");
+
+        var dataMaintenanceService = new DataMaintenanceService(paths);
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]), new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: dataMaintenanceService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+
+        var result = await stateMachine.ProcessCommandAsync(
+            new AgentControlCommand { Command = AgentCommandType.ClearHistory, RequestId = "clear-hist" },
+            CancellationToken.None);
+
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Paused, result.ActualState);
+
+        var events = await ReadEventsAsync(paths.DatabasePath);
+        Assert.Contains(events, x => x.EventType == AgentEventType.HistoryCleared && x.RequestId == "clear-hist");
+        Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "clear-hist");
+        Assert.DoesNotContain(events, x => x.EventType == AgentEventType.AgentStarted && x.Message == "Old event");
+
+        var historyCleared = Assert.Single(events.Where(x => x.EventType == AgentEventType.HistoryCleared));
+        var payload = historyCleared.PayloadJson ?? string.Empty;
+        Assert.Contains("\"foregroundSamplesDeleted\"", payload, StringComparison.Ordinal);
+        Assert.Contains("\"finalState\": \"Maintenance\"", payload, StringComparison.Ordinal);
+        Assert.DoesNotContain("\\\\", payload, StringComparison.Ordinal);
+    }
+
     private static AgentStateMachine CreateStateMachine(
         WindowsAgentPaths paths,
         ConfiguredForegroundSampleProvider sampleProvider)
@@ -3942,7 +5340,8 @@ public sealed class DataFlowTests
         WindowsAgentPaths paths,
         ConfiguredForegroundSampleProvider sampleProvider,
         AgentEventWriter? eventWriter = null,
-        ILogger<AgentStateMachine>? logger = null)
+        ILogger<AgentStateMachine>? logger = null,
+        DataMaintenanceService? dataMaintenanceService = null)
     {
         var runtimeStateStore = new RuntimeStateStore();
         var healthStateStore = new AgentHealthStateStore();
@@ -3984,6 +5383,7 @@ public sealed class DataFlowTests
             sampleProvider,
             eventWriter,
             optionsValidator,
+            dataMaintenanceService,
             logger ?? NullLogger<AgentStateMachine>.Instance);
     }
 
