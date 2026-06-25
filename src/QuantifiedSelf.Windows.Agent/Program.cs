@@ -69,6 +69,7 @@ builder.Services.AddSingleton<MockForegroundSampleProvider>();
 builder.Services.AddSingleton<Win32ForegroundSampleProvider>();
 builder.Services.AddSingleton<ConfiguredForegroundSampleProvider>();
 builder.Services.AddSingleton<SessionAggregator>();
+builder.Services.AddSingleton<DataMaintenanceService>();
 builder.Services.AddSingleton<AgentStateMachine>();
 builder.Services.AddHostedService<Worker>();
 

@@ -58,17 +58,22 @@ public sealed class AgentControlService
         AgentDesiredState? desiredState,
         CancellationToken cancellationToken)
     {
-        if (commandType == AgentCommandType.ReloadConfig)
+        if (commandType == AgentCommandType.ReloadConfig
+            || commandType == AgentCommandType.PruneData
+            || commandType == AgentCommandType.ClearHistory)
         {
-            var reloadStatus = await _statusService.GetStatusAsync(cancellationToken);
-            if (!reloadStatus.IsRunning)
+            var checkStatus = await _statusService.GetStatusAsync(cancellationToken);
+            if (!checkStatus.IsRunning)
             {
+                var message = commandType == AgentCommandType.ReloadConfig
+                    ? "Agent is not running. Configuration will take effect on next Agent start."
+                    : "Agent is not running. Data cleanup requires a running Agent.";
                 return new AgentCommandResult
                 {
                     Accepted = false,
                     Completed = false,
-                    Message = "Agent is not running. Configuration will take effect on next Agent start.",
-                    ActualState = reloadStatus.ActualState
+                    Message = message,
+                    ActualState = checkStatus.ActualState
                 };
             }
         }

@@ -4,6 +4,7 @@ using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Display;
 using QuantifiedSelf.Windows.Core.Models;
+using QuantifiedSelf.Windows.Core.Maintenance;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
@@ -25,6 +26,8 @@ public sealed class AgentStateMachine
     private static readonly string[] CommandInvalidJsonPayloadKeys = ["commandSource", "quarantined", "fileKind"];
     private static readonly string[] PrivacyFilteredPayloadKeys = ["ruleType", "processName", "privacyReason", "processId", "actualState"];
     private static readonly string[] CaptureFailedPayloadKeys = ["errorCode", "exceptionType", "shortMessage"];
+    private static readonly string[] DataPrunedPayloadKeys = ["retentionDays", "cutoffUtc", "cutoffLocalDate", "foregroundSamplesDeleted", "sessionsDeleted", "agentEventsDeleted", "jsonlFilesDeleted", "jsonlDeleteErrorCount", "actualState"];
+    private static readonly string[] HistoryClearedPayloadKeys = ["foregroundSamplesDeleted", "sessionsDeleted", "agentEventsDeleted", "jsonlFilesDeleted", "jsonlDeleteErrorCount", "finalState"];
 
     private readonly WindowsAgentPaths _paths;
     private readonly RuntimeStateStore _runtimeStateStore;
@@ -39,6 +42,7 @@ public sealed class AgentStateMachine
     private readonly AgentEventWriter? _eventWriter;
     private readonly AgentEventRateLimiter _eventRateLimiter = new();
     private readonly AgentOptionsValidator _optionsValidator;
+    private readonly DataMaintenanceService? _dataMaintenanceService;
     private readonly ILogger<AgentStateMachine> _logger;
 
     private WindowsAgentOptions _options = new();
@@ -76,6 +80,7 @@ public sealed class AgentStateMachine
             foregroundSampleProvider,
             eventWriter,
             new AgentOptionsValidator(),
+            null,
             logger)
     {
     }
@@ -94,6 +99,39 @@ public sealed class AgentStateMachine
         AgentEventWriter? eventWriter,
         AgentOptionsValidator optionsValidator,
         ILogger<AgentStateMachine> logger)
+        : this(
+            paths,
+            runtimeStateStore,
+            healthStateStore,
+            controlFileStore,
+            optionsStore,
+            databaseInitializer,
+            foregroundSampleRepository,
+            sessionAggregator,
+            privacyFilter,
+            foregroundSampleProvider,
+            eventWriter,
+            optionsValidator,
+            null,
+            logger)
+    {
+    }
+
+    public AgentStateMachine(
+        WindowsAgentPaths paths,
+        RuntimeStateStore runtimeStateStore,
+        AgentHealthStateStore healthStateStore,
+        AgentControlFileStore controlFileStore,
+        WindowsAgentOptionsStore optionsStore,
+        SqliteDatabaseInitializer databaseInitializer,
+        ForegroundSampleRepository foregroundSampleRepository,
+        SessionAggregator sessionAggregator,
+        ForegroundSamplePrivacyFilter privacyFilter,
+        ConfiguredForegroundSampleProvider foregroundSampleProvider,
+        AgentEventWriter? eventWriter,
+        AgentOptionsValidator optionsValidator,
+        DataMaintenanceService? dataMaintenanceService,
+        ILogger<AgentStateMachine> logger)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
@@ -107,6 +145,7 @@ public sealed class AgentStateMachine
         _foregroundSampleProvider = foregroundSampleProvider;
         _eventWriter = eventWriter;
         _optionsValidator = optionsValidator;
+        _dataMaintenanceService = dataMaintenanceService;
         _logger = logger;
     }
 
@@ -135,11 +174,12 @@ public sealed class AgentStateMachine
             foregroundSampleProvider,
             null,
             new AgentOptionsValidator(),
+            null,
             logger)
     {
     }
 
-    public AgentActualState ActualState { get; private set; } = AgentActualState.Starting;
+    public AgentActualState ActualState { get; internal set; } = AgentActualState.Starting;
 
     public DateTime StartedAtUtc { get; private set; } = DateTime.UtcNow;
 
@@ -251,6 +291,16 @@ public sealed class AgentStateMachine
         var now = DateTime.UtcNow;
         var heartbeatDue = now - _lastPersistedHeartbeatUtc >= TimeSpan.FromSeconds(Math.Max(1, _options.HeartbeatIntervalSeconds));
         var sampleDue = now - _lastSampleAtUtc >= TimeSpan.FromSeconds(Math.Max(1, _options.SamplingIntervalSeconds));
+
+        if (ActualState == AgentActualState.Maintenance)
+        {
+            // Maintenance tick: persist heartbeat but skip sample capture.
+            if (heartbeatDue)
+            {
+                await PersistAsync("Heartbeat (maintenance)", cancellationToken);
+            }
+            return true;
+        }
 
         if (ActualState == AgentActualState.Running && sampleDue)
         {
@@ -471,13 +521,179 @@ public sealed class AgentStateMachine
 
             case AgentCommandType.UpdateAppMetadata:
             case AgentCommandType.UpdatePrivacyRules:
-            case AgentCommandType.PruneData:
-            case AgentCommandType.ClearHistory:
                 await WriteCommandAcceptedEventAsync(command, cancellationToken);
                 await PersistAsync($"{command.Command} accepted", cancellationToken);
                 result.Completed = true;
                 result.ActualState = ActualState;
                 result.Message = $"{command.Command} accepted";
+                break;
+
+            case AgentCommandType.PruneData:
+                if (ActualState == AgentActualState.Maintenance)
+                {
+                    result.Accepted = false;
+                    result.Message = "Cannot execute PruneData while already in Maintenance.";
+                    result.ErrorCode = "AlreadyInMaintenance";
+                    await WriteCommandFailedEventAsync(command, result.ErrorCode, result.Message, cancellationToken);
+                    return result;
+                }
+
+                await WriteCommandAcceptedEventAsync(command, cancellationToken);
+                {
+                    var previousState = ActualState;
+                    try
+                    {
+                        ActualState = AgentActualState.Maintenance;
+                        await PersistAsync("PruneData maintenance started", cancellationToken);
+
+                        if (_dataMaintenanceService is null)
+                        {
+                            result.Completed = false;
+                            result.ErrorCode = "PruneDataUnavailable";
+                            result.Message = "PruneData service is not available.";
+                            await WriteCommandFailedEventAsync(command, "PruneDataUnavailable", result.Message, cancellationToken);
+
+                            ActualState = previousState;
+                            await PersistAsync("PruneData unavailable, exiting maintenance", cancellationToken);
+                            return result;
+                        }
+
+                        var pruneResult = await _dataMaintenanceService.PruneDataAsync(
+                                _options.RetentionDays, DateTime.UtcNow, cancellationToken);
+
+                        if (!pruneResult.Success)
+                        {
+                            var errorCode = pruneResult.ErrorCode ?? "PruneDataFailed";
+                            var safeMessage = pruneResult.SafeMessage ?? "PruneData failed.";
+                            result.Completed = false;
+                            result.ErrorCode = errorCode;
+                            result.Message = safeMessage;
+                            await WriteCommandFailedEventAsync(command, errorCode, safeMessage, cancellationToken);
+
+                            ActualState = previousState;
+                            await PersistAsync("PruneData failed, exiting maintenance", cancellationToken);
+                            return result;
+                        }
+
+                        await WriteDataPrunedEventAsync(command, pruneResult, cancellationToken);
+
+                        ActualState = previousState;
+                        await PersistAsync("PruneData completed", cancellationToken);
+                        result.Completed = true;
+                        result.ActualState = ActualState;
+                        result.Message = "PruneData completed";
+                    }
+                    catch (Exception ex)
+                    {
+                        const string errorCode = "PruneDataFailed";
+                        var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+                        if (string.IsNullOrWhiteSpace(safeMessage))
+                        {
+                            safeMessage = "PruneData failed.";
+                        }
+
+                        result.Completed = false;
+                        result.ErrorCode = errorCode;
+                        result.Message = safeMessage;
+                        await WriteCommandFailedEventAsync(command, errorCode, safeMessage, cancellationToken, ex);
+
+                        ActualState = previousState == AgentActualState.Running
+                            ? AgentActualState.Running
+                            : AgentActualState.Paused;
+                        await PersistAsync("PruneData failed, exiting maintenance", cancellationToken);
+                        return result;
+                    }
+                }
+                break;
+
+            case AgentCommandType.ClearHistory:
+                if (ActualState == AgentActualState.Maintenance)
+                {
+                    result.Accepted = false;
+                    result.Message = "Cannot execute ClearHistory while already in Maintenance.";
+                    result.ErrorCode = "AlreadyInMaintenance";
+                    await WriteCommandFailedEventAsync(command, result.ErrorCode, result.Message, cancellationToken);
+                    return result;
+                }
+
+                await WriteCommandAcceptedEventAsync(command, cancellationToken);
+
+                var prevStateClear = ActualState;
+                try
+                {
+                    ActualState = AgentActualState.Maintenance;
+                    await PersistAsync("ClearHistory maintenance started", cancellationToken);
+
+                    // Close any open session before clearing tables
+                    var clearSessionResult = await CloseOpenSessionSafelyAsync("ClearHistory", "SessionWriteFailed", cancellationToken);
+                    if (clearSessionResult is not null)
+                    {
+                        await HandleSessionAggregationResultAsync(clearSessionResult, cancellationToken);
+                    }
+
+                    if (_dataMaintenanceService is null)
+                    {
+                        result.Completed = false;
+                        result.ErrorCode = "ClearHistoryUnavailable";
+                        result.Message = "ClearHistory service is not available.";
+                        await WriteCommandFailedEventAsync(command, "ClearHistoryUnavailable", result.Message, cancellationToken);
+
+                        ActualState = prevStateClear;
+                        await PersistAsync("ClearHistory unavailable, exiting maintenance", cancellationToken);
+                        return result;
+                    }
+
+                    var clearResult = await _dataMaintenanceService.ClearHistoryAsync(cancellationToken);
+
+                    if (!clearResult.SqliteCleared)
+                    {
+                        var errorCode = clearResult.ErrorCode ?? "ClearHistoryFailed";
+                        var safeMessage = clearResult.SafeMessage ?? "ClearHistory failed.";
+                        result.Completed = false;
+                        result.ErrorCode = errorCode;
+                        result.Message = safeMessage;
+                        await WriteCommandFailedEventAsync(command, errorCode, safeMessage, cancellationToken);
+
+                        ActualState = prevStateClear;
+                        await PersistAsync("ClearHistory failed, exiting maintenance", cancellationToken);
+                        return result;
+                    }
+
+                    // Tables are cleared — always write HistoryCleared.
+                    // JSONL partial failures are recorded in the payload but don't block completion.
+                    await WriteHistoryClearedEventAsync(command, clearResult, cancellationToken);
+
+                    ActualState = prevStateClear == AgentActualState.Running
+                        ? AgentActualState.Paused
+                        : prevStateClear;
+
+                    await PersistAsync("ClearHistory completed", cancellationToken);
+                    result.Completed = true;
+                    result.ActualState = ActualState;
+                    result.Message = clearResult.JsonlDeleteErrorCount > 0
+                        ? $"ClearHistory completed with {clearResult.JsonlDeleteErrorCount} JSONL error(s)."
+                        : "ClearHistory completed";
+                }
+                catch (Exception ex)
+                {
+                    const string errorCode = "ClearHistoryFailed";
+                    var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+                    if (string.IsNullOrWhiteSpace(safeMessage))
+                    {
+                        safeMessage = "ClearHistory failed.";
+                    }
+
+                    result.Completed = false;
+                    result.ErrorCode = errorCode;
+                    result.Message = safeMessage;
+                    await WriteCommandFailedEventAsync(command, errorCode, safeMessage, cancellationToken, ex);
+
+                    ActualState = prevStateClear == AgentActualState.Running
+                        ? AgentActualState.Running
+                        : AgentActualState.Paused;
+                    await PersistAsync("ClearHistory failed, exiting maintenance", cancellationToken);
+                    return result;
+                }
                 break;
 
             default:
@@ -794,6 +1010,61 @@ public sealed class AgentStateMachine
             source: nameof(AgentStateMachine),
             errorCode: errorCode,
             allowedPayloadKeys: CaptureFailedPayloadKeys);
+    }
+
+    private Task WriteDataPrunedEventAsync(
+        AgentControlCommand command,
+        PruneDataResult pruneResult,
+        CancellationToken cancellationToken)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["retentionDays"] = _options.RetentionDays,
+            ["cutoffUtc"] = pruneResult.CutoffUtc.ToString("O"),
+            ["cutoffLocalDate"] = pruneResult.CutoffLocalDate.ToString("yyyy-MM-dd"),
+            ["foregroundSamplesDeleted"] = pruneResult.ForegroundSamplesDeleted,
+            ["sessionsDeleted"] = pruneResult.SessionsDeleted,
+            ["agentEventsDeleted"] = pruneResult.AgentEventsDeleted,
+            ["jsonlFilesDeleted"] = pruneResult.JsonlFilesDeleted,
+            ["jsonlDeleteErrorCount"] = pruneResult.JsonlDeleteErrorCount,
+            ["actualState"] = AgentActualState.Maintenance.ToString()
+        };
+
+        return WriteAgentEventAsync(
+            AgentEventType.DataPruned,
+            AgentEventLevel.Info,
+            "Data pruned",
+            cancellationToken,
+            payload: payload,
+            source: nameof(AgentStateMachine),
+            requestId: command.RequestId,
+            allowedPayloadKeys: DataPrunedPayloadKeys);
+    }
+
+    private Task WriteHistoryClearedEventAsync(
+        AgentControlCommand command,
+        ClearHistoryResult clearResult,
+        CancellationToken cancellationToken)
+    {
+        var payload = new Dictionary<string, object?>
+        {
+            ["foregroundSamplesDeleted"] = clearResult.ForegroundSamplesDeleted,
+            ["sessionsDeleted"] = clearResult.SessionsDeleted,
+            ["agentEventsDeleted"] = clearResult.AgentEventsDeleted,
+            ["jsonlFilesDeleted"] = clearResult.JsonlFilesDeleted,
+            ["jsonlDeleteErrorCount"] = clearResult.JsonlDeleteErrorCount,
+            ["finalState"] = AgentActualState.Maintenance.ToString()
+        };
+
+        return WriteAgentEventAsync(
+            AgentEventType.HistoryCleared,
+            AgentEventLevel.Info,
+            "History cleared",
+            cancellationToken,
+            payload: payload,
+            source: nameof(AgentStateMachine),
+            requestId: command.RequestId,
+            allowedPayloadKeys: HistoryClearedPayloadKeys);
     }
 
     private async Task WriteAgentEventAsync(
