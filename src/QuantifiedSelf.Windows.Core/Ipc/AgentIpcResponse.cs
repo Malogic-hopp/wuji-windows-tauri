@@ -32,4 +32,7 @@ public sealed class AgentIpcResponse
 
     [JsonPropertyOrder(8)]
     public DateTime CompletedAtUtc { get; set; }
+
+    [JsonPropertyOrder(9)]
+    public AgentIpcStatus? Status { get; set; }
 }

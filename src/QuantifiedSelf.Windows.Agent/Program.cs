@@ -12,6 +12,7 @@ using QuantifiedSelf.Windows.Infrastructure.Events;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Core.Options;
 
 var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
@@ -71,6 +72,8 @@ builder.Services.AddSingleton<ConfiguredForegroundSampleProvider>();
 builder.Services.AddSingleton<SessionAggregator>();
 builder.Services.AddSingleton<DataMaintenanceService>();
 builder.Services.AddSingleton<AgentStateMachine>();
+builder.Services.AddSingleton<NamedPipeAgentCommandServer>();
+builder.Services.AddHostedService<AgentCommandServerHostedService>();
 builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();

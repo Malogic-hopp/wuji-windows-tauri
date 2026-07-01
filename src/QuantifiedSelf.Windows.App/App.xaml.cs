@@ -1,10 +1,13 @@
+using System.Security.Principal;
 using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Control;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
 
@@ -24,8 +27,27 @@ public partial class App : Application
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
 
+        // IPC setup
+        var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
+        IAgentIpcClient? ipcClient = null;
+        var ipcStatusService = new AgentIpcStatusService();
+
+        try
+        {
+            var pipeName = new AgentPipeName(userSid);
+            ipcStatusService.Initialize(pipeName);
+            var ipcOptions = new AgentIpcClientOptions();
+            ipcClient = new NamedPipeAgentControlClient(pipeName, ipcOptions);
+        }
+        catch
+        {
+            ipcStatusService.RecordIpcFallback("IPC unavailable; using file fallback.");
+        }
+
         var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
-        var statusService = new AgentStatusService(paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore);
+        var statusService = new AgentStatusService(
+            paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore,
+            ipcClient, ipcStatusService);
         var processService = new AgentProcessService(paths, runtimeStateStore, controlFileStore, NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, controlFileStore, statusService);
         var overviewDataService = new OverviewDataService(paths);

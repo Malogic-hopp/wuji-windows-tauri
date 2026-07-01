@@ -2,11 +2,13 @@ using System.Diagnostics;
 using System.Text.Json;
 using QuantifiedSelf.Windows.App.Models;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Core.Serialization;
 using QuantifiedSelf.Windows.Infrastructure.Control;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
 
@@ -19,19 +21,25 @@ public sealed class AgentStatusService
     private readonly AgentHealthStateStore _healthStateStore;
     private readonly AgentControlFileStore _controlFileStore;
     private readonly WindowsAgentOptionsStore _optionsStore;
+    private readonly IAgentIpcClient? _ipcClient;
+    private readonly AgentIpcStatusService? _ipcStatusService;
 
     public AgentStatusService(
         WindowsAgentPaths paths,
         RuntimeStateStore runtimeStateStore,
         AgentHealthStateStore healthStateStore,
         AgentControlFileStore controlFileStore,
-        WindowsAgentOptionsStore optionsStore)
+        WindowsAgentOptionsStore optionsStore,
+        IAgentIpcClient? ipcClient = null,
+        AgentIpcStatusService? ipcStatusService = null)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
         _healthStateStore = healthStateStore;
         _controlFileStore = controlFileStore;
         _optionsStore = optionsStore;
+        _ipcClient = ipcClient;
+        _ipcStatusService = ipcStatusService;
     }
 
     public async Task<RuntimeState?> ReadRuntimeStateAsync(CancellationToken cancellationToken = default)
@@ -82,6 +90,65 @@ public sealed class AgentStatusService
     }
 
     public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
+    {
+        // Try IPC first
+        if (_ipcClient is not null)
+        {
+            try
+            {
+                var ipcRequest = new AgentIpcRequest
+                {
+                    Command = "GetStatus",
+                    RequestId = $"ipc-status-{Guid.NewGuid():N}"
+                };
+
+                var ipcResponse = await _ipcClient.SendAsync(ipcRequest, cancellationToken);
+
+                if (ipcResponse is { Accepted: true, Completed: true, Status: not null } && ipcResponse.ErrorCode is null)
+                {
+                    _ipcStatusService?.RecordIpcSuccess();
+
+                    var status = ipcResponse.Status;
+                    return new AgentStatusSnapshot
+                    {
+                        ActualState = status.ActualState,
+                        IsRunning = true,
+                        IsHealthy = status.IsHealthy,
+                        IsStale = false,
+                        StatusText = status.ActualState.ToString(),
+                        LastHeartbeatText = status.LastHeartbeatUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-",
+                        LastSampleText = status.LastSampleUtc?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "-",
+                        ProcessText = $"PID {status.ProcessId}",
+                        RuntimeState = new RuntimeState
+                        {
+                            ProcessId = status.ProcessId,
+                            StartedAtUtc = status.StartedAtUtc ?? DateTime.MinValue,
+                            LastHeartbeatUtc = status.LastHeartbeatUtc ?? DateTime.MinValue,
+                            LastSampleUtc = status.LastSampleUtc,
+                            State = status.ActualState,
+                            Version = status.Version ?? "0.1.0"
+                        }
+                    };
+                }
+
+                // IPC responded but status is invalid — fallback
+                _ipcStatusService?.RecordIpcFallback("IPC protocol error; using file fallback.");
+            }
+            catch (TimeoutException)
+            {
+                _ipcStatusService?.RecordIpcFallback("IPC request timed out; using file fallback.");
+            }
+            catch (Exception)
+            {
+                _ipcStatusService?.RecordIpcFallback("IPC unavailable; using file fallback.");
+            }
+        }
+
+        // Fallback to file-based status
+        return await GetFileFallbackStatusAsync(cancellationToken);
+    }
+
+    private async Task<AgentStatusSnapshot> GetFileFallbackStatusAsync(CancellationToken cancellationToken)
     {
         var runtimeState = await ReadRuntimeStateAsync(cancellationToken);
         var healthState = await ReadHealthStateAsync(cancellationToken);

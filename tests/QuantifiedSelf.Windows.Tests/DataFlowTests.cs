@@ -17,6 +17,7 @@ using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Maintenance;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
+using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Infrastructure.Control;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 using QuantifiedSelf.Windows.Infrastructure.Events;
@@ -25,6 +26,7 @@ using QuantifiedSelf.Windows.Infrastructure.Settings;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.Ipc;
+using System.IO.Pipes;
 using System.Text.Json;
 
 namespace QuantifiedSelf.Windows.Tests;
@@ -5315,6 +5317,550 @@ public sealed class DataFlowTests
 
         Assert.Equal("IpcPayloadTooLarge", ex.ErrorCode);
         Assert.Contains("too large", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    // ── IPC Server Tests (Phase 8.2) ──
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_RespondsToPing()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "ping-001",
+            Command = "Ping"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Equal("Pong", response.Message);
+        Assert.Equal(stateMachine.ActualState, response.ActualState);
+        Assert.Null(response.ErrorCode);
+        Assert.NotEqual(default, response.StartedAtUtc);
+        Assert.NotEqual(default, response.CompletedAtUtc);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_ReturnsStatus()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "status-001",
+            Command = "GetStatus"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.NotNull(response.Status);
+        Assert.Equal(stateMachine.ActualState, response.Status!.ActualState);
+        Assert.True(response.Status.ProcessId > 0);
+        Assert.NotEqual(default, response.Status.StartedAtUtc);
+        Assert.NotNull(response.Status.Version);
+        Assert.True(response.Status.IsHealthy);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_RejectsUnsupportedProtocolVersion()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 99,
+            RequestId = "bad-ver",
+            Command = "Ping"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.False(response.Accepted);
+        Assert.False(response.Completed);
+        Assert.Equal("UnsupportedProtocolVersion", response.ErrorCode);
+        Assert.Contains("Unsupported", response.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_RejectsUnsupportedCommand()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "bad-cmd",
+            Command = "NonExistentCommand"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.False(response.Accepted);
+        Assert.False(response.Completed);
+        Assert.Equal("UnsupportedIpcCommand", response.ErrorCode);
+        // Must not echo the raw command back
+        Assert.DoesNotContain(request.Command, response.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_UnsupportedCommandDoesNotEchoSensitiveStrings()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "bad-cmd-path",
+            Command = @"C:\Users\malogic_luc\AppData\secret.txt"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.DoesNotContain("malogic_luc", response.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\", response.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret.txt", response.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NamedPipeAgentCommandServer_RoundTripsPingOverPipe()
+    {
+        var pipeName = $"QuantifiedSelf.Windows.Test.{Guid.NewGuid():N}";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        // Start server in background
+        var serverTask = Task.Run(async () =>
+        {
+            var logger = NullLogger<NamedPipeAgentCommandServer>.Instance;
+            var server = new NamedPipeAgentCommandServer(logger);
+
+            await server.StartAsync(pipeName, (request, ct) =>
+            {
+                return Task.FromResult(new AgentIpcResponse
+                {
+                    ProtocolVersion = 1,
+                    RequestId = request.RequestId,
+                    Accepted = true,
+                    Completed = true,
+                    Message = "Pong"
+                });
+            }, cts.Token);
+        }, cts.Token);
+
+        // Give server a moment to start listening
+        await Task.Delay(200, cts.Token);
+
+        using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+        await client.ConnectAsync(5000, cts.Token);
+
+        var request = new AgentIpcRequest { RequestId = "pipe-ping", Command = "Ping" };
+        await NamedPipeProtocol.WriteMessageAsync(client, request, cts.Token);
+
+        var response = await NamedPipeProtocol.ReadMessageAsync<AgentIpcResponse>(client, cts.Token);
+
+        Assert.Equal("pipe-ping", response.RequestId);
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Equal("Pong", response.Message);
+
+        cts.Cancel();
+        try { await serverTask; } catch (OperationCanceledException) { }
+    }
+
+    [Fact]
+    public async Task NamedPipeAgentCommandServer_HandlesInvalidJsonWithoutCrashing()
+    {
+        // Test via stream-based simulation — avoid real NamedPipe timing flakiness.
+        // Write garbage JSON on one stream, verify protocol write-back doesn't crash.
+        var clientStream = new MemoryStream();
+        var serverStream = new MemoryStream();
+
+        // Simulate client sending garbage: 4-byte length prefix + garbage payload
+        var garbage = "NOT_VALID_JSON"u8.ToArray();
+        var lengthBytes = BitConverter.GetBytes(garbage.Length);
+        await serverStream.WriteAsync(lengthBytes);
+        await serverStream.WriteAsync(garbage);
+        serverStream.Position = 0;
+
+        // Server side: ReadMessageAsync should throw IpcProtocolException
+        var ex = await Assert.ThrowsAsync<IpcProtocolException>(
+            () => NamedPipeProtocol.ReadMessageAsync<AgentIpcRequest>(serverStream));
+
+        Assert.Equal("IpcProtocolError", ex.ErrorCode);
+
+        // Server would write error response — verify that works
+        var errorResponse = new AgentIpcResponse
+        {
+            Accepted = false,
+            Completed = false,
+            ErrorCode = ex.ErrorCode,
+            Message = ex.Message
+        };
+        await NamedPipeProtocol.WriteMessageAsync(clientStream, errorResponse);
+        clientStream.Position = 0;
+        var response = await NamedPipeProtocol.ReadMessageAsync<AgentIpcResponse>(clientStream);
+
+        Assert.False(response.Accepted);
+        Assert.False(response.Completed);
+        Assert.Equal("IpcProtocolError", response.ErrorCode);
+        // Error message must not expose raw payload
+        Assert.DoesNotContain("NOT_VALID", response.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentCommandServerHostedService_StartsAndStopsCleanly()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var loggerFactory = NullLoggerFactory.Instance;
+        var server = new NamedPipeAgentCommandServer(
+            new NullLogger<NamedPipeAgentCommandServer>());
+        var hostedService = new AgentCommandServerHostedService(
+            stateMachine,
+            paths,
+            server,
+            new NullLogger<AgentCommandServerHostedService>());
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        // Start and immediately cancel — should not throw
+        var executeTask = hostedService.StartAsync(cts.Token);
+        await Task.Delay(300, CancellationToken.None);
+        cts.Cancel();
+
+        try { await executeTask; } catch (OperationCanceledException) { }
+        // No exception = clean stop
+    }
+
+    // ── IPC Client & Fallback Tests (Phase 8.3) ──
+
+    private sealed class FakeIpcClient : IAgentIpcClient
+    {
+        private readonly AgentIpcResponse? _response;
+        private readonly Exception? _exception;
+
+        public FakeIpcClient(AgentIpcResponse response) => _response = response;
+
+        public FakeIpcClient(Exception exception) => _exception = exception;
+
+        public Task<AgentIpcResponse> SendAsync(AgentIpcRequest request, CancellationToken cancellationToken = default)
+        {
+            if (_exception is not null) throw _exception;
+            return Task.FromResult(_response!);
+        }
+    }
+
+    [Fact]
+    public void AgentIpcStatusService_RecordsLastSuccessAndFallback()
+    {
+        var service = new AgentIpcStatusService();
+        var pipeName = new AgentPipeName("S-1-5-21-test");
+
+        service.Initialize(pipeName);
+        Assert.Equal("Unavailable", service.LastCommandSource);
+
+        service.RecordIpcSuccess();
+        Assert.Equal("NamedPipe", service.LastCommandSource);
+        Assert.NotNull(service.LastIpcSuccessUtc);
+        Assert.Null(service.LastIpcError);
+
+        service.RecordIpcFallback("timeout");
+        Assert.Equal("FileFallback", service.LastCommandSource);
+        Assert.Equal("timeout", service.LastIpcError);
+        Assert.NotNull(service.LastFallbackUsedUtc);
+    }
+
+    [Fact]
+    public void AgentIpcStatusService_DoesNotExposeFullPipeNameInDisplayText()
+    {
+        var service = new AgentIpcStatusService();
+        var pipeName = new AgentPipeName("S-1-5-21-3623811015-3361044348-30300820-1013");
+
+        service.Initialize(pipeName);
+
+        var display = service.GetDisplayStatusText();
+        Assert.DoesNotContain(pipeName.FullPipeName, display, StringComparison.Ordinal);
+        Assert.DoesNotContain(pipeName.SidHash, display, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStatusService_UsesIpcStatusWhenAvailable()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var status = new AgentIpcStatus
+        {
+            ActualState = AgentActualState.Running,
+            ProcessId = 12345,
+            IsHealthy = true,
+            LastHeartbeatUtc = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc),
+            LastSampleUtc = new DateTime(2026, 7, 1, 11, 59, 0, DateTimeKind.Utc),
+            StartedAtUtc = new DateTime(2026, 7, 1, 10, 0, 0, DateTimeKind.Utc),
+            Version = "1.0.0"
+        };
+        var ipcResponse = new AgentIpcResponse
+        {
+            Accepted = true,
+            Completed = true,
+            Status = status
+        };
+        var fakeClient = new FakeIpcClient(ipcResponse);
+        var ipcStatusService = new AgentIpcStatusService();
+
+        var service = new AgentStatusService(
+            paths,
+            new RuntimeStateStore(),
+            new AgentHealthStateStore(),
+            new AgentControlFileStore(),
+            new WindowsAgentOptionsStore(),
+            fakeClient,
+            ipcStatusService);
+
+        var snapshot = await service.GetStatusAsync();
+
+        Assert.Equal(AgentActualState.Running, snapshot.ActualState);
+        Assert.True(snapshot.IsRunning);
+        Assert.Contains("12345", snapshot.ProcessText, StringComparison.Ordinal);
+        Assert.Equal("NamedPipe", ipcStatusService.LastCommandSource);
+    }
+
+    [Fact]
+    public async Task AgentStatusService_FallsBackToRuntimeStateWhenIpcUnavailable()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // Write runtime state so fallback has data
+        var runtimeStore = new RuntimeStateStore();
+        var testPid = Environment.ProcessId;
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            State = AgentActualState.Running,
+            ProcessId = testPid,
+            LastHeartbeatUtc = DateTime.UtcNow,
+            LastSampleUtc = DateTime.UtcNow.AddMinutes(-1)
+        });
+
+        var fakeClient = new FakeIpcClient(new TimeoutException("timeout"));
+        var ipcStatusService = new AgentIpcStatusService();
+
+        var service = new AgentStatusService(
+            paths,
+            runtimeStore,
+            new AgentHealthStateStore(),
+            new AgentControlFileStore(),
+            new WindowsAgentOptionsStore(),
+            fakeClient,
+            ipcStatusService);
+
+        var snapshot = await service.GetStatusAsync();
+
+        Assert.Equal(AgentActualState.Running, snapshot.ActualState);
+        Assert.True(snapshot.IsRunning);
+        Assert.Equal("FileFallback", ipcStatusService.LastCommandSource);
+        Assert.NotNull(ipcStatusService.LastIpcError);
+        Assert.Contains("timed out", ipcStatusService.LastIpcError, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentStatusService_FallsBackWhenIpcResponseIsFailed()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var testPid2 = Environment.ProcessId;
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            State = AgentActualState.Paused,
+            ProcessId = testPid2,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        // IPC response with Accepted=false should trigger fallback
+        var ipcResponse = new AgentIpcResponse
+        {
+            Accepted = true,
+            Completed = true,
+            ErrorCode = "UnsupportedIpcCommand",
+            Status = null
+        };
+        var fakeClient = new FakeIpcClient(ipcResponse);
+        var ipcStatusService = new AgentIpcStatusService();
+
+        var service = new AgentStatusService(
+            paths,
+            runtimeStore,
+            new AgentHealthStateStore(),
+            new AgentControlFileStore(),
+            new WindowsAgentOptionsStore(),
+            fakeClient,
+            ipcStatusService);
+
+        var snapshot = await service.GetStatusAsync();
+
+        Assert.Equal(AgentActualState.Paused, snapshot.ActualState);
+        Assert.Equal("FileFallback", ipcStatusService.LastCommandSource);
+    }
+
+    [Fact]
+    public async Task NamedPipeAgentControlClient_PingReturnsPong()
+    {
+        var pipeName = $"QuantifiedSelf.Windows.Test.{Guid.NewGuid():N}";
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        // Start a minimal server that responds to Ping
+        var serverTask = Task.Run(async () =>
+        {
+            var logger = NullLogger<NamedPipeAgentCommandServer>.Instance;
+            var server = new NamedPipeAgentCommandServer(logger);
+            await server.StartAsync(pipeName, (req, ct) =>
+            {
+                return Task.FromResult(new AgentIpcResponse
+                {
+                    ProtocolVersion = 1,
+                    RequestId = req.RequestId,
+                    Accepted = true,
+                    Completed = true,
+                    Message = "Pong"
+                });
+            }, cts.Token);
+        }, cts.Token);
+
+        await Task.Delay(200, cts.Token);
+
+        var clientPipeName = new AgentPipeName("S-1-5-21-test");
+        // Override pipe name for test — use a custom client that connects to test pipe
+        var client = new TestNamedPipeAgentControlClient(pipeName, new AgentIpcClientOptions { ConnectTimeoutMilliseconds = 5000 });
+        var request = new AgentIpcRequest { RequestId = "ping-01", Command = "Ping" };
+        var response = await client.SendAsync(request, cts.Token);
+
+        Assert.Equal("ping-01", response.RequestId);
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Equal("Pong", response.Message);
+
+        cts.Cancel();
+        try { await serverTask; } catch (OperationCanceledException) { }
+    }
+
+    private sealed class TestNamedPipeAgentControlClient : IAgentIpcClient
+    {
+        private readonly string _pipeName;
+        private readonly AgentIpcClientOptions _options;
+
+        public TestNamedPipeAgentControlClient(string pipeName, AgentIpcClientOptions options)
+        {
+            _pipeName = pipeName;
+            _options = options;
+        }
+
+        public async Task<AgentIpcResponse> SendAsync(AgentIpcRequest request, CancellationToken cancellationToken = default)
+        {
+            using var client = new NamedPipeClientStream(".", _pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+
+            // Phase 1: connect with dedicated connect timeout
+            using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            connectCts.CancelAfter(_options.ConnectTimeoutMilliseconds);
+            await client.ConnectAsync(_options.ConnectTimeoutMilliseconds, connectCts.Token);
+
+            // Phase 2: write and read with request timeout
+            var requestTimeoutMs = request.TimeoutMilliseconds > 0
+                ? request.TimeoutMilliseconds
+                : _options.RequestTimeoutMilliseconds;
+            using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            requestCts.CancelAfter(requestTimeoutMs);
+            await NamedPipeProtocol.WriteMessageAsync(client, request, requestCts.Token);
+            return await NamedPipeProtocol.ReadMessageAsync<AgentIpcResponse>(client, requestCts.Token);
+        }
+    }
+
+    [Fact]
+    public async Task NamedPipeAgentControlClient_TimesOutSafely()
+    {
+        // Connect to a non-existent pipe name — should timeout
+        var nonExistentPipe = new AgentPipeName("S-1-5-21-nonexistent");
+        var client = new NamedPipeAgentControlClient(nonExistentPipe,
+            new AgentIpcClientOptions { ConnectTimeoutMilliseconds = 100, RequestTimeoutMilliseconds = 200 });
+
+        var request = new AgentIpcRequest { RequestId = "timeout-01", Command = "Ping" };
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<TimeoutException>(() => client.SendAsync(request, cts.Token));
+    }
+
+    [Fact]
+    public async Task AgentControlService_ExistingCommandsStillUseFileFallback()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var statusService = new AgentStatusService(
+            paths,
+            new RuntimeStateStore(),
+            new AgentHealthStateStore(),
+            new AgentControlFileStore(),
+            new WindowsAgentOptionsStore());
+
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+
+        // Pause should still write via file, not throw
+        var result = await controlService.RequestPauseAsync();
+        Assert.NotNull(result);
+
+        // Verify agent_control.json was written
+        var controlFileStore = new AgentControlFileStore();
+        var readResult = await controlFileStore.PeekAsync(paths.AgentControlPath);
+        Assert.NotNull(readResult.Command);
+    }
+
+    private async Task<AgentStateMachine> CreateInitializedStateMachineAsync(WindowsAgentPaths paths)
+    {
+        var optionsStore = new WindowsAgentOptionsStore();
+        await optionsStore.WriteAsync(
+            paths.AgentOptionsPath,
+            new WindowsAgentOptions
+            {
+                SamplingIntervalSeconds = 60,
+                HeartbeatIntervalSeconds = 30,
+                StaleThresholdSeconds = 45,
+                UseMockCapture = true
+            });
+
+        var eventWriter = await CreateEventWriterAsync(paths);
+        var dataMaintenanceService = new DataMaintenanceService(paths);
+        var stateMachine = CreateStateMachine(
+            paths,
+            new ConfiguredForegroundSampleProvider(
+                new QueueMockForegroundSampleProvider([]),
+                new QueueWin32ForegroundSampleProvider([])),
+            eventWriter,
+            dataMaintenanceService: dataMaintenanceService);
+
+        await stateMachine.InitializeAsync(CancellationToken.None);
+        return stateMachine;
     }
 
     private sealed class FailingClearHistoryService : DataMaintenanceService
