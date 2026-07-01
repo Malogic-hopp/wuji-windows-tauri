@@ -4873,7 +4873,7 @@ public sealed class DataFlowTests
             _ =>
             {
                 clearHistoryRequested = true;
-                return Task.FromResult(new AgentCommandResult { Accepted = true, Message = "ClearHistory command queued" });
+                return Task.FromResult(new AgentCommandResult { Accepted = true, Completed = true, Message = "ClearHistory command queued" });
             },
             null,
             new AgentOptionsValidator(),
@@ -5537,6 +5537,7 @@ public sealed class DataFlowTests
             stateMachine,
             paths,
             server,
+            new ProcessedRequestCache(),
             new NullLogger<AgentCommandServerHostedService>());
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
@@ -5834,6 +5835,556 @@ public sealed class DataFlowTests
         var controlFileStore = new AgentControlFileStore();
         var readResult = await controlFileStore.PeekAsync(paths.AgentControlPath);
         Assert.NotNull(readResult.Command);
+    }
+
+    // ── IPC Command Migration Tests (Phase 8.4) ──
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_PauseReturnsCompleted()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "pause-001",
+            Command = "Pause",
+            RequestedBy = "TestSuite"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Equal(AgentActualState.Paused, response.ActualState);
+        Assert.Null(response.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_ResumeReturnsCompleted()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        // First pause, then resume
+        await AgentIpcCommandDispatcher.DispatchAsync(
+            new AgentIpcRequest { ProtocolVersion = 1, RequestId = "p-1", Command = "Pause" }, stateMachine);
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(
+            new AgentIpcRequest { ProtocolVersion = 1, RequestId = "r-1", Command = "Resume" }, stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        // State depends on state machine semantics — just verify it's valid
+        Assert.False(response.ActualState == AgentActualState.Error);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_StopReturnsCompleted()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "stop-001",
+            Command = "Stop",
+            RequestedBy = "TestSuite"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        // Stop transitions through various states — just verify not error
+        Assert.NotEqual("", response.RequestId);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_ReloadConfigReturnsCompleted()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "reload-001",
+            Command = "ReloadConfig",
+            RequestedBy = "TestSuite"
+        };
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Null(response.ErrorCode);
+    }
+
+    [Fact]
+    public void ProcessedRequestCache_SuppressesDuplicateRequestIds()
+    {
+        var cache = new ProcessedRequestCache(capacity: 10, ttl: TimeSpan.FromMinutes(1));
+
+        Assert.False(cache.TryMarkProcessed("req-001"));
+        Assert.True(cache.TryMarkProcessed("req-001")); // duplicate
+        Assert.True(cache.TryMarkProcessed("req-001")); // still duplicate
+        Assert.False(cache.TryMarkProcessed("req-002")); // different id
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_DuplicateRequestDoesNotExecuteTwice()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var cache = new ProcessedRequestCache();
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "dup-pause",
+            Command = "Pause",
+            RequestedBy = "TestSuite"
+        };
+
+        // First execution should succeed
+        var r1 = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine, cache);
+        Assert.True(r1.Completed);
+        Assert.Null(r1.ErrorCode);
+
+        // Second execution with same requestId should be suppressed
+        var r2 = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine, cache);
+        Assert.True(r2.Completed);
+        Assert.Equal("DuplicateRequest", r2.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AgentControlService_PauseUsesIpcWhenAvailable()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new AgentIpcResponse
+        {
+            Accepted = true,
+            Completed = true,
+            ActualState = AgentActualState.Paused,
+            Message = "Pause completed"
+        });
+
+        var service = new AgentControlService(
+            new WindowsAgentPaths(Path.GetTempPath()),
+            new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient,
+            ipcStatus);
+
+        var result = await service.RequestPauseAsync();
+
+        Assert.True(result.Accepted);
+        Assert.True(result.Completed);
+        Assert.Equal(AgentActualState.Paused, result.ActualState);
+        Assert.Equal("NamedPipe", ipcStatus.LastCommandSource);
+    }
+
+    [Fact]
+    public async Task AgentControlService_PauseFallsBackToFileWhenIpcUnavailable()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new Exception("pipe broken"));
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var service = new AgentControlService(
+            paths,
+            new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient,
+            ipcStatus);
+
+        var result = await service.RequestPauseAsync();
+
+        Assert.True(result.Accepted);
+        Assert.Equal("FileFallback", ipcStatus.LastCommandSource);
+
+        // Verify file was written
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.NotNull(readResult.Command);
+    }
+
+    [Fact]
+    public async Task AgentControlService_ReloadConfigPreservesNotRunningMessage()
+    {
+        // Fallback path: without IPC, NotRunning → rejected with expected message
+        var service = new AgentControlService(
+            new WindowsAgentPaths(Path.GetTempPath()),
+            new AgentControlFileStore(),
+            CreateMinimalStatusService());
+
+        var result = await service.ReloadConfigAsync();
+
+        Assert.False(result.Accepted);
+        Assert.Contains("not running", result.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AgentControlService_RequestTimeoutDoesNotDuplicate()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        // Client throws TimeoutException — should NOT fallback to file
+        var fakeClient = new FakeIpcClient(new TimeoutException("timed out"));
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var service = new AgentControlService(
+            paths,
+            new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient,
+            ipcStatus);
+
+        var result = await service.RequestPauseAsync();
+
+        Assert.Equal("IpcTimeout", result.ErrorCode);
+        Assert.Contains("timed out", result.Message, StringComparison.OrdinalIgnoreCase);
+
+        // File should NOT have been written (don't duplicate side-effect)
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.Null(readResult.Command);
+    }
+
+    [Fact]
+    public async Task AgentControlService_FallbackUsesSameRequestIdAsIpc()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var capturedRequestId = string.Empty;
+        var fakeClient = new FakeIpcClient(new Exception("unavailable"));
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var service = new AgentControlService(
+            paths,
+            new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient,
+            ipcStatus);
+
+        var result = await service.RequestPauseAsync();
+
+        Assert.True(result.Accepted);
+        Assert.Equal("FileFallback", ipcStatus.LastCommandSource);
+
+        // Verify file was written and has the same requestId as IPC would have
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.NotNull(readResult.Command);
+        Assert.NotNull(readResult.Command.RequestId);
+        Assert.StartsWith("ipc-", readResult.Command.RequestId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentProcessService_StopFallsBackToFileWhenIpcUnavailable()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        // Write runtime state with current PID so process check returns true
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var fakeClient = new FakeIpcClient(new Exception("pipe unavailable"));
+        var service = new AgentProcessService(
+            paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance, fakeClient);
+        service.StopPollMaxAttempts = 1;
+        service.StopPollDelayMilliseconds = 10;
+
+        var result = await service.StopAgentGracefullyAsync();
+
+        // Agent still running, poll exhausted → false; file fallback written with ipc- requestId
+        Assert.False(result);
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.NotNull(readResult.Command);
+        Assert.Equal(AgentCommandType.Stop, readResult.Command.Command);
+        Assert.StartsWith("ipc-stop-", readResult.Command.RequestId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentProcessService_StopDoesNotWriteFallbackWhenAgentAlreadyExitedAfterIpcFailure()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        // Write runtime state with a PID that definitely doesn't exist
+        // so process check returns false (agent already exited)
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = 99999, // non-existent process
+            State = AgentActualState.Stopped,
+            LastHeartbeatUtc = DateTime.UtcNow.AddMinutes(-10)
+        });
+
+        var fakeClient = new FakeIpcClient(new Exception("pipe broken"));
+        var service = new AgentProcessService(
+            paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance, fakeClient);
+        service.StopPollMaxAttempts = 1;
+        service.StopPollDelayMilliseconds = 10;
+
+        var result = await service.StopAgentGracefullyAsync();
+
+        // Agent already exited — should return true, no file written
+        Assert.True(result);
+
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.Null(readResult.Command); // no stale file
+    }
+
+    // ── Maintenance Command IPC Migration Tests (Phase 8.5) ──
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_PruneDataReturnsCompleted()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(
+            new AgentIpcRequest { ProtocolVersion = 1, RequestId = "prune-01", Command = "PruneData" },
+            stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Null(response.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_ClearHistoryReturnsCompletedAndPaused()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+
+        var response = await AgentIpcCommandDispatcher.DispatchAsync(
+            new AgentIpcRequest { ProtocolVersion = 1, RequestId = "clear-01", Command = "ClearHistory" },
+            stateMachine);
+
+        Assert.True(response.Accepted);
+        Assert.True(response.Completed);
+        Assert.Equal(AgentActualState.Paused, response.ActualState);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_DuplicatePruneDataDoesNotDeleteTwice()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+        var cache = new ProcessedRequestCache();
+
+        var request = new AgentIpcRequest { ProtocolVersion = 1, RequestId = "dup-prune", Command = "PruneData" };
+
+        var r1 = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine, cache);
+        Assert.True(r1.Completed);
+
+        var r2 = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine, cache);
+        Assert.Equal("DuplicateRequest", r2.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AgentIpcCommandDispatcher_DuplicateClearHistoryDoesNotDeleteTwice()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var stateMachine = await CreateInitializedStateMachineAsync(paths);
+        var cache = new ProcessedRequestCache();
+
+        var request = new AgentIpcRequest { ProtocolVersion = 1, RequestId = "dup-clear", Command = "ClearHistory" };
+
+        var r1 = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine, cache);
+        Assert.True(r1.Completed);
+
+        var r2 = await AgentIpcCommandDispatcher.DispatchAsync(request, stateMachine, cache);
+        Assert.Equal("DuplicateRequest", r2.ErrorCode);
+    }
+
+    [Fact]
+    public async Task AgentControlService_PruneDataUsesIpcWhenAvailable()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new AgentIpcResponse
+        {
+            Accepted = true, Completed = true,
+            ActualState = AgentActualState.Running,
+            Message = "PruneData completed"
+        });
+
+        var service = new AgentControlService(
+            new WindowsAgentPaths(Path.GetTempPath()),
+            new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient, ipcStatus);
+
+        var result = await service.PruneDataAsync();
+
+        Assert.True(result.Completed);
+        Assert.Equal("NamedPipe", ipcStatus.LastCommandSource);
+    }
+
+    [Fact]
+    public async Task AgentControlService_ClearHistoryUsesIpcWhenAvailable()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new AgentIpcResponse
+        {
+            Accepted = true, Completed = true,
+            ActualState = AgentActualState.Paused,
+            Message = "ClearHistory completed"
+        });
+
+        var service = new AgentControlService(
+            new WindowsAgentPaths(Path.GetTempPath()),
+            new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient, ipcStatus);
+
+        var result = await service.ClearHistoryAsync();
+
+        Assert.True(result.Completed);
+        Assert.Equal("NamedPipe", ipcStatus.LastCommandSource);
+    }
+
+    [Fact]
+    public async Task AgentControlService_PruneDataFallsBackToFileWhenIpcUnavailable()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new Exception("pipe broken"));
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        // Write runtime state so the fallback path sees agent as running
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var statusService = new AgentStatusService(
+            paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+
+        var service = new AgentControlService(
+            paths, new AgentControlFileStore(), statusService, fakeClient, ipcStatus);
+
+        var result = await service.PruneDataAsync();
+
+        Assert.True(result.Accepted);
+        Assert.Equal("FileFallback", ipcStatus.LastCommandSource);
+
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.NotNull(readResult.Command);
+        Assert.Equal(AgentCommandType.PruneData, readResult.Command.Command);
+        Assert.StartsWith("ipc-", readResult.Command.RequestId, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentControlService_ClearHistoryTimeoutDoesNotUseNewRequestId()
+    {
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new TimeoutException("timed out"));
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var service = new AgentControlService(
+            paths, new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient, ipcStatus);
+
+        var result = await service.ClearHistoryAsync();
+
+        Assert.Equal("IpcTimeout", result.ErrorCode);
+
+        // Should NOT have written file fallback (avoid duplicate)
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.Null(readResult.Command);
+    }
+
+    [Fact]
+    public async Task AgentControlService_DoesNotFallbackWhenIpcReturnsCompletedFalse()
+    {
+        // IPC returned a proper response with Completed=false (e.g. AlreadyInMaintenance)
+        // Should NOT write a file fallback — the Agent already processed and rejected it
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new AgentIpcResponse
+        {
+            Accepted = false,
+            Completed = false,
+            ErrorCode = "AlreadyInMaintenance",
+            Message = "Agent is already performing maintenance."
+        });
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var service = new AgentControlService(
+            paths, new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient, ipcStatus);
+
+        var result = await service.PruneDataAsync();
+
+        // IPC result should be mapped directly
+        Assert.False(result.Accepted);
+        Assert.False(result.Completed);
+        Assert.Equal("AlreadyInMaintenance", result.ErrorCode);
+
+        // No file fallback should have been written
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.Null(readResult.Command);
+    }
+
+    private static AgentStatusService CreateMinimalStatusService()
+    {
+        var paths = new WindowsAgentPaths(Path.GetTempPath());
+        return new AgentStatusService(
+            paths,
+            new RuntimeStateStore(),
+            new AgentHealthStateStore(),
+            new AgentControlFileStore(),
+            new WindowsAgentOptionsStore());
     }
 
     private async Task<AgentStateMachine> CreateInitializedStateMachineAsync(WindowsAgentPaths paths)

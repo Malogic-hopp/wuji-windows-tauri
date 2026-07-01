@@ -1410,7 +1410,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             IsSaving = true;
             HasClearHistoryError = false;
             var result = await _requestClearHistoryAsync(cancellationToken);
-            if (result.Accepted)
+            if (result.Accepted && result.Completed)
             {
                 ClearHistoryStatusText = "ClearHistory command queued. Check Diagnostics for results.";
             }
@@ -1453,10 +1453,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         {
             IsSaving = true;
             var result = await _requestPruneDataAsync(cancellationToken);
-            if (result.Accepted)
+            if (result.Accepted && result.Completed)
             {
                 PruneDataStatusText = "PruneData command queued. Check Diagnostics for results.";
                 LastMaintenanceStatusText = $"PruneData queued at {DateTime.Now:HH:mm:ss}";
+            }
+            else if (result.Accepted && !result.Completed)
+            {
+                PruneDataStatusText = result.Message ?? "PruneData request timed out. Check Diagnostics for result.";
             }
             else
             {

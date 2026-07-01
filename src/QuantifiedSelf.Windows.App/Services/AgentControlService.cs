@@ -1,7 +1,9 @@
 using QuantifiedSelf.Windows.App.Models;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Control;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
 
 namespace QuantifiedSelf.Windows.App.Services;
 
@@ -10,31 +12,37 @@ public sealed class AgentControlService
     private readonly WindowsAgentPaths _paths;
     private readonly AgentControlFileStore _controlFileStore;
     private readonly AgentStatusService _statusService;
+    private readonly IAgentIpcClient? _ipcClient;
+    private readonly AgentIpcStatusService? _ipcStatusService;
 
     public AgentControlService(
         WindowsAgentPaths paths,
         AgentControlFileStore controlFileStore,
-        AgentStatusService statusService)
+        AgentStatusService statusService,
+        IAgentIpcClient? ipcClient = null,
+        AgentIpcStatusService? ipcStatusService = null)
     {
         _paths = paths;
         _controlFileStore = controlFileStore;
         _statusService = statusService;
+        _ipcClient = ipcClient;
+        _ipcStatusService = ipcStatusService;
     }
 
     public Task<AgentCommandResult> RequestPauseAsync(CancellationToken cancellationToken = default)
-        => IssueCommandAsync(AgentCommandType.Pause, AgentDesiredState.Paused, cancellationToken);
+        => IssueCommandWithIpcAsync("Pause", AgentCommandType.Pause, AgentDesiredState.Paused, cancellationToken);
 
     public Task<AgentCommandResult> RequestResumeAsync(CancellationToken cancellationToken = default)
-        => IssueCommandAsync(AgentCommandType.Resume, AgentDesiredState.Running, cancellationToken);
+        => IssueCommandWithIpcAsync("Resume", AgentCommandType.Resume, AgentDesiredState.Running, cancellationToken);
 
     public Task<AgentCommandResult> RequestStopAsync(CancellationToken cancellationToken = default)
-        => IssueCommandAsync(AgentCommandType.Stop, AgentDesiredState.Stopped, cancellationToken);
+        => IssueCommandWithIpcAsync("Stop", AgentCommandType.Stop, AgentDesiredState.Stopped, cancellationToken);
 
     public Task<AgentCommandResult> GetStatusAsync(CancellationToken cancellationToken = default)
         => IssueCommandAsync(AgentCommandType.GetStatus, null, cancellationToken);
 
     public Task<AgentCommandResult> ReloadConfigAsync(CancellationToken cancellationToken = default)
-        => IssueCommandAsync(AgentCommandType.ReloadConfig, null, cancellationToken);
+        => IssueCommandWithIpcAsync("ReloadConfig", AgentCommandType.ReloadConfig, null, cancellationToken);
 
     public Task<AgentCommandResult> UpdateAppMetadataAsync(CancellationToken cancellationToken = default)
         => IssueCommandAsync(AgentCommandType.UpdateAppMetadata, null, cancellationToken);
@@ -43,20 +51,84 @@ public sealed class AgentControlService
         => IssueCommandAsync(AgentCommandType.UpdatePrivacyRules, null, cancellationToken);
 
     public Task<AgentCommandResult> PruneDataAsync(CancellationToken cancellationToken = default)
-        => IssueCommandAsync(AgentCommandType.PruneData, null, cancellationToken);
+        => IssueCommandWithIpcAsync("PruneData", AgentCommandType.PruneData, null, cancellationToken);
 
     public Task<AgentCommandResult> ClearHistoryAsync(CancellationToken cancellationToken = default)
-        => IssueCommandAsync(AgentCommandType.ClearHistory, null, cancellationToken);
+        => IssueCommandWithIpcAsync("ClearHistory", AgentCommandType.ClearHistory, null, cancellationToken);
 
     public async Task<AgentControlFileReadResult> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
     {
         return await _controlFileStore.PeekAsync(_paths.AgentControlPath, cancellationToken);
     }
 
-    private async Task<AgentCommandResult> IssueCommandAsync(
+    private async Task<AgentCommandResult> IssueCommandWithIpcAsync(
+        string ipcCommand,
         AgentCommandType commandType,
         AgentDesiredState? desiredState,
         CancellationToken cancellationToken)
+    {
+        // Try IPC first
+        if (_ipcClient is not null)
+        {
+            var requestId = $"ipc-{Guid.NewGuid():N}";
+            var isMaintenance = commandType is AgentCommandType.PruneData or AgentCommandType.ClearHistory;
+
+            try
+            {
+                var ipcResult = await _ipcClient.SendAsync(new AgentIpcRequest
+                {
+                    Command = ipcCommand,
+                    RequestId = requestId,
+                    RequestedBy = "QuantifiedSelf.Windows.App",
+                    RequestedAtUtc = DateTime.UtcNow,
+                    DesiredState = desiredState,
+                    WaitForCompletion = true,
+                    TimeoutMilliseconds = isMaintenance ? 30000 : 5000
+                }, cancellationToken);
+
+                // IPC responded — map result directly, regardless of Completed
+                // (Completed=false means Agent processed but rejected, e.g. AlreadyInMaintenance)
+                _ipcStatusService?.RecordIpcSuccess();
+                return new AgentCommandResult
+                {
+                    RequestId = ipcResult.RequestId,
+                    Accepted = ipcResult.Accepted,
+                    Completed = ipcResult.Completed,
+                    ActualState = ipcResult.ActualState,
+                    Message = ipcResult.Message,
+                    ErrorCode = ipcResult.ErrorCode
+                };
+            }
+            catch (TimeoutException)
+            {
+                // Don't fallback with a different command — agent may have already acted
+                _ipcStatusService?.RecordIpcFallback("IPC request timed out.");
+                return new AgentCommandResult
+                {
+                    RequestId = requestId,
+                    Accepted = true,
+                    Completed = false,
+                    Message = "IPC request timed out. Check Diagnostics for result.",
+                    ErrorCode = "IpcTimeout"
+                };
+            }
+            catch
+            {
+                // IPC unavailable — fallback with same requestId for dedup
+                _ipcStatusService?.RecordIpcFallback("IPC unavailable; using file fallback.");
+                return await IssueCommandAsync(commandType, desiredState, cancellationToken, requestId);
+            }
+        }
+
+        // Fallback to file
+        return await IssueCommandAsync(commandType, desiredState, cancellationToken);
+    }
+
+    private async Task<AgentCommandResult> IssueCommandAsync(
+        AgentCommandType commandType,
+        AgentDesiredState? desiredState,
+        CancellationToken cancellationToken,
+        string? overrideRequestId = null)
     {
         if (commandType == AgentCommandType.ReloadConfig
             || commandType == AgentCommandType.PruneData
@@ -82,6 +154,7 @@ public sealed class AgentControlService
         {
             Command = commandType,
             DesiredState = desiredState,
+            RequestId = overrideRequestId ?? Guid.NewGuid().ToString("N"),
             RequestedBy = "QuantifiedSelf.Windows.App",
             Reason = $"UI requested {commandType}"
         };

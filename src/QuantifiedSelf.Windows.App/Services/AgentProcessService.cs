@@ -2,9 +2,11 @@ using System.Diagnostics;
 using System.IO;
 using QuantifiedSelf.Windows.App.Models;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Infrastructure.Control;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using Microsoft.Extensions.Logging;
 
@@ -15,17 +17,23 @@ public sealed class AgentProcessService
     private readonly WindowsAgentPaths _paths;
     private readonly RuntimeStateStore _runtimeStateStore;
     private readonly AgentControlFileStore _controlFileStore;
+    private readonly IAgentIpcClient? _ipcClient;
     private readonly ILogger<AgentProcessService> _logger;
+
+    internal int StopPollMaxAttempts { get; set; } = 30;
+    internal int StopPollDelayMilliseconds { get; set; } = 500;
 
     public AgentProcessService(
         WindowsAgentPaths paths,
         RuntimeStateStore runtimeStateStore,
         AgentControlFileStore controlFileStore,
-        ILogger<AgentProcessService> logger)
+        ILogger<AgentProcessService> logger,
+        IAgentIpcClient? ipcClient = null)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
         _controlFileStore = controlFileStore;
+        _ipcClient = ipcClient;
         _logger = logger;
     }
 
@@ -55,24 +63,79 @@ public sealed class AgentProcessService
 
     public async Task<bool> StopAgentGracefullyAsync(CancellationToken cancellationToken = default)
     {
-        var command = new AgentControlCommand
+        var requestId = $"ipc-stop-{Guid.NewGuid():N}";
+        bool ipcDelivered = false;
+
+        // Try IPC stop — send and confirm delivery, then poll for exit
+        if (_ipcClient is not null)
         {
-            Command = AgentCommandType.Stop,
-            DesiredState = AgentDesiredState.Stopped,
-            RequestedBy = "QuantifiedSelf.Windows.App",
-            Reason = "User requested stop"
-        };
+            try
+            {
+                await _ipcClient.SendAsync(new AgentIpcRequest
+                {
+                    Command = "Stop",
+                    RequestId = requestId,
+                    RequestedBy = "QuantifiedSelf.Windows.App",
+                    WaitForCompletion = false,
+                    TimeoutMilliseconds = 2000
+                }, cancellationToken);
+                ipcDelivered = true;
+            }
+            catch (TimeoutException)
+            {
+                // Message may or may not have been delivered.
+                // Poll briefly to see if agent is already stopping before deciding on fallback.
+                for (var i = 0; i < 6; i++)
+                {
+                    if (!await IsAgentProcessRunningAsync(cancellationToken))
+                    {
+                        return true;
+                    }
 
-        await _controlFileStore.WriteAsync(_paths.AgentControlPath, command, cancellationToken);
+                    var runtimeState = await _runtimeStateStore.ReadAsync(_paths.RuntimeStatePath, cancellationToken);
+                    if (runtimeState?.State is AgentActualState.Stopped or AgentActualState.Stopping)
+                    {
+                        // Agent received the Stop — continue polling for exit, no fallback needed
+                        ipcDelivered = true;
+                        break;
+                    }
 
-        for (var attempt = 0; attempt < 30; attempt++)
+                    await Task.Delay(500, cancellationToken);
+                }
+            }
+            catch
+            {
+                // IPC failed — check if agent already stopped before writing fallback
+                if (!await IsAgentProcessRunningAsync(cancellationToken))
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Write file fallback only if IPC was not delivered, using the same requestId
+        if (!ipcDelivered)
+        {
+            var command = new AgentControlCommand
+            {
+                Command = AgentCommandType.Stop,
+                DesiredState = AgentDesiredState.Stopped,
+                RequestId = requestId,
+                RequestedBy = "QuantifiedSelf.Windows.App",
+                Reason = "User requested stop"
+            };
+            await _controlFileStore.WriteAsync(_paths.AgentControlPath, command, cancellationToken);
+        }
+
+        // Wait for process to exit (common path)
+        for (var attempt = 0; attempt < StopPollMaxAttempts; attempt++)
         {
             if (!await IsAgentProcessRunningAsync(cancellationToken))
             {
                 return true;
             }
 
-            await Task.Delay(500, cancellationToken);
+            await Task.Delay(StopPollDelayMilliseconds, cancellationToken);
         }
 
         return false;

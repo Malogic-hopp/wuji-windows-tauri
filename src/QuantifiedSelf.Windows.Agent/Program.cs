@@ -71,6 +71,7 @@ builder.Services.AddSingleton<Win32ForegroundSampleProvider>();
 builder.Services.AddSingleton<ConfiguredForegroundSampleProvider>();
 builder.Services.AddSingleton<SessionAggregator>();
 builder.Services.AddSingleton<DataMaintenanceService>();
+builder.Services.AddSingleton<ProcessedRequestCache>();
 builder.Services.AddSingleton<AgentStateMachine>();
 builder.Services.AddSingleton<NamedPipeAgentCommandServer>();
 builder.Services.AddHostedService<AgentCommandServerHostedService>();

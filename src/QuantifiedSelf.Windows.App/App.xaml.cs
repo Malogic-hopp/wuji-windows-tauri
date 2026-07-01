@@ -48,8 +48,8 @@ public partial class App : Application
         var statusService = new AgentStatusService(
             paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore,
             ipcClient, ipcStatusService);
-        var processService = new AgentProcessService(paths, runtimeStateStore, controlFileStore, NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, controlFileStore, statusService);
+        var processService = new AgentProcessService(paths, runtimeStateStore, controlFileStore, NullLogger<AgentProcessService>.Instance, ipcClient);
+        var controlService = new AgentControlService(paths, controlFileStore, statusService, ipcClient, ipcStatusService);
         var overviewDataService = new OverviewDataService(paths);
         var diagnosticsDataService = new DiagnosticsDataService(paths);
         var samplesDataService = new SamplesDataService(paths);
