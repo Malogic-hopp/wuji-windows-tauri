@@ -33,6 +33,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AgentStatusService _statusService;
     private readonly OverviewDataService _overviewDataService;
     private readonly DiagnosticsDataService _diagnosticsDataService;
+    private readonly AgentIpcStatusService? _ipcStatusService;
     private readonly SamplesViewModel _samplesViewModel;
     private readonly SessionsViewModel _sessionsViewModel;
     private readonly AppsViewModel _appsViewModel;
@@ -63,6 +64,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _eventWriterStatusText = "SQLite writer: unknown";
     private string _journalWriterStatusText = "JSONL writer: unknown";
     private string _currentJournalPathText = "-";
+    private string _ipcStatusText = "";
     private string _lastEventWriteErrorText = "None";
     private string _lastJournalWriteErrorText = "None";
     private string _currentSessionIdText = "-";
@@ -78,13 +80,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SessionsViewModel sessionsViewModel,
         AppsViewModel appsViewModel,
         SettingsViewModel settingsViewModel,
-        SettingsService settingsService)
+        SettingsService settingsService,
+        AgentIpcStatusService? ipcStatusService = null)
     {
         _processService = processService;
         _controlService = controlService;
         _statusService = statusService;
         _overviewDataService = overviewDataService;
         _diagnosticsDataService = diagnosticsDataService;
+        _ipcStatusService = ipcStatusService;
         _samplesViewModel = samplesViewModel;
         _sessionsViewModel = sessionsViewModel;
         _appsViewModel = appsViewModel;
@@ -266,6 +270,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _currentJournalPathText, value);
     }
 
+    public string IpcStatusText
+    {
+        get => _ipcStatusText;
+        private set => SetProperty(ref _ipcStatusText, value);
+    }
+
     public string LastEventWriteErrorText
     {
         get => _lastEventWriteErrorText;
@@ -413,6 +423,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         ReplaceCollection(RecentEvents, recentEvents);
         ReplaceCollection(RecentErrors, recentErrors);
+
+        // IPC status — safe display, no FullPipeName/SID/paths/raw exceptions
+        if (_ipcStatusService is not null)
+        {
+            var statusText = _ipcStatusService.GetDisplayStatusText();
+            var pipe = _ipcStatusService.DisplayPipeName ?? "Current user pipe";
+            var success = _ipcStatusService.LastIpcSuccessUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+            var error = _ipcStatusService.LastIpcError is not null
+                ? DiagnosticMessageSanitizer.CreateSafeText(_ipcStatusService.LastIpcError, 120)
+                : "None";
+            var fallback = _ipcStatusService.LastFallbackUsedUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+            var source = _ipcStatusService.LastCommandSource;
+
+            IpcStatusText = $"IPC: {statusText}  |  Pipe: {pipe}  |  Source: {source}  |  Last success: {success}  |  Last error: {error}  |  Last fallback: {fallback}";
+        }
+        else
+        {
+            IpcStatusText = "IPC: not configured.";
+        }
     }
 
     private void RefreshCommonStatus(

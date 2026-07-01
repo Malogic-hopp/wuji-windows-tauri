@@ -112,6 +112,18 @@ public sealed class AgentControlService
                     ErrorCode = "IpcTimeout"
                 };
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Caller cancelled — don't fallback
+                return new AgentCommandResult
+                {
+                    RequestId = requestId,
+                    Accepted = false,
+                    Completed = false,
+                    Message = "Request cancelled.",
+                    ErrorCode = "Cancelled"
+                };
+            }
             catch
             {
                 // IPC unavailable — fallback with same requestId for dedup

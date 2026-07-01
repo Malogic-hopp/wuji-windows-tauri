@@ -306,6 +306,7 @@
                                         <TextBlock Text="{Binding CurrentSessionIdText, StringFormat=Current Session Id: {0}}" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" />
                                         <TextBlock Text="{Binding LastEventWriteErrorText, StringFormat=SQLite Last Error: {0}}" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                                         <TextBlock Text="{Binding LastJournalWriteErrorText, StringFormat=JSONL Last Error: {0}}" Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
+                                        <TextBlock Text="{Binding IpcStatusText}" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" TextWrapping="Wrap" />
                                     </StackPanel>
 
                                     <StackPanel Grid.Column="1" HorizontalAlignment="Stretch" VerticalAlignment="Top">

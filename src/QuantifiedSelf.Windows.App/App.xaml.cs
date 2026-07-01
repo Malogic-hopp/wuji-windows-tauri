@@ -71,7 +71,8 @@ public partial class App : Application
             sessionsViewModel,
             appsViewModel,
             settingsViewModel,
-            settingsService);
+            settingsService,
+            ipcStatusService);
 
         var window = new MainWindow(viewModel);
         MainWindow = window;

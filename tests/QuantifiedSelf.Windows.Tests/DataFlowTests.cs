@@ -6376,6 +6376,124 @@ public sealed class DataFlowTests
         Assert.Null(readResult.Command);
     }
 
+    // ── Diagnostics IPC Status Display Tests (Phase 8.6) ──
+
+    [Fact]
+    public async Task MainWindowViewModel_ShowsIpcUnavailableInitially()
+    {
+        using var workspace = new TempWorkspace();
+        var ipcStatus = new AgentIpcStatusService();
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
+        await viewModel.InitializeAsync();
+        // Navigate to Diagnostics to trigger RefreshDiagnosticsAsync
+        viewModel.SelectedTabIndex = 4; // Diagnostics
+        await viewModel.RefreshAsync();
+
+        Assert.Contains("IPC status unknown", viewModel.IpcStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_ShowsIpcSuccessState()
+    {
+        using var workspace = new TempWorkspace();
+        var ipcStatus = new AgentIpcStatusService();
+        ipcStatus.Initialize(new AgentPipeName("S-1-5-21-test"));
+        ipcStatus.RecordIpcSuccess();
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
+        await viewModel.InitializeAsync();
+        viewModel.SelectedTabIndex = 4;
+        await viewModel.RefreshAsync();
+
+        Assert.Contains("IPC connected", viewModel.IpcStatusText, StringComparison.Ordinal);
+        Assert.Contains("NamedPipe", viewModel.IpcStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_ShowsIpcFallbackUsed()
+    {
+        using var workspace = new TempWorkspace();
+        var ipcStatus = new AgentIpcStatusService();
+        ipcStatus.Initialize(new AgentPipeName("S-1-5-21-test"));
+        ipcStatus.RecordIpcFallback("IPC unavailable; using file fallback.");
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
+        await viewModel.InitializeAsync();
+        viewModel.SelectedTabIndex = 4;
+        await viewModel.RefreshAsync();
+
+        Assert.Contains("FileFallback", viewModel.IpcStatusText, StringComparison.Ordinal);
+        Assert.Contains("file fallback", viewModel.IpcStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_DoesNotExposeFullPipeNameOrSid()
+    {
+        using var workspace = new TempWorkspace();
+        var ipcStatus = new AgentIpcStatusService();
+        var pipeName = new AgentPipeName("S-1-5-21-3623811015-3361044348-30300820-1013");
+        ipcStatus.Initialize(pipeName);
+        ipcStatus.RecordIpcSuccess();
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
+        await viewModel.InitializeAsync();
+        viewModel.SelectedTabIndex = 4;
+        await viewModel.RefreshAsync();
+
+        // Must NOT expose FullPipeName or raw SID
+        Assert.DoesNotContain(pipeName.FullPipeName, viewModel.IpcStatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain("S-1-5-21", viewModel.IpcStatusText, StringComparison.Ordinal);
+        // DisplayPipeName (safe truncated version) is OK
+        Assert.Contains(pipeName.DisplayPipeName, viewModel.IpcStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_RedactsIpcErrorWithPathLikeString()
+    {
+        using var workspace = new TempWorkspace();
+        var ipcStatus = new AgentIpcStatusService();
+        ipcStatus.Initialize(new AgentPipeName("S-1-5-21-test"));
+        ipcStatus.RecordIpcFallback(@"C:\Users\test\error.log");
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
+        await viewModel.InitializeAsync();
+        viewModel.SelectedTabIndex = 4;
+        await viewModel.RefreshAsync();
+
+        Assert.Contains("file fallback", viewModel.IpcStatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\", viewModel.IpcStatusText, StringComparison.Ordinal);
+        Assert.DoesNotContain("Users", viewModel.IpcStatusText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AgentControlService_HandlesCancellationWithoutFallback()
+    {
+        // When the caller cancels, don't fallback — just return a cancelled result
+        var ipcStatus = new AgentIpcStatusService();
+        var fakeClient = new FakeIpcClient(new OperationCanceledException());
+
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var service = new AgentControlService(
+            paths, new AgentControlFileStore(),
+            CreateMinimalStatusService(),
+            fakeClient, ipcStatus);
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        var result = await service.RequestPauseAsync(cts.Token);
+
+        Assert.False(result.Completed);
+        Assert.Equal("Cancelled", result.ErrorCode);
+
+        // No file fallback should be written for a cancelled request
+        var store = new AgentControlFileStore();
+        var readResult = await store.PeekAsync(paths.AgentControlPath);
+        Assert.Null(readResult.Command);
+    }
+
     private static AgentStatusService CreateMinimalStatusService()
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());
@@ -6951,7 +7069,8 @@ public sealed class DataFlowTests
         Func<int, CancellationToken, Task<IReadOnlyList<ForegroundSample>>>? sampleLoader = null,
         Func<string, int, CancellationToken, Task<IReadOnlyList<AppSession>>>? sessionLoader = null,
         Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null,
-        Func<CancellationToken, Task<AppSettings>>? settingsLoader = null)
+        Func<CancellationToken, Task<AppSettings>>? settingsLoader = null,
+        AgentIpcStatusService? ipcStatusService = null)
     {
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
@@ -6998,7 +7117,8 @@ public sealed class DataFlowTests
             sessionsViewModel,
             appsViewModel,
             settingsViewModel,
-            settingsService);
+            settingsService,
+            ipcStatusService);
     }
 
     private static T GetPrivateFieldValue<T>(object instance, string fieldName)
