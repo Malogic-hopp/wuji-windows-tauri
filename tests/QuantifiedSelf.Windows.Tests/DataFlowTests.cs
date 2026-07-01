@@ -23,6 +23,9 @@ using QuantifiedSelf.Windows.Infrastructure.Events;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
+using QuantifiedSelf.Windows.Core.Ipc;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
+using System.Text.Json;
 
 namespace QuantifiedSelf.Windows.Tests;
 
@@ -5115,6 +5118,205 @@ public sealed class DataFlowTests
         Assert.NotNull(recentEvents);
     }
 
+    // ── IPC Protocol Tests (Phase 8.1) ──
+
+    [Fact]
+    public void AgentIpcRequest_RoundTripsJson()
+    {
+        var request = new AgentIpcRequest
+        {
+            ProtocolVersion = 1,
+            RequestId = "ipc-test-001",
+            Command = "ClearHistory",
+            DesiredState = AgentDesiredState.Paused,
+            RequestedBy = "TestSuite",
+            RequestedAtUtc = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc),
+            WaitForCompletion = true,
+            TimeoutMilliseconds = 10000
+        };
+
+        var json = JsonSerializer.Serialize(request);
+        var deserialized = JsonSerializer.Deserialize<AgentIpcRequest>(json)!;
+
+        Assert.Equal(1, deserialized.ProtocolVersion);
+        Assert.Equal("ipc-test-001", deserialized.RequestId);
+        Assert.Equal("ClearHistory", deserialized.Command);
+        Assert.Equal(AgentDesiredState.Paused, deserialized.DesiredState);
+        Assert.Equal("TestSuite", deserialized.RequestedBy);
+        Assert.True(deserialized.WaitForCompletion);
+        Assert.Equal(10000, deserialized.TimeoutMilliseconds);
+    }
+
+    [Fact]
+    public void AgentIpcResponse_RoundTripsJson()
+    {
+        var response = new AgentIpcResponse
+        {
+            ProtocolVersion = 1,
+            RequestId = "ipc-test-002",
+            Accepted = true,
+            Completed = true,
+            ActualState = AgentActualState.Paused,
+            Message = "ClearHistory completed",
+            ErrorCode = null,
+            StartedAtUtc = new DateTime(2026, 7, 1, 12, 0, 0, DateTimeKind.Utc),
+            CompletedAtUtc = new DateTime(2026, 7, 1, 12, 1, 0, DateTimeKind.Utc)
+        };
+
+        var json = JsonSerializer.Serialize(response);
+        var deserialized = JsonSerializer.Deserialize<AgentIpcResponse>(json)!;
+
+        Assert.Equal(1, deserialized.ProtocolVersion);
+        Assert.Equal("ipc-test-002", deserialized.RequestId);
+        Assert.True(deserialized.Accepted);
+        Assert.True(deserialized.Completed);
+        Assert.Equal(AgentActualState.Paused, deserialized.ActualState);
+        Assert.Equal("ClearHistory completed", deserialized.Message);
+        Assert.Null(deserialized.ErrorCode);
+    }
+
+    [Fact]
+    public void AgentPipeName_GeneratesStableNameForUserSid()
+    {
+        const string sid = "S-1-5-21-3623811015-3361044348-30300820-1013";
+
+        var name1 = new AgentPipeName(sid);
+        var name2 = new AgentPipeName(sid);
+
+        Assert.Equal(name1.FullPipeName, name2.FullPipeName);
+        Assert.Equal(name1.SidHash, name2.SidHash);
+        Assert.Equal(name1.DisplayPipeName, name2.DisplayPipeName);
+    }
+
+    [Fact]
+    public void AgentPipeName_DoesNotExposeRawSid()
+    {
+        const string sid = "S-1-5-21-3623811015-3361044348-30300820-1013";
+
+        var name = new AgentPipeName(sid);
+
+        Assert.DoesNotContain(sid, name.FullPipeName, StringComparison.Ordinal);
+        Assert.DoesNotContain(sid, name.DisplayPipeName, StringComparison.Ordinal);
+        Assert.DoesNotContain(sid, name.SidHash, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentPipeName_UsesDifferentNamesForDifferentUsers()
+    {
+        const string sid1 = "S-1-5-21-3623811015-3361044348-30300820-1013";
+        const string sid2 = "S-1-5-21-1004336348-1013361044-30200830-500";
+
+        var name1 = new AgentPipeName(sid1);
+        var name2 = new AgentPipeName(sid2);
+
+        Assert.NotEqual(name1.FullPipeName, name2.FullPipeName);
+        Assert.NotEqual(name1.SidHash, name2.SidHash);
+    }
+
+    [Fact]
+    public void AgentPipeName_ExposesSafeDisplayName()
+    {
+        const string sid = "S-1-5-21-3623811015-3361044348-30300820-1013";
+
+        var name = new AgentPipeName(sid);
+
+        Assert.StartsWith("QuantifiedSelf.Windows.Agent.", name.DisplayPipeName, StringComparison.Ordinal);
+        Assert.True(name.FullPipeName.Length > name.DisplayPipeName.Length);
+        // Display pipe name only exposes first 12 chars of the hash
+        var displayHashPart = name.DisplayPipeName.Split('.').Last();
+        Assert.True(displayHashPart.Length <= 12);
+        Assert.StartsWith(displayHashPart, name.SidHash, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task NamedPipeProtocol_RoundTripsLengthPrefixedJson()
+    {
+        var request = new AgentIpcRequest
+        {
+            RequestId = "ipc-rt-001",
+            Command = "GetStatus"
+        };
+
+        using var stream = new MemoryStream();
+        await NamedPipeProtocol.WriteMessageAsync(stream, request);
+
+        stream.Position = 0;
+        var deserialized = await NamedPipeProtocol.ReadMessageAsync<AgentIpcRequest>(stream);
+
+        Assert.Equal("ipc-rt-001", deserialized.RequestId);
+        Assert.Equal("GetStatus", deserialized.Command);
+        Assert.Equal(1, deserialized.ProtocolVersion);
+    }
+
+    [Fact]
+    public async Task NamedPipeProtocol_RejectsInvalidPayloadSafely()
+    {
+        using var stream = new MemoryStream();
+        // Write a valid length prefix (4 bytes) but garbage payload
+        var lengthBytes = BitConverter.GetBytes(10);
+        await stream.WriteAsync(lengthBytes);
+        var garbage = "NOT_VALID_"u8.ToArray();
+        await stream.WriteAsync(garbage);
+        stream.Position = 0;
+
+        var ex = await Assert.ThrowsAsync<IpcProtocolException>(
+            () => NamedPipeProtocol.ReadMessageAsync<AgentIpcRequest>(stream));
+
+        Assert.Equal("IpcProtocolError", ex.ErrorCode);
+        // Error message must not expose raw payload content
+        Assert.DoesNotContain("NOT_VALID", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task NamedPipeProtocol_RejectsPayloadOverMaxSize()
+    {
+        using var stream = new MemoryStream();
+        // Write length prefix claiming payload is > MaxPayloadBytes
+        var lengthBytes = BitConverter.GetBytes(NamedPipeProtocol.MaxPayloadBytes + 1);
+        await stream.WriteAsync(lengthBytes);
+        stream.Position = 0;
+
+        var ex = await Assert.ThrowsAsync<IpcProtocolException>(
+            () => NamedPipeProtocol.ReadMessageAsync<AgentIpcRequest>(stream));
+
+        Assert.Equal("IpcPayloadTooLarge", ex.ErrorCode);
+        Assert.Contains("too large", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task NamedPipeProtocol_RejectsTruncatedPayloadSafely()
+    {
+        using var stream = new MemoryStream();
+        // Write length prefix promising 100 bytes, but only write 10
+        var lengthBytes = BitConverter.GetBytes(100);
+        await stream.WriteAsync(lengthBytes);
+        var partialPayload = new byte[10];
+        await stream.WriteAsync(partialPayload);
+        stream.Position = 0;
+
+        var ex = await Assert.ThrowsAsync<IpcProtocolException>(
+            () => NamedPipeProtocol.ReadMessageAsync<AgentIpcRequest>(stream));
+
+        Assert.Equal("IpcProtocolError", ex.ErrorCode);
+    }
+
+    [Fact]
+    public async Task NamedPipeProtocol_RejectsWritePayloadOverMaxSize()
+    {
+        // Build a message whose JSON exceeds MaxPayloadBytes
+        var request = new AgentIpcRequest
+        {
+            RequestId = new string('x', NamedPipeProtocol.MaxPayloadBytes) // huge field forces JSON > 16 KB
+        };
+
+        using var stream = new MemoryStream();
+        var ex = await Assert.ThrowsAsync<IpcProtocolException>(
+            () => NamedPipeProtocol.WriteMessageAsync(stream, request));
+
+        Assert.Equal("IpcPayloadTooLarge", ex.ErrorCode);
+        Assert.Contains("too large", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     private sealed class FailingClearHistoryService : DataMaintenanceService
     {
         public FailingClearHistoryService() : base(new WindowsAgentPaths(Path.GetTempPath())) { }
@@ -5131,6 +5333,38 @@ public sealed class DataFlowTests
                 SessionsDeleted = 0,
                 AgentEventsDeleted = 0
             });
+        }
+    }
+
+    private sealed class RollbackOnSecondDeleteService : DataMaintenanceService
+    {
+        private readonly string _dbPath;
+
+        public RollbackOnSecondDeleteService(string dbPath) : base(new WindowsAgentPaths(Path.GetTempPath()))
+        {
+            _dbPath = dbPath;
+        }
+
+        public override async Task<ClearHistoryResult> ClearHistoryAsync(CancellationToken cancellationToken = default)
+        {
+            await using var connection = await SqliteConnectionFactory.OpenReadWriteAsync(_dbPath, cancellationToken);
+            await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+
+            try
+            {
+                // First DELETE succeeds
+                await using var cmd1 = connection.CreateCommand();
+                cmd1.CommandText = "DELETE FROM foreground_samples";
+                await cmd1.ExecuteNonQueryAsync(cancellationToken);
+
+                // Simulate a failure before the second DELETE
+                throw new InvalidOperationException("Simulated mid-transaction failure");
+            }
+            catch
+            {
+                await transaction.RollbackAsync(cancellationToken);
+                throw;
+            }
         }
     }
 
@@ -5264,6 +5498,34 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public async Task DataMaintenanceService_ClearHistoryRollsBackTransactionOnFailure()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
+        await initializer.InitializeAsync();
+
+        await InsertSampleAsync(paths.DatabasePath, new DateTime(2025, 6, 15, 12, 0, 0, DateTimeKind.Utc), "TestApp", null, "Active");
+        await InsertSessionAsync(paths.DatabasePath, new DateTime(2025, 6, 15, 12, 0, 0, DateTimeKind.Utc), new DateTime(2025, 6, 15, 12, 10, 0, DateTimeKind.Utc), "Sess", 600, 600, 0, 0, "Closed");
+
+        // Record row counts before the operation
+        await using var readBefore = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        var fgBefore = await CountAsync(readBefore, "SELECT COUNT(*) FROM foreground_samples;");
+        var sessBefore = await CountAsync(readBefore, "SELECT COUNT(*) FROM app_sessions;");
+
+        var failingService = new RollbackOnSecondDeleteService(paths.DatabasePath);
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => failingService.ClearHistoryAsync());
+
+        Assert.Contains("Simulated mid-transaction failure", ex.Message, StringComparison.Ordinal);
+
+        // After rollback, all rows must still be present
+        await using var readAfter = await SqliteConnectionFactory.OpenReadOnlyAsync(paths.DatabasePath);
+        Assert.Equal(fgBefore, await CountAsync(readAfter, "SELECT COUNT(*) FROM foreground_samples;"));
+        Assert.Equal(sessBefore, await CountAsync(readAfter, "SELECT COUNT(*) FROM app_sessions;"));
+    }
+
+    [Fact]
     public async Task AgentStateMachine_ClearHistoryWritesHistoryClearedAfterClearingEvents()
     {
         using var workspace = new TempWorkspace();
@@ -5309,7 +5571,7 @@ public sealed class DataFlowTests
         var historyCleared = Assert.Single(events.Where(x => x.EventType == AgentEventType.HistoryCleared));
         var payload = historyCleared.PayloadJson ?? string.Empty;
         Assert.Contains("\"foregroundSamplesDeleted\"", payload, StringComparison.Ordinal);
-        Assert.Contains("\"finalState\": \"Maintenance\"", payload, StringComparison.Ordinal);
+        Assert.Contains("\"finalState\": \"Paused\"", payload, StringComparison.Ordinal);
         Assert.DoesNotContain("\\\\", payload, StringComparison.Ordinal);
     }
 

@@ -219,7 +219,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         ValidateAgentOptionsCommand = new RelayCommand(ValidateAgentOptions, () => !IsLoading && !IsSaving);
         ResetAgentOptionsEditorCommand = new RelayCommand(ResetAgentOptionsEditor, () => !IsLoading && !IsSaving);
         ClearHistoryCommand = new AsyncRelayCommand(ClearHistoryAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup);
-        ConfirmClearHistoryCommand = new AsyncRelayCommand(ConfirmClearHistoryAsync, () => !IsLoading && !IsSaving && !string.IsNullOrWhiteSpace(ClearHistoryConfirmationInput));
+        ConfirmClearHistoryCommand = new AsyncRelayCommand(ConfirmClearHistoryAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup && !string.IsNullOrWhiteSpace(ClearHistoryConfirmationInput));
         PruneDataCommand = new AsyncRelayCommand(PruneDataAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup);
         OpenDataFolderCommand = new RelayCommand(() => OpenFolder(_paths.Root));
         OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(_paths.LogsDir));
@@ -1392,6 +1392,14 @@ public sealed partial class SettingsViewModel : ObservableObject
         if (_requestClearHistoryAsync is null)
         {
             ClearHistoryStatusText = "ClearHistory is not available in this configuration.";
+            HasClearHistoryError = true;
+            IsClearHistoryConfirming = false;
+            return;
+        }
+
+        if (!CanExecuteDataCleanup)
+        {
+            ClearHistoryStatusText = "Cannot clear history while the Agent is not running or is in maintenance.";
             HasClearHistoryError = true;
             IsClearHistoryConfirming = false;
             return;

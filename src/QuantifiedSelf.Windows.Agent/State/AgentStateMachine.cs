@@ -659,13 +659,17 @@ public sealed class AgentStateMachine
                         return result;
                     }
 
-                    // Tables are cleared — always write HistoryCleared.
-                    // JSONL partial failures are recorded in the payload but don't block completion.
-                    await WriteHistoryClearedEventAsync(command, clearResult, cancellationToken);
-
-                    ActualState = prevStateClear == AgentActualState.Running
+                    // Calculate final state before writing HistoryCleared —
+                    // the payload should reflect the state AFTER ClearHistory, not Maintenance.
+                    var historyClearedFinalState = prevStateClear == AgentActualState.Running
                         ? AgentActualState.Paused
                         : prevStateClear;
+
+                    ActualState = historyClearedFinalState;
+
+                    // Tables are cleared — always write HistoryCleared.
+                    // JSONL partial failures are recorded in the payload but don't block completion.
+                    await WriteHistoryClearedEventAsync(command, clearResult, historyClearedFinalState, cancellationToken);
 
                     await PersistAsync("ClearHistory completed", cancellationToken);
                     result.Completed = true;
@@ -1044,6 +1048,7 @@ public sealed class AgentStateMachine
     private Task WriteHistoryClearedEventAsync(
         AgentControlCommand command,
         ClearHistoryResult clearResult,
+        AgentActualState finalState,
         CancellationToken cancellationToken)
     {
         var payload = new Dictionary<string, object?>
@@ -1053,7 +1058,7 @@ public sealed class AgentStateMachine
             ["agentEventsDeleted"] = clearResult.AgentEventsDeleted,
             ["jsonlFilesDeleted"] = clearResult.JsonlFilesDeleted,
             ["jsonlDeleteErrorCount"] = clearResult.JsonlDeleteErrorCount,
-            ["finalState"] = AgentActualState.Maintenance.ToString()
+            ["finalState"] = finalState.ToString()
         };
 
         return WriteAgentEventAsync(
