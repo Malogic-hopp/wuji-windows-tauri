@@ -6848,6 +6848,206 @@ public sealed class DataFlowTests
         Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
     }
 
+    // ── Command Availability Tests (Phase 9.3) ──
+
+    [Fact]
+    public void AgentCommandAvailability_FollowsRunningStatus()
+    {
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Running });
+
+        Assert.False(availability.CanStart);
+        Assert.True(availability.CanStop);
+        Assert.True(availability.CanPause);
+        Assert.False(availability.CanResume);
+        Assert.True(availability.CanReloadConfigNow);
+        Assert.True(availability.CanPruneData);
+        Assert.True(availability.CanClearHistory);
+        Assert.False(availability.IsMaintenance);
+    }
+
+    [Fact]
+    public void AgentCommandAvailability_FollowsPausedStatus()
+    {
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Paused });
+
+        Assert.True(availability.CanStop);
+        Assert.False(availability.CanPause);
+        Assert.True(availability.CanResume);
+        Assert.True(availability.CanReloadConfigNow);
+        Assert.True(availability.CanPruneData);
+    }
+
+    [Fact]
+    public void AgentCommandAvailability_DisablesDuringMaintenance()
+    {
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Maintenance });
+
+        Assert.False(availability.CanStart);
+        Assert.False(availability.CanStop);
+        Assert.False(availability.CanPause);
+        Assert.False(availability.CanResume);
+        Assert.False(availability.CanReloadConfigNow);
+        Assert.False(availability.CanPruneData);
+        Assert.False(availability.CanClearHistory);
+        Assert.True(availability.IsMaintenance);
+    }
+
+    [Fact]
+    public void AgentCommandAvailability_DisablesCleanupWhenNotRunning()
+    {
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = false, ActualState = AgentActualState.NotRunning });
+
+        Assert.True(availability.CanStart);
+        Assert.False(availability.CanStop);
+        Assert.False(availability.CanPause);
+        Assert.False(availability.CanResume);
+        Assert.False(availability.CanReloadConfigNow);
+        Assert.False(availability.CanPruneData);
+        Assert.False(availability.CanClearHistory);
+        Assert.Contains("not running", availability.ReloadConfigStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AgentCommandAvailability_HandlesStaleConservatively()
+    {
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = true, IsStale = true, ActualState = AgentActualState.Stale });
+
+        Assert.False(availability.CanStart);
+        Assert.True(availability.CanStop); // only Stop is allowed for Stale
+        Assert.False(availability.CanPause);
+        Assert.False(availability.CanResume);
+        Assert.False(availability.CanReloadConfigNow);
+        Assert.False(availability.CanPruneData);
+        Assert.False(availability.CanClearHistory);
+    }
+
+    [Fact]
+    public void SettingsViewModel_CommandStatesFollowSharedAgentStatus()
+    {
+        var paths = new WindowsAgentPaths(Path.GetTempPath());
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            paths);
+
+        viewModel.UpdateAgentStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Running });
+
+        Assert.True(viewModel.CanExecuteDataCleanup);
+        Assert.True(viewModel.CanReloadAgentConfig);
+        Assert.Contains("running", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SettingsViewModel_DataCleanupDisabledDuringMaintenance()
+    {
+        var paths = new WindowsAgentPaths(Path.GetTempPath());
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            paths);
+
+        viewModel.UpdateAgentStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Maintenance });
+
+        Assert.False(viewModel.CanExecuteDataCleanup);
+        Assert.False(viewModel.CanReloadAgentConfig);
+        Assert.Contains("maintenance", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_StatusUpdateDoesNotOverwriteDirtyEditors()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            paths);
+
+        await viewModel.LoadAsync();
+        viewModel.ExcludedProcessesText = "notepad.exe";
+        viewModel.UpdateAgentStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Running });
+
+        // Editor field must not be reset by status update
+        Assert.Equal("notepad.exe", viewModel.ExcludedProcessesText);
+        Assert.True(viewModel.IsDirty);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ClearHistoryConfirmDisabledWhenStatusChangesToMaintenance()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var viewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.CompletedTask,
+            _ => Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true }),
+            null,
+            _ => Task.FromResult(new AgentCommandResult { Accepted = true, Completed = true }),
+            null,
+            new AgentOptionsValidator(),
+            paths);
+
+        await viewModel.LoadAsync();
+        await viewModel.ClearHistoryAsync();
+        viewModel.ClearHistoryConfirmationInput = "CLEAR";
+
+        // Status changes to Maintenance while confirmation panel is open
+        viewModel.UpdateAgentStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Maintenance });
+
+        Assert.False(viewModel.ConfirmClearHistoryCommand.CanExecute(null));
+
+        // Even direct call must refuse (runtime guard kicks in)
+        await viewModel.ConfirmClearHistoryAsync();
+        Assert.True(viewModel.HasClearHistoryError);
+    }
+
+    [Fact]
+    public void MainWindowAndSettings_CommandAvailabilityStayConsistentForSameSnapshot()
+    {
+        var paths = new WindowsAgentPaths(Path.GetTempPath());
+        var settingsViewModel = new SettingsViewModel(
+            _ => Task.FromResult(new AppSettings()),
+            (_, _) => Task.CompletedTask,
+            _ => Task.FromResult(new WindowsAgentOptions()),
+            paths);
+
+        foreach (var state in new[] { AgentActualState.Running, AgentActualState.Paused, AgentActualState.Maintenance, AgentActualState.NotRunning })
+        {
+            var snapshot = new AgentStatusSnapshot
+            {
+                IsRunning = state is AgentActualState.Running or AgentActualState.Paused or AgentActualState.Maintenance,
+                ActualState = state
+            };
+
+            var availability = AgentCommandAvailability.FromStatus(snapshot);
+            settingsViewModel.UpdateAgentStatus(snapshot);
+
+            // MainWindow and Settings must agree on data cleanup and reload availability
+            Assert.Equal(availability.CanReloadConfigNow, settingsViewModel.CanReloadAgentConfig);
+            Assert.Equal(availability.CanPruneData, settingsViewModel.CanExecuteDataCleanup);
+        }
+    }
+
     private static AgentStatusService CreateMinimalStatusService()
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());

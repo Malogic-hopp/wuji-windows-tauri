@@ -44,6 +44,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly DispatcherTimer _statusPollTimer;
     private CancellationTokenSource? _statusPollCts;
     private long _latestAppliedStatusSequence;
+    private AgentCommandAvailability _commandAvailability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot());
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
 
     private AppSettings _appSettings = new();
@@ -102,10 +103,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _settingsService = settingsService;
         _settingsViewModel.AppSettingsSaved += HandleAppSettingsSaved;
 
-        StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy && !_isMaintenance);
-        StopAgentCommand = new AsyncRelayCommand(StopAgentAsync, () => !IsBusy && !_isMaintenance);
-        PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy && !_isMaintenance);
-        ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy && !_isMaintenance);
+        StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy && _commandAvailability.CanStart);
+        StopAgentCommand = new AsyncRelayCommand(StopAgentAsync, () => !IsBusy && _commandAvailability.CanStop);
+        PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy && _commandAvailability.CanPause);
+        ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy && _commandAvailability.CanResume);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
         OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = GetPageIndex("Settings"));
 
@@ -595,15 +596,17 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AgentStatusSnapshot status,
         AgentProcessInfo? processInfo)
     {
-        var wasMaintenance = _isMaintenance;
         _isMaintenance = status.ActualState == AgentActualState.Maintenance;
-        if (wasMaintenance != _isMaintenance)
-        {
-            ((AsyncRelayCommand)StartAgentCommand).NotifyCanExecuteChanged();
-            ((AsyncRelayCommand)StopAgentCommand).NotifyCanExecuteChanged();
-            ((AsyncRelayCommand)PauseCollectionCommand).NotifyCanExecuteChanged();
-            ((AsyncRelayCommand)ResumeCollectionCommand).NotifyCanExecuteChanged();
-        }
+
+        // Compute shared availability and notify all control commands
+        _commandAvailability = AgentCommandAvailability.FromStatus(status);
+        ((AsyncRelayCommand)StartAgentCommand).NotifyCanExecuteChanged();
+        ((AsyncRelayCommand)StopAgentCommand).NotifyCanExecuteChanged();
+        ((AsyncRelayCommand)PauseCollectionCommand).NotifyCanExecuteChanged();
+        ((AsyncRelayCommand)ResumeCollectionCommand).NotifyCanExecuteChanged();
+
+        // Dispatch same status to Settings so buttons stay in sync
+        _settingsViewModel.UpdateAgentStatus(status);
 
         AgentStatusText = status.StatusText;
         LastHeartbeatText = status.LastHeartbeatText;

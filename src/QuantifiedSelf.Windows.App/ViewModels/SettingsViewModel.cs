@@ -350,6 +350,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             {
                 PruneDataCommand.NotifyCanExecuteChanged();
                 ClearHistoryCommand.NotifyCanExecuteChanged();
+                ConfirmClearHistoryCommand.NotifyCanExecuteChanged();
             }
         }
     }
@@ -1060,6 +1061,18 @@ public sealed partial class SettingsViewModel : ObservableObject
         IsDirty = false;
     }
 
+    /// <summary>
+    /// Called by MainWindowViewModel when Agent status is applied (from polling or full refresh).
+    /// Uses the shared AgentCommandAvailability for consistency with MainWindow buttons.
+    /// </summary>
+    public void UpdateAgentStatus(AgentStatusSnapshot status)
+    {
+        var availability = AgentCommandAvailability.FromStatus(status);
+        CanReloadAgentConfig = availability.CanReloadConfigNow;
+        CanExecuteDataCleanup = availability.CanPruneData; // same rule as CanClearHistory
+        AgentOptionsReloadStatusText = availability.ReloadConfigStatusText;
+    }
+
     private async Task UpdateAgentStatusAsync(CancellationToken cancellationToken)
     {
         if (_getAgentStatusAsync is null)
@@ -1073,19 +1086,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         try
         {
             var status = await _getAgentStatusAsync(cancellationToken);
-            var canReload = status.IsRunning
-                && (status.ActualState == AgentActualState.Running || status.ActualState == AgentActualState.Paused)
-                && status.ActualState != AgentActualState.Maintenance;
-            CanReloadAgentConfig = canReload;
-            CanExecuteDataCleanup = status.IsRunning
-                && (status.ActualState == AgentActualState.Running || status.ActualState == AgentActualState.Paused);
-            AgentOptionsReloadStatusText = status.ActualState switch
-            {
-                AgentActualState.NotRunning or AgentActualState.Stopped => "Agent is not running. Saved configuration will take effect on next Agent start.",
-                AgentActualState.Running or AgentActualState.Paused => "Agent is running. You can apply the saved configuration with Reload Config.",
-                AgentActualState.Maintenance => "Agent is performing maintenance. Reload is temporarily unavailable.",
-                _ => "Agent status changed. Reload availability will update shortly."
-            };
+            UpdateAgentStatus(status);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
