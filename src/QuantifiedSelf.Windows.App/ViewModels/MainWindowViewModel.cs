@@ -41,6 +41,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SettingsViewModel _settingsViewModel;
     private readonly SettingsService _settingsService;
     private readonly DispatcherTimer _refreshTimer;
+    private readonly DispatcherTimer _statusPollTimer;
+    private CancellationTokenSource? _statusPollCts;
+    private long _latestAppliedStatusSequence;
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
 
     private AppSettings _appSettings = new();
@@ -111,6 +114,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
             Interval = TimeSpan.FromSeconds(15)
         };
         _refreshTimer.Tick += async (_, _) => await RefreshAsync();
+
+        _statusPollTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(2)
+        };
+        _statusPollTimer.Tick += async (_, _) => await RefreshStatusOnlyAsync();
     }
 
     public IAsyncRelayCommand StartAgentCommand { get; }
@@ -313,8 +322,73 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _suppressPagePersistence = false;
 
         _refreshTimer.Start();
+        _statusPollTimer.Start();
 
         await RefreshAsync(cancellationToken);
+    }
+
+    internal void StopStatusPolling()
+    {
+        _statusPollTimer.Stop();
+        _statusPollCts?.Cancel();
+        _statusPollCts?.Dispose();
+        _statusPollCts = null;
+    }
+
+    private async Task RefreshStatusOnlyAsync()
+    {
+        if (_refreshService is null) return;
+        await PerformStatusPollAsync();
+    }
+
+    /// <summary>
+    /// Internal hook for tests to trigger a single status poll cycle without a real timer.
+    /// </summary>
+    internal async Task PerformStatusPollAsync()
+    {
+        if (_refreshService is null) return;
+
+        // Cancel any in-flight status poll (latest-wins)
+        _statusPollCts?.Cancel();
+        _statusPollCts?.Dispose();
+        _statusPollCts = new CancellationTokenSource();
+
+        try
+        {
+            var currentPage = GetPageForIndex(SelectedTabIndex);
+            var result = await _refreshService.RefreshStatusAsync(currentPage, _statusPollCts.Token);
+
+            if (result.PageRefreshSkipped) return;
+
+            ApplyStatusRefreshResult(result);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when superseded by a newer poll
+        }
+        catch (Exception ex)
+        {
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            StatusMessage = string.IsNullOrWhiteSpace(safeMessage)
+                ? "Refresh failed."
+                : $"Refresh failed: {safeMessage}";
+            Messages.Clear();
+            Messages.Add(StatusMessage);
+        }
+    }
+
+    private void ApplyStatusRefreshResult(RefreshResult result)
+    {
+        // Latest-wins: ignore result if a newer one has already been applied
+        if (result.RefreshSequence <= _latestAppliedStatusSequence) return;
+        _latestAppliedStatusSequence = result.RefreshSequence;
+
+        // Only apply status if no error occurred
+        if (string.IsNullOrWhiteSpace(result.Health.LastRefreshError))
+        {
+            RefreshCommonStatus(result.Status, result.ProcessInfo);
+        }
+        // Don't refresh page data — status polling is status-only
     }
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
@@ -386,7 +460,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             if (!hasStatusError)
             {
-                RefreshCommonStatus(result.Status, result.ProcessInfo);
+                // Latest-wins: don't apply older status over a newer one already shown
+                if (result.RefreshSequence > _latestAppliedStatusSequence)
+                {
+                    _latestAppliedStatusSequence = result.RefreshSequence;
+                    RefreshCommonStatus(result.Status, result.ProcessInfo);
+                }
+                // Always refresh current page data (full refresh intent)
                 await RefreshCurrentPageDataAsync(result.Status, cancellationToken);
             }
             else

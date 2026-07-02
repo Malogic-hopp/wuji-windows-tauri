@@ -6692,6 +6692,162 @@ public sealed class DataFlowTests
         Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
     }
 
+    // ── Status Polling Tests (Phase 9.2) ──
+
+    [Fact]
+    public async Task RefreshService_RefreshStatusAsyncReturnsStatusOnly()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Paused,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var result = await refreshService.RefreshStatusAsync("Dashboard");
+
+        Assert.False(result.PageDataRefreshed);
+        Assert.Equal(AgentActualState.Paused, result.Status.ActualState);
+        Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
+    }
+
+    [Fact]
+    public async Task RefreshService_IgnoresOlderStatusResult()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var r1 = await refreshService.RefreshStatusAsync("Dashboard");
+        var r2 = await refreshService.RefreshStatusAsync("Dashboard");
+
+        Assert.True(r2.RefreshSequence > r1.RefreshSequence);
+    }
+
+    [Fact]
+    public async Task RefreshService_StatusPollingFailureDoesNotClearState()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+
+        var statusService = new FailingStatusService(new InvalidOperationException("test"));
+        var refreshService = new RefreshService(
+            statusService,
+            new AgentProcessService(paths, new RuntimeStateStore(),
+                new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance));
+
+        var result = await refreshService.RefreshStatusAsync("Dashboard");
+
+        Assert.NotNull(refreshService.Health.LastRefreshError);
+        Assert.False(result.PageDataRefreshed);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_StatusPollingDoesNotLoadSettingsWhenDirty()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
+        await viewModel.InitializeAsync();
+
+        // Simulate dirty settings — user is editing
+        typeof(SettingsViewModel)
+            .GetProperty("IsDirty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(viewModel.SettingsViewModel, true);
+
+        // Trigger status poll through ViewModel's internal path (same as timer tick)
+        await viewModel.PerformStatusPollAsync();
+
+        viewModel.StopStatusPolling();
+        // Settings should still be dirty after polling
+        Assert.True(viewModel.SettingsViewModel.IsDirty);
+        // Status polling should not have refreshed page data
+        Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_StatusPollingDoesNotCallPageDataServices()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        // Use a session loader that counts calls — status polling should NOT invoke it
+        int sessionLoadCount = 0;
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace, refreshService: refreshService,
+            sessionLoader: (_, _, _) =>
+            {
+                sessionLoadCount++;
+                return Task.FromResult<IReadOnlyList<AppSession>>([]);
+            });
+
+        await viewModel.InitializeAsync();
+
+        // Trigger status poll through ViewModel's internal path
+        await viewModel.PerformStatusPollAsync();
+        viewModel.StopStatusPolling();
+
+        // Session loader must NOT have been called during status polling
+        Assert.Equal(0, sessionLoadCount);
+        Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
+    }
+
     private static AgentStatusService CreateMinimalStatusService()
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());

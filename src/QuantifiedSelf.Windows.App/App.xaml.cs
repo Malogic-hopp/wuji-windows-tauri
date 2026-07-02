@@ -78,6 +78,7 @@ public partial class App : Application
 
         var window = new MainWindow(viewModel);
         MainWindow = window;
+        window.Closed += (_, _) => viewModel.StopStatusPolling();
         window.Show();
     }
 
