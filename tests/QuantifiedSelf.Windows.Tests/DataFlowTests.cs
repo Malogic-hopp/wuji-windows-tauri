@@ -6494,6 +6494,204 @@ public sealed class DataFlowTests
         Assert.Null(readResult.Command);
     }
 
+    // ── RefreshService Tests (Phase 9.1) ──
+
+    [Fact]
+    public async Task RefreshService_RefreshesStatusAndProcessInfo()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var statusService = new AgentStatusService(
+            paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(
+            paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+        var refreshService = new RefreshService(statusService, processService);
+
+        var result = await refreshService.RefreshAsync("Dashboard");
+
+        Assert.NotNull(result.Status);
+        Assert.NotNull(result.Health);
+        Assert.Equal("Dashboard", result.CurrentPage);
+        Assert.True(result.RefreshSequence > 0);
+        Assert.NotEqual(default, result.StartedAtUtc);
+        Assert.NotEqual(default, result.CompletedAtUtc);
+    }
+
+    [Fact]
+    public async Task RefreshService_RecordsLastSuccess()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var statusService = new AgentStatusService(
+            paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(
+            paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+        var refreshService = new RefreshService(statusService, processService);
+
+        await refreshService.RefreshAsync("Dashboard");
+
+        Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
+        Assert.Null(refreshService.Health.LastRefreshError);
+        Assert.Equal("Refresh succeeded.", refreshService.Health.StatusText);
+    }
+
+    [Fact]
+    public async Task RefreshService_RecordsSafeError()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+
+        // Use non-existent paths to make status service fail — but the
+        // process service will still succeed. The status service will return
+        // NotRunning since no runtime state exists, which doesn't throw.
+        // Instead, test via a malformed status service that throws.
+        var statusService = new FailingStatusService(new InvalidOperationException(
+            @"Access to C:\Users\malogic\secret\path.log is denied."));
+        var processService = new AgentProcessService(
+            paths, new RuntimeStateStore(), new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+        var refreshService = new RefreshService(statusService, processService);
+
+        var result = await refreshService.RefreshAsync("Diagnostics");
+
+        Assert.NotNull(refreshService.Health.LastRefreshError);
+        Assert.DoesNotContain(@"C:\", refreshService.Health.LastRefreshError, StringComparison.Ordinal);
+        Assert.DoesNotContain("malogic", refreshService.Health.LastRefreshError, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret", refreshService.Health.LastRefreshError, StringComparison.Ordinal);
+    }
+
+    private sealed class FailingStatusService : AgentStatusService
+    {
+        private readonly Exception _exception;
+
+        public FailingStatusService(Exception exception)
+            : base(new WindowsAgentPaths(Path.GetTempPath()),
+                new RuntimeStateStore(), new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore())
+        {
+            _exception = exception;
+        }
+
+        public override Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
+        {
+            throw _exception;
+        }
+    }
+
+    [Fact]
+    public async Task RefreshService_SkipsReentrantRefresh()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var statusService = new AgentStatusService(
+            paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(
+            paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+        var refreshService = new RefreshService(statusService, processService);
+
+        // Start two concurrent refreshes — second should be skipped
+        var t1 = refreshService.RefreshAsync("Dashboard");
+        var t2 = refreshService.RefreshAsync("Dashboard");
+        await Task.WhenAll(t1, t2);
+
+        Assert.True(refreshService.Health.SkippedRefreshCount >= 1);
+    }
+
+    [Fact]
+    public async Task RefreshService_ReturnsSequenceAndTimestamps()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var statusService = new AgentStatusService(
+            paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(
+            paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+        var refreshService = new RefreshService(statusService, processService);
+
+        var r1 = await refreshService.RefreshAsync("Dashboard");
+        var r2 = await refreshService.RefreshAsync("Dashboard");
+
+        Assert.True(r2.RefreshSequence > r1.RefreshSequence);
+        Assert.True(r1.StartedAtUtc <= r1.CompletedAtUtc);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_RefreshUsesRefreshService()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
+        await viewModel.InitializeAsync();
+
+        // Refresh via service — should not throw
+        await viewModel.RefreshAsync();
+        Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
+    }
+
     private static AgentStatusService CreateMinimalStatusService()
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());
@@ -7070,7 +7268,8 @@ public sealed class DataFlowTests
         Func<string, int, CancellationToken, Task<IReadOnlyList<AppSession>>>? sessionLoader = null,
         Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null,
         Func<CancellationToken, Task<AppSettings>>? settingsLoader = null,
-        AgentIpcStatusService? ipcStatusService = null)
+        AgentIpcStatusService? ipcStatusService = null,
+        RefreshService? refreshService = null)
     {
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
@@ -7118,7 +7317,8 @@ public sealed class DataFlowTests
             appsViewModel,
             settingsViewModel,
             settingsService,
-            ipcStatusService);
+            ipcStatusService,
+            refreshService);
     }
 
     private static T GetPrivateFieldValue<T>(object instance, string fieldName)

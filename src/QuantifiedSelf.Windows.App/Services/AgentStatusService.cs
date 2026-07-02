@@ -14,7 +14,7 @@ using QuantifiedSelf.Windows.Infrastructure.Settings;
 
 namespace QuantifiedSelf.Windows.App.Services;
 
-public sealed class AgentStatusService
+public class AgentStatusService
 {
     private readonly WindowsAgentPaths _paths;
     private readonly RuntimeStateStore _runtimeStateStore;
@@ -89,7 +89,7 @@ public sealed class AgentStatusService
         return await _controlFileStore.PeekAsync(_paths.AgentControlPath, cancellationToken);
     }
 
-    public async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
+    public virtual async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         // Try IPC first
         if (_ipcClient is not null)

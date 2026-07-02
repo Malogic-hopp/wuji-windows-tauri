@@ -31,6 +31,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AgentProcessService _processService;
     private readonly AgentControlService _controlService;
     private readonly AgentStatusService _statusService;
+    private readonly RefreshService? _refreshService;
     private readonly OverviewDataService _overviewDataService;
     private readonly DiagnosticsDataService _diagnosticsDataService;
     private readonly AgentIpcStatusService? _ipcStatusService;
@@ -81,7 +82,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AppsViewModel appsViewModel,
         SettingsViewModel settingsViewModel,
         SettingsService settingsService,
-        AgentIpcStatusService? ipcStatusService = null)
+        AgentIpcStatusService? ipcStatusService = null,
+        RefreshService? refreshService = null)
     {
         _processService = processService;
         _controlService = controlService;
@@ -89,6 +91,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _overviewDataService = overviewDataService;
         _diagnosticsDataService = diagnosticsDataService;
         _ipcStatusService = ipcStatusService;
+        _refreshService = refreshService;
         _samplesViewModel = samplesViewModel;
         _sessionsViewModel = sessionsViewModel;
         _appsViewModel = appsViewModel;
@@ -323,6 +326,25 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         try
         {
+            if (_refreshService is not null)
+            {
+                await RefreshViaServiceAsync(cancellationToken);
+            }
+            else
+            {
+                await RefreshLegacyAsync(cancellationToken);
+            }
+        }
+        finally
+        {
+            _refreshGate.Release();
+        }
+    }
+
+    private async Task RefreshLegacyAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
             IsBusy = true;
 
             var status = await _statusService.GetStatusAsync(cancellationToken);
@@ -343,7 +365,52 @@ public sealed partial class MainWindowViewModel : ObservableObject
         finally
         {
             IsBusy = false;
-            _refreshGate.Release();
+        }
+    }
+
+    private async Task RefreshViaServiceAsync(CancellationToken cancellationToken)
+    {
+        var currentPage = GetPageForIndex(SelectedTabIndex);
+        var result = await _refreshService!.RefreshAsync(currentPage, cancellationToken);
+
+        if (result.PageRefreshSkipped)
+        {
+            return;
+        }
+
+        // If status fetch failed, don't overwrite UI state with defaults
+        bool hasStatusError = !string.IsNullOrWhiteSpace(result.Health.LastRefreshError);
+
+        IsBusy = true;
+        try
+        {
+            if (!hasStatusError)
+            {
+                RefreshCommonStatus(result.Status, result.ProcessInfo);
+                await RefreshCurrentPageDataAsync(result.Status, cancellationToken);
+            }
+            else
+            {
+                var safeMessage = result.Health.LastRefreshError!;
+                StatusMessage = safeMessage.StartsWith("Refresh failed", StringComparison.OrdinalIgnoreCase)
+                    ? safeMessage
+                    : $"Refresh failed: {safeMessage}";
+                Messages.Clear();
+                Messages.Add(StatusMessage);
+            }
+        }
+        catch (Exception ex)
+        {
+            var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+            StatusMessage = string.IsNullOrWhiteSpace(safeMessage)
+                ? "Refresh failed."
+                : $"Refresh failed: {safeMessage}";
+            Messages.Clear();
+            Messages.Add(StatusMessage);
+        }
+        finally
+        {
+            IsBusy = false;
         }
     }
 

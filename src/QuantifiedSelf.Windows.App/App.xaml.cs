@@ -60,6 +60,7 @@ public partial class App : Application
         var appsViewModel = new AppsViewModel(appsDataService);
         Resources.Add("BooleanToVisibilityConverter", new BooleanToVisibilityConverter());
 
+        var refreshService = new RefreshService(statusService, processService);
         var settingsViewModel = new SettingsViewModel(settingsService, statusService, controlService, diagnosticsDataService, paths);
         var viewModel = new MainWindowViewModel(
             processService,
@@ -72,7 +73,8 @@ public partial class App : Application
             appsViewModel,
             settingsViewModel,
             settingsService,
-            ipcStatusService);
+            ipcStatusService,
+            refreshService);
 
         var window = new MainWindow(viewModel);
         MainWindow = window;
