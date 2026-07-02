@@ -35,7 +35,7 @@ public sealed class RefreshService
         // so 2s status polls never block page-data refreshes.
         if (!await _statusGate.WaitAsync(0, cancellationToken))
         {
-            _health.RecordSkipped();
+            _health.RecordStatusSkipped();
             return new RefreshResult
             {
                 RefreshSequence = Interlocked.Read(ref _refreshSequence),
@@ -51,14 +51,14 @@ public sealed class RefreshService
 
         try
         {
-            _health.IsRefreshing = true;
+            _health.IsStatusRefreshing = true;
             var startedAt = DateTime.UtcNow;
             var sequence = Interlocked.Increment(ref _refreshSequence);
 
             var status = await _statusService.GetStatusAsync(cancellationToken);
             var processInfo = await _processService.GetAgentProcessInfoAsync(cancellationToken);
 
-            _health.RecordSuccess();
+            _health.RecordStatusSuccess();
 
             return new RefreshResult
             {
@@ -76,7 +76,7 @@ public sealed class RefreshService
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             // Normal: superseded by a newer status poll — not an error
-            _health.IsRefreshing = false;
+            _health.IsStatusRefreshing = false;
             return new RefreshResult
             {
                 RefreshSequence = Interlocked.Read(ref _refreshSequence),
@@ -97,7 +97,7 @@ public sealed class RefreshService
                 safeMessage = "Refresh failed.";
             }
 
-            _health.RecordError(safeMessage);
+            _health.RecordStatusError(safeMessage);
 
             return new RefreshResult
             {
@@ -120,7 +120,7 @@ public sealed class RefreshService
     {
         if (!await _refreshGate.WaitAsync(0, cancellationToken))
         {
-            _health.RecordSkipped();
+            _health.RecordStatusSkipped();
             return new RefreshResult
             {
                 RefreshSequence = Interlocked.Read(ref _refreshSequence),
@@ -136,14 +136,14 @@ public sealed class RefreshService
 
         try
         {
-            _health.IsRefreshing = true;
+            _health.IsStatusRefreshing = true;
             var startedAt = DateTime.UtcNow;
             var sequence = Interlocked.Increment(ref _refreshSequence);
 
             var status = await _statusService.GetStatusAsync(cancellationToken);
             var processInfo = await _processService.GetAgentProcessInfoAsync(cancellationToken);
 
-            _health.RecordSuccess();
+            _health.RecordStatusSuccess();
 
             return new RefreshResult
             {
@@ -166,7 +166,7 @@ public sealed class RefreshService
                 safeMessage = "Refresh failed.";
             }
 
-            _health.RecordError(safeMessage);
+            _health.RecordStatusError(safeMessage);
 
             return new RefreshResult
             {

@@ -46,6 +46,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private long _latestAppliedStatusSequence;
     private AgentCommandAvailability _commandAvailability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot());
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
+    private readonly SemaphoreSlim _pageRefreshGate = new(1, 1);
 
     private AppSettings _appSettings = new();
     private bool _suppressPagePersistence;
@@ -394,25 +395,72 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
-        if (!await _refreshGate.WaitAsync(0, cancellationToken))
+        if (_refreshService is not null)
         {
-            return;
+            await RefreshWithServiceAsync(cancellationToken);
+        }
+        else
+        {
+            await RefreshLegacyAsync(cancellationToken);
+        }
+    }
+
+    private async Task RefreshWithServiceAsync(CancellationToken cancellationToken)
+    {
+        // Phase 1: fetch + apply status under outer gate
+        AgentStatusSnapshot? statusToApply = null;
+        AgentProcessInfo? processToApply = null;
+        bool hasStatusError = false;
+        string? statusError = null;
+
+        if (await _refreshGate.WaitAsync(0, cancellationToken))
+        {
+            try
+            {
+                var currentPage = GetPageForIndex(SelectedTabIndex);
+                var result = await _refreshService!.RefreshAsync(currentPage, cancellationToken);
+
+                if (!result.PageRefreshSkipped)
+                {
+                    statusToApply = result.Status;
+                    processToApply = result.ProcessInfo;
+                    statusError = result.Health.LastStatusRefreshError;
+                    hasStatusError = !string.IsNullOrWhiteSpace(statusError);
+
+                    if (!hasStatusError)
+                    {
+                        if (result.RefreshSequence > _latestAppliedStatusSequence)
+                        {
+                            _latestAppliedStatusSequence = result.RefreshSequence;
+                            RefreshCommonStatus(result.Status, result.ProcessInfo);
+                        }
+                    }
+                    else
+                    {
+                        StatusMessage = statusError!.StartsWith("Refresh failed", StringComparison.OrdinalIgnoreCase)
+                            ? statusError
+                            : $"Refresh failed: {statusError}";
+                        Messages.Clear();
+                        Messages.Add(StatusMessage);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
+                StatusMessage = string.IsNullOrWhiteSpace(safeMessage) ? "Refresh failed." : $"Refresh failed: {safeMessage}";
+                Messages.Clear(); Messages.Add(StatusMessage);
+            }
+            finally
+            {
+                _refreshGate.Release();
+            }
         }
 
-        try
+        // Phase 2: page refresh under _pageRefreshGate (outside outer gate)
+        if (statusToApply is not null && !hasStatusError)
         {
-            if (_refreshService is not null)
-            {
-                await RefreshViaServiceAsync(cancellationToken);
-            }
-            else
-            {
-                await RefreshLegacyAsync(cancellationToken);
-            }
-        }
-        finally
-        {
-            _refreshGate.Release();
+            await RefreshCurrentPageDataWithGateAsync(statusToApply, cancellationToken);
         }
     }
 
@@ -426,7 +474,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             var processInfo = await _processService.GetAgentProcessInfoAsync(cancellationToken);
 
             RefreshCommonStatus(status, processInfo);
-            await RefreshCurrentPageDataAsync(status, cancellationToken);
+            await RefreshCurrentPageDataWithGateAsync(status, cancellationToken);
         }
         catch (Exception ex)
         {
@@ -443,55 +491,31 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    private async Task RefreshViaServiceAsync(CancellationToken cancellationToken)
+    private async Task RefreshCurrentPageDataWithGateAsync(
+        AgentStatusSnapshot status,
+        CancellationToken cancellationToken)
     {
-        var currentPage = GetPageForIndex(SelectedTabIndex);
-        var result = await _refreshService!.RefreshAsync(currentPage, cancellationToken);
-
-        if (result.PageRefreshSkipped)
+        if (!await _pageRefreshGate.WaitAsync(0, cancellationToken))
         {
+            _refreshService?.Health.RecordPageSkipped();
             return;
         }
 
-        // If status fetch failed, don't overwrite UI state with defaults
-        bool hasStatusError = !string.IsNullOrWhiteSpace(result.Health.LastRefreshError);
-
-        IsBusy = true;
         try
         {
-            if (!hasStatusError)
-            {
-                // Latest-wins: don't apply older status over a newer one already shown
-                if (result.RefreshSequence > _latestAppliedStatusSequence)
-                {
-                    _latestAppliedStatusSequence = result.RefreshSequence;
-                    RefreshCommonStatus(result.Status, result.ProcessInfo);
-                }
-                // Always refresh current page data (full refresh intent)
-                await RefreshCurrentPageDataAsync(result.Status, cancellationToken);
-            }
-            else
-            {
-                var safeMessage = result.Health.LastRefreshError!;
-                StatusMessage = safeMessage.StartsWith("Refresh failed", StringComparison.OrdinalIgnoreCase)
-                    ? safeMessage
-                    : $"Refresh failed: {safeMessage}";
-                Messages.Clear();
-                Messages.Add(StatusMessage);
-            }
+            if (_refreshService is not null) _refreshService.Health.IsPageRefreshing = true;
+            await RefreshCurrentPageDataAsync(status, cancellationToken);
+            _refreshService?.Health.RecordPageSuccess(GetPageForIndex(SelectedTabIndex));
         }
         catch (Exception ex)
         {
             var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
-            StatusMessage = string.IsNullOrWhiteSpace(safeMessage)
-                ? "Refresh failed."
-                : $"Refresh failed: {safeMessage}";
-            Messages.Clear();
-            Messages.Add(StatusMessage);
+            if (string.IsNullOrWhiteSpace(safeMessage)) safeMessage = "Page refresh failed.";
+            _refreshService?.Health.RecordPageError(safeMessage);
         }
         finally
         {
-            IsBusy = false;
+            _pageRefreshGate.Release();
         }
     }
 

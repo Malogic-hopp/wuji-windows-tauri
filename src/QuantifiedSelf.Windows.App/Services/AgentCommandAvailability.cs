@@ -24,7 +24,7 @@ public sealed class AgentCommandAvailability
 
         return new AgentCommandAvailability
         {
-            CanStart = (state is AgentActualState.NotRunning or AgentActualState.Stopped) && !isMaintenance,
+            CanStart = !status.IsRunning && !isMaintenance,
             CanStop = (state is AgentActualState.Running or AgentActualState.Paused or AgentActualState.Stale) && !isMaintenance,
             CanPause = state == AgentActualState.Running && !isMaintenance,
             CanResume = state == AgentActualState.Paused && !isMaintenance,

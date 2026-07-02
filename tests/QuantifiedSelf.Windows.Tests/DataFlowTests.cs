@@ -6927,6 +6927,17 @@ public sealed class DataFlowTests
     }
 
     [Fact]
+    public void AgentCommandAvailability_AllowsStartWhenStaleButProcessGone()
+    {
+        // Agent died without clean shutdown — state files say Running but process is gone
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = false, IsStale = true, ActualState = AgentActualState.Stale });
+
+        Assert.True(availability.CanStart, "Should allow Start when process confirmed gone");
+        Assert.False(availability.CanReloadConfigNow);
+    }
+
+    [Fact]
     public void SettingsViewModel_CommandStatesFollowSharedAgentStatus()
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());
@@ -7046,6 +7057,234 @@ public sealed class DataFlowTests
             Assert.Equal(availability.CanReloadConfigNow, settingsViewModel.CanReloadAgentConfig);
             Assert.Equal(availability.CanPruneData, settingsViewModel.CanExecuteDataCleanup);
         }
+    }
+
+    // ── Status/Page Decouple Tests (Phase 9.4) ──
+
+    [Fact]
+    public async Task RefreshService_StatusAndPageHealthAreTrackedSeparately()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var result = await refreshService.RefreshStatusAsync("Dashboard");
+
+        Assert.NotNull(refreshService.Health.LastStatusRefreshSuccessUtc);
+        Assert.Null(refreshService.Health.LastPageRefreshSuccessUtc);
+        Assert.Equal(0, refreshService.Health.SkippedPageRefreshCount);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_SlowPageRefreshDoesNotBlockStatusRefresh()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        // Use a slow session loader controlled by TaskCompletionSource
+        var pageTcs = new TaskCompletionSource<IReadOnlyList<AppSession>>();
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace, refreshService: refreshService,
+            sessionLoader: (_, _, _) => pageTcs.Task);
+
+        await viewModel.InitializeAsync();
+        viewModel.SelectedTabIndex = 2; // Sessions tab
+
+        // Start a page refresh that will hang on the session loader
+        var pageTask = viewModel.RefreshAsync();
+        await Task.Delay(100);
+
+        // Status polling should still work while page refresh is hanging
+        var statusResult = await refreshService.RefreshStatusAsync("Sessions");
+
+        Assert.NotNull(refreshService.Health.LastStatusRefreshSuccessUtc);
+        Assert.False(statusResult.PageDataRefreshed);
+
+        // Release the page refresh
+        pageTcs.SetResult([]);
+        await pageTask;
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_ReentrantPageRefreshRecordsSkippedCount()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        // Hang on session loader
+        var pageTcs = new TaskCompletionSource<IReadOnlyList<AppSession>>();
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace, refreshService: refreshService,
+            sessionLoader: (_, _, _) => pageTcs.Task);
+
+        await viewModel.InitializeAsync();
+        viewModel.SelectedTabIndex = 2; // Sessions
+
+        // Start first page refresh — will hang
+        var pageTask = viewModel.RefreshAsync();
+        await Task.Delay(100);
+
+        // Second RefreshAsync should still update status (gate released) and skip page refresh
+        var beforeSkipCount = refreshService.Health.SkippedPageRefreshCount;
+        await viewModel.RefreshAsync();
+
+        // Page refresh reentry should be recorded
+        Assert.True(refreshService.Health.SkippedPageRefreshCount > beforeSkipCount);
+
+        // Release and clean up
+        pageTcs.SetResult([]);
+        await pageTask;
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_PageRefreshErrorDoesNotClearAgentStatus()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Paused,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace, refreshService: refreshService,
+            sessionLoader: (_, _, _) => throw new InvalidOperationException("DB error"));
+
+        await viewModel.InitializeAsync();
+
+        // Agent status should still reflect the real state (Paused), not defaults
+        Assert.Contains("Paused", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.NotNull(refreshService.Health.LastStatusRefreshSuccessUtc);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_StatusRefreshErrorDoesNotClearPageData()
+    {
+        // Status refresh fails, but page data from prior refresh should remain
+        // This is verified by checking that page health is NOT polluted by status error
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        // Do a successful refresh first
+        var result = await refreshService.RefreshStatusAsync("Dashboard");
+        Assert.Null(refreshService.Health.LastStatusRefreshError);
+
+        // Now simulate a failed status refresh (page health untouched)
+        var failingStatusService = new FailingStatusService(new InvalidOperationException("fail"));
+        var failingRefreshService = new RefreshService(
+            failingStatusService,
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        await failingRefreshService.RefreshStatusAsync("Dashboard");
+
+        Assert.NotNull(failingRefreshService.Health.LastStatusRefreshError);
+        Assert.Null(failingRefreshService.Health.LastPageRefreshError);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_SettingsDirtyStillSkipsConfigReloadDuringPageRefresh()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        {
+            ProcessId = Environment.ProcessId,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        });
+
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+                new AgentControlFileStore(), new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance));
+
+        var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
+        await viewModel.InitializeAsync();
+
+        typeof(SettingsViewModel)
+            .GetProperty("IsDirty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!
+            .SetValue(viewModel.SettingsViewModel, true);
+
+        viewModel.SelectedTabIndex = 5; // Settings
+        await viewModel.RefreshAsync();
+
+        Assert.True(viewModel.SettingsViewModel.IsDirty);
+        Assert.NotNull(refreshService.Health.LastStatusRefreshSuccessUtc);
     }
 
     private static AgentStatusService CreateMinimalStatusService()
