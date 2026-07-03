@@ -680,12 +680,23 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         _isMaintenance = status.ActualState == AgentActualState.Maintenance;
 
-        // Compute shared availability and notify all control commands
-        _commandAvailability = AgentCommandAvailability.FromStatus(status);
-        ((AsyncRelayCommand)StartAgentCommand).NotifyCanExecuteChanged();
-        ((AsyncRelayCommand)StopAgentCommand).NotifyCanExecuteChanged();
-        ((AsyncRelayCommand)PauseCollectionCommand).NotifyCanExecuteChanged();
-        ((AsyncRelayCommand)ResumeCollectionCommand).NotifyCanExecuteChanged();
+        // Compute shared availability — only notify if it actually changed
+        var newAvailability = AgentCommandAvailability.FromStatus(status);
+        var availabilityChanged =
+            newAvailability.CanStart != _commandAvailability.CanStart ||
+            newAvailability.CanStop != _commandAvailability.CanStop ||
+            newAvailability.CanPause != _commandAvailability.CanPause ||
+            newAvailability.CanResume != _commandAvailability.CanResume;
+
+        _commandAvailability = newAvailability;
+
+        if (availabilityChanged)
+        {
+            ((AsyncRelayCommand)StartAgentCommand).NotifyCanExecuteChanged();
+            ((AsyncRelayCommand)StopAgentCommand).NotifyCanExecuteChanged();
+            ((AsyncRelayCommand)PauseCollectionCommand).NotifyCanExecuteChanged();
+            ((AsyncRelayCommand)ResumeCollectionCommand).NotifyCanExecuteChanged();
+        }
 
         // Dispatch same status to Settings so buttons stay in sync
         _settingsViewModel.UpdateAgentStatus(status);
