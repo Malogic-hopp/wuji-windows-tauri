@@ -71,6 +71,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _journalWriterStatusText = "JSONL writer: unknown";
     private string _currentJournalPathText = "-";
     private string _ipcStatusText = "";
+    private string _refreshHealthText = "";
     private string _lastEventWriteErrorText = "None";
     private string _lastJournalWriteErrorText = "None";
     private string _currentSessionIdText = "-";
@@ -290,6 +291,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _ipcStatusText, value);
     }
 
+    public string RefreshHealthText
+    {
+        get => _refreshHealthText;
+        private set => SetProperty(ref _refreshHealthText, value);
+    }
+
     public string LastEventWriteErrorText
     {
         get => _lastEventWriteErrorText;
@@ -379,18 +386,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
     }
 
-    private void ApplyStatusRefreshResult(RefreshResult result)
+    internal void ApplyStatusRefreshResult(RefreshResult result)
     {
         // Latest-wins: ignore result if a newer one has already been applied
         if (result.RefreshSequence <= _latestAppliedStatusSequence) return;
         _latestAppliedStatusSequence = result.RefreshSequence;
 
-        // Only apply status if no error occurred
-        if (string.IsNullOrWhiteSpace(result.Health.LastRefreshError))
+        // Only apply status if no status error occurred (page errors don't block status)
+        if (string.IsNullOrWhiteSpace(result.Health.LastStatusRefreshError))
         {
             RefreshCommonStatus(result.Status, result.ProcessInfo);
         }
         // Don't refresh page data — status polling is status-only
+
+        // Update refresh health display if user is on Diagnostics
+        if (GetPageForIndex(SelectedTabIndex) == "Diagnostics")
+        {
+            UpdateRefreshHealthPresentation();
+        }
     }
 
     public async Task RefreshAsync(CancellationToken cancellationToken = default)
@@ -506,12 +519,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
             if (_refreshService is not null) _refreshService.Health.IsPageRefreshing = true;
             await RefreshCurrentPageDataAsync(status, cancellationToken);
             _refreshService?.Health.RecordPageSuccess(GetPageForIndex(SelectedTabIndex));
+            UpdateRefreshHealthPresentation();
         }
         catch (Exception ex)
         {
             var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
             if (string.IsNullOrWhiteSpace(safeMessage)) safeMessage = "Page refresh failed.";
             _refreshService?.Health.RecordPageError(safeMessage);
+            UpdateRefreshHealthPresentation();
         }
         finally
         {
@@ -614,6 +629,49 @@ public sealed partial class MainWindowViewModel : ObservableObject
         {
             IpcStatusText = "IPC: not configured.";
         }
+
+        UpdateRefreshHealthPresentation();
+    }
+
+    internal void UpdateRefreshHealthPresentation()
+    {
+        if (_refreshService is null)
+        {
+            RefreshHealthText = "Refresh loop: not configured.";
+            return;
+        }
+
+        var h = _refreshService.Health;
+
+        // Determine loop status
+        var loopStatus = "Ready";
+        if (h.IsStatusRefreshing || h.IsPageRefreshing)
+            loopStatus = "Refreshing";
+        else if (!string.IsNullOrWhiteSpace(h.LastStatusRefreshError) || !string.IsNullOrWhiteSpace(h.LastPageRefreshError))
+            loopStatus = "Degraded";
+        else if (h.LastStatusRefreshSuccessUtc is not null || h.LastPageRefreshSuccessUtc is not null)
+            loopStatus = "Healthy";
+
+        var statusSuccess = h.LastStatusRefreshSuccessUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+        var statusError = string.IsNullOrWhiteSpace(h.LastStatusRefreshError)
+            ? "None"
+            : DiagnosticMessageSanitizer.CreateSafeText(h.LastStatusRefreshError, 120);
+        var statusSkipped = h.SkippedStatusRefreshCount;
+
+        var pageSuccess = h.LastPageRefreshSuccessUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+        var pageError = string.IsNullOrWhiteSpace(h.LastPageRefreshError)
+            ? "None"
+            : DiagnosticMessageSanitizer.CreateSafeText(h.LastPageRefreshError, 120);
+        var pageSkipped = h.SkippedPageRefreshCount;
+        var pageLast = h.LastPageRefreshPage ?? "-";
+
+        var statusInterval = "2s";
+        var pageInterval = $"{_appSettings.RefreshIntervalSeconds}s";
+
+        RefreshHealthText = $"Refresh loop: {loopStatus}  |  "
+            + $"Status: last={statusSuccess}, error={statusError}, skipped={statusSkipped}  |  "
+            + $"Page: last={pageSuccess}, error={pageError}, skipped={pageSkipped}, page={pageLast}  |  "
+            + $"Intervals: status polling {statusInterval}, page refresh {pageInterval}";
     }
 
     private void RefreshCommonStatus(
