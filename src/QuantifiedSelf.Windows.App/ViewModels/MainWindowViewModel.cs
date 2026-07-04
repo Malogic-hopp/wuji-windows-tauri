@@ -776,6 +776,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         return new AppSettings
         {
             AutoStartAgentWhenAppStarts = settings.AutoStartAgentWhenAppStarts,
+            StartAppOnWindowsLogin = settings.StartAppOnWindowsLogin,
             MinimizeToTray = settings.MinimizeToTray,
             CloseToTray = settings.CloseToTray,
             RefreshIntervalSeconds = settings.RefreshIntervalSeconds,

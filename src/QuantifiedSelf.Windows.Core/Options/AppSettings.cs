@@ -4,6 +4,8 @@ public sealed class AppSettings
 {
     public bool AutoStartAgentWhenAppStarts { get; set; }
 
+    public bool StartAppOnWindowsLogin { get; set; }
+
     public bool MinimizeToTray { get; set; } = true;
 
     public bool CloseToTray { get; set; } = true;

@@ -67,6 +67,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _refreshIntervalSecondsText = "15";
     private bool _autoStartAgentWhenAppStarts;
     private string _autoStartAgentWhenAppStartsText = "Disabled";
+    private bool _startAppOnWindowsLogin;
+    private string _startAppOnWindowsLoginText = "Disabled";
     private string _lastSelectedPageText = "Dashboard";
     private string _samplingIntervalSecondsText = "3";
     private string _idleThresholdSecondsText = "60";
@@ -482,6 +484,25 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         get => _autoStartAgentWhenAppStartsText;
         private set => SetProperty(ref _autoStartAgentWhenAppStartsText, value);
+    }
+
+    public bool StartAppOnWindowsLogin
+    {
+        get => _startAppOnWindowsLogin;
+        set
+        {
+            if (SetProperty(ref _startAppOnWindowsLogin, value))
+            {
+                StartAppOnWindowsLoginText = FormatSwitch(value);
+                IsDirty = true;
+            }
+        }
+    }
+
+    public string StartAppOnWindowsLoginText
+    {
+        get => _startAppOnWindowsLoginText;
+        private set => SetProperty(ref _startAppOnWindowsLoginText, value);
     }
 
     public string LastSelectedPageText
@@ -1232,6 +1253,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         RefreshIntervalSecondsText = appSettings.RefreshIntervalSeconds.ToString(CultureInfo.InvariantCulture);
         AutoStartAgentWhenAppStarts = appSettings.AutoStartAgentWhenAppStarts;
+        StartAppOnWindowsLogin = appSettings.StartAppOnWindowsLogin;
         LastSelectedPageText = NormalizeLastSelectedPage(appSettings.LastSelectedPage);
     }
 
@@ -1255,6 +1277,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         appSettings = new AppSettings
         {
             AutoStartAgentWhenAppStarts = AutoStartAgentWhenAppStarts,
+            StartAppOnWindowsLogin = StartAppOnWindowsLogin,
             RefreshIntervalSeconds = refreshIntervalSeconds,
             LastSelectedPage = AppSettings.LastSelectedPage,
             MinimizeToTray = AppSettings.MinimizeToTray,

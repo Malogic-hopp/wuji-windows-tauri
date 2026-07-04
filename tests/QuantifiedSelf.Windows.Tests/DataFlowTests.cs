@@ -8983,6 +8983,223 @@ public sealed class DataFlowTests
         }
     }
 
+    // ─── Phase 11.1: AppSettings & StartupLaunchOptions ───
+
+    [Fact]
+    public void AppSettings_DefaultsStartAppOnWindowsLoginToFalse()
+    {
+        var settings = new AppSettings();
+        Assert.False(settings.StartAppOnWindowsLogin);
+    }
+
+    [Fact]
+    public async Task AppSettingsStore_ReadOldSettingsDefaultsLoginStartupFalse()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "app-settings.json");
+
+        // Write settings without StartAppOnWindowsLogin (simulating old config)
+        var oldJson = """{"AutoStartAgentWhenAppStarts":true,"MinimizeToTray":true,"CloseToTray":true,"RefreshIntervalSeconds":15,"Theme":"Light","LastSelectedPage":"Dashboard"}""";
+        await File.WriteAllTextAsync(path, oldJson);
+
+        var store = new AppSettingsStore();
+        var result = await store.ReadAsync(path);
+
+        Assert.NotNull(result);
+        Assert.False(result.StartAppOnWindowsLogin);
+        Assert.True(result.AutoStartAgentWhenAppStarts);
+    }
+
+    [Fact]
+    public async Task AppSettingsStore_RoundTripPreservesStartAppOnWindowsLogin()
+    {
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "app-settings.json");
+
+        var store = new AppSettingsStore();
+        var original = new AppSettings
+        {
+            StartAppOnWindowsLogin = true,
+            AutoStartAgentWhenAppStarts = false,
+            MinimizeToTray = true,
+            CloseToTray = true,
+            RefreshIntervalSeconds = 15,
+            Theme = "Light",
+            LastSelectedPage = "Dashboard"
+        };
+
+        await store.WriteAsync(path, original);
+        var result = await store.ReadAsync(path);
+
+        Assert.NotNull(result);
+        Assert.True(result.StartAppOnWindowsLogin);
+        Assert.False(result.AutoStartAgentWhenAppStarts);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_LoadsStartAppOnWindowsLogin()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var appSettingsPath = Path.Combine(paths.ConfigDir, "app-settings.json");
+        var store = new AppSettingsStore();
+        await store.WriteAsync(appSettingsPath, new AppSettings
+        {
+            StartAppOnWindowsLogin = true,
+            AutoStartAgentWhenAppStarts = false
+        });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+            new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var diagService = new DiagnosticsDataService(paths);
+        var viewModel = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
+
+        await viewModel.LoadAsync();
+
+        Assert.True(viewModel.StartAppOnWindowsLogin);
+        Assert.Equal("Enabled", viewModel.StartAppOnWindowsLoginText);
+        Assert.False(viewModel.AutoStartAgentWhenAppStarts);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_SavesStartAppOnWindowsLogin()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+            new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var diagService = new DiagnosticsDataService(paths);
+        var viewModel = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
+
+        await viewModel.LoadAsync();
+        viewModel.StartAppOnWindowsLogin = true;
+        await viewModel.SaveAppSettingsAsync();
+
+        // Reload and verify
+        var viewModel2 = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
+        await viewModel2.LoadAsync();
+        Assert.True(viewModel2.StartAppOnWindowsLogin);
+        Assert.False(viewModel2.IsDirty);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_ParsesAutostartHiddenArgs()
+    {
+        var args = new[] { "--from-autostart", "--start-hidden" };
+        var options = StartupLaunchOptions.Parse(args);
+
+        Assert.Equal(LaunchMode.AutoStart, options.Mode);
+        Assert.True(options.FromAutostart);
+        Assert.True(options.StartHidden);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_IgnoresUnknownArgs()
+    {
+        var args = new[] { "--from-autostart", "--unknown-flag", "positional" };
+        var options = StartupLaunchOptions.Parse(args);
+
+        Assert.Equal(LaunchMode.AutoStart, options.Mode);
+        Assert.True(options.FromAutostart);
+        Assert.False(options.StartHidden);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_DefaultsToManualVisible()
+    {
+        var options = StartupLaunchOptions.Parse([]);
+
+        Assert.Equal(LaunchMode.Manual, options.Mode);
+        Assert.False(options.FromAutostart);
+        Assert.False(options.StartHidden);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_ParsesOnlyStartHiddenWithoutFromAutostart()
+    {
+        var args = new[] { "--start-hidden" };
+        var options = StartupLaunchOptions.Parse(args);
+
+        Assert.Equal(LaunchMode.Manual, options.Mode);
+        Assert.False(options.FromAutostart);
+        Assert.True(options.StartHidden);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_ParsesEmptyArgsAsManual()
+    {
+        var options = StartupLaunchOptions.Parse([]);
+
+        Assert.Equal(LaunchMode.Manual, options.Mode);
+        Assert.False(options.FromAutostart);
+        Assert.False(options.StartHidden);
+        Assert.NotNull(options.RawArgs);
+        Assert.Empty(options.RawArgs);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_ParsesCaseInsensitive()
+    {
+        var args = new[] { "--FROM-AUTOSTART", "--START-HIDDEN" };
+        var options = StartupLaunchOptions.Parse(args);
+
+        Assert.Equal(LaunchMode.AutoStart, options.Mode);
+        Assert.True(options.FromAutostart);
+        Assert.True(options.StartHidden);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_ParsesAutostartOnly()
+    {
+        var args = new[] { "--from-autostart" };
+        var options = StartupLaunchOptions.Parse(args);
+
+        Assert.Equal(LaunchMode.AutoStart, options.Mode);
+        Assert.True(options.FromAutostart);
+        Assert.False(options.StartHidden);
+    }
+
+    [Fact]
+    public async Task AppSettingsStore_WriteThenReadPreservesAllExistingFields()
+    {
+        // Verify that adding StartAppOnWindowsLogin doesn't regress existing fields
+        using var workspace = new TempWorkspace();
+        var path = Path.Combine(workspace.Root, "app-settings.json");
+
+        var store = new AppSettingsStore();
+        var original = new AppSettings
+        {
+            AutoStartAgentWhenAppStarts = true,
+            MinimizeToTray = false,
+            CloseToTray = false,
+            RefreshIntervalSeconds = 30,
+            Theme = "Dark",
+            LastSelectedPage = "Settings",
+            StartAppOnWindowsLogin = true
+        };
+
+        await store.WriteAsync(path, original);
+        var result = await store.ReadAsync(path);
+
+        Assert.NotNull(result);
+        Assert.True(result.AutoStartAgentWhenAppStarts);
+        Assert.False(result.MinimizeToTray);
+        Assert.False(result.CloseToTray);
+        Assert.Equal(30, result.RefreshIntervalSeconds);
+        Assert.Equal("Dark", result.Theme);
+        Assert.Equal("Settings", result.LastSelectedPage);
+        Assert.True(result.StartAppOnWindowsLogin);
+    }
+
     private sealed class TempWorkspace : IDisposable
     {
         public TempWorkspace()

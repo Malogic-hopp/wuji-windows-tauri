@@ -18,10 +18,15 @@ namespace QuantifiedSelf.Windows.App;
 public partial class App : Application
 {
     private bool _isExitRequested;
+    private StartupLaunchOptions _startupLaunchOptions = StartupLaunchOptions.Parse([]);
+
+    internal StartupLaunchOptions StartupLaunchOptions => _startupLaunchOptions;
 
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+
+        _startupLaunchOptions = StartupLaunchOptions.Parse(e.Args);
 
         var paths = new WindowsAgentPaths();
         paths.EnsureDirectories();
