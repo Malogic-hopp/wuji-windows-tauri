@@ -7820,7 +7820,7 @@ public sealed class DataFlowTests
         var state = TrayMenuState.From(snapshot, availability,
             "NamedPipe"); // safe short identifier, not FullPipeName
 
-        Assert.DoesNotContain("S-1-5-21", state.TooltipText, StringComparison.Ordinal);
+        Assert.DoesNotContain("S-1-5-21", state.TooltipText);
         Assert.DoesNotContain(@"C:\", state.TooltipText, StringComparison.Ordinal);
         Assert.True(state.TooltipText.Length <= 63);
     }
@@ -7986,6 +7986,194 @@ public sealed class DataFlowTests
         adapter.RaiseResumeRequested();
         adapter.RaiseStopRequested();
         Assert.True(true);
+    }
+
+    // ── Tray Status Recovery Tests (Phase 10.6) ──
+
+    [Fact]
+    public void TrayStatus_ShowsNotRunningState()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = false, ActualState = AgentActualState.NotRunning };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability);
+
+        Assert.Contains("NotRunning", state.TooltipText, StringComparison.Ordinal);
+        Assert.True(state.CanStart);
+        Assert.False(state.CanPause);
+        Assert.False(state.CanStop);
+    }
+
+    [Fact]
+    public void TrayStatus_DisablesStartWhenStaleButProcessAlive()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = true, IsStale = true, ActualState = AgentActualState.Stale };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability);
+
+        Assert.False(state.CanStart);
+        Assert.True(state.CanStop);
+        Assert.False(state.CanPause);
+    }
+
+    [Fact]
+    public void TrayStatus_RecoversFromNotRunningToRunning()
+    {
+        var notRunning = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = false, ActualState = AgentActualState.NotRunning },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = false, ActualState = AgentActualState.NotRunning }));
+        Assert.True(notRunning.CanStart);
+
+        var running = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            "NamedPipe");
+        Assert.False(running.CanStart);
+        Assert.True(running.CanPause);
+        Assert.True(running.CanStop);
+        Assert.Contains("NamedPipe", running.TooltipText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayStatus_IpcFallbackRecoversToNamedPipe()
+    {
+        var fallback = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            "FileFallback");
+        Assert.Contains("FileFallback", fallback.TooltipText, StringComparison.Ordinal);
+
+        var recovered = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            "NamedPipe");
+        Assert.Contains("NamedPipe", recovered.TooltipText, StringComparison.Ordinal);
+        Assert.DoesNotContain("FileFallback", recovered.TooltipText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayStatus_IpcUnavailableShowsSafeText()
+    {
+        var state = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }),
+            null); // unknown/absent → "unavailable"
+
+        Assert.Contains("unavailable", state.TooltipText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\", state.TooltipText, StringComparison.Ordinal);
+        Assert.DoesNotContain("S-1-5-21", state.TooltipText);
+    }
+
+    [Fact]
+    public void TrayStatus_RecoversFromStaleToRunning()
+    {
+        var staleState = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = false, IsStale = true, ActualState = AgentActualState.Stale },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = false, IsStale = true, ActualState = AgentActualState.Stale }));
+        Assert.True(staleState.CanStart, "Stale+no process: Start should be available");
+
+        var runningState = TrayMenuState.From(
+            new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running },
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running }));
+        Assert.False(runningState.CanStart, "After recovery: Start must be disabled");
+        Assert.True(runningState.CanPause, "After recovery: Pause must be available");
+    }
+
+    [Fact]
+    public void TrayStatus_DoesNotCrashOnDefaultSnapshot()
+    {
+        // Agent "exited" means no runtime state — TrayMenuState.From handles defaults
+        var state = TrayMenuState.From(
+            new AgentStatusSnapshot(),
+            AgentCommandAvailability.FromStatus(new AgentStatusSnapshot()));
+        Assert.NotNull(state);
+        Assert.NotNull(state.TooltipText);
+        Assert.True(state.CanStart, "Default snapshot should allow Start");
+    }
+
+    [Fact]
+    public async Task TrayStatus_RecoveryUpdatesTrayStateSinkViaViewModel()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
+
+        var statusService = new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var sink = new FakeTrayStateSink();
+        var viewModel = CreateMinimalMainWindowViewModel(statusService, sink);
+
+        // Apply Stale state (agent process gone)
+        viewModel.ApplyStatusRefreshResult(new RefreshResult
+        {
+            RefreshSequence = 50,
+            Status = new AgentStatusSnapshot { IsRunning = false, IsStale = true, ActualState = AgentActualState.Stale, StatusText = "Stale" },
+            Health = new RefreshHealthSnapshot()
+        });
+        Assert.NotNull(sink.LastState);
+        Assert.True(sink.LastState!.CanStart, "Stale+no process: Start should be available");
+        Assert.False(sink.LastState.CanPause, "Stale: Pause should be disabled");
+
+        // Recover to Running
+        viewModel.ApplyStatusRefreshResult(new RefreshResult
+        {
+            RefreshSequence = 100,
+            Status = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running, StatusText = "Running" },
+            Health = new RefreshHealthSnapshot()
+        });
+        Assert.False(sink.LastState!.CanStart, "After recovery: Start must be disabled");
+        Assert.True(sink.LastState.CanPause, "After recovery: Pause must be available");
+        Assert.True(sink.LastState.CanStop, "After recovery: Stop must be available");
+    }
+
+    [Fact]
+    public async Task TrayStatus_DoesNotOverrideSettingsDrafts()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
+
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsViewModel = new SettingsViewModel(settingsService, paths);
+        await settingsViewModel.LoadAsync();
+        settingsViewModel.ExcludedProcessesText = "notepad.exe";
+
+        var statusService = new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var sink = new FakeTrayStateSink();
+
+        var processService = new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var overviewService = new OverviewDataService(paths);
+        var diagService = new DiagnosticsDataService(paths);
+
+        var viewModel = new MainWindowViewModel(
+            processService, controlService, statusService, overviewService, diagService,
+            new SamplesViewModel(new SamplesDataService(paths)),
+            new SessionsViewModel(new SessionsDataService(paths)),
+            new AppsViewModel(new AppsDataService(paths)),
+            settingsViewModel, settingsService,
+            trayStateSink: sink);
+
+        // Apply status update — tray should receive it, but settings drafts must stay
+        viewModel.ApplyStatusRefreshResult(new RefreshResult
+        {
+            RefreshSequence = 10,
+            Status = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running, StatusText = "Running" },
+            Health = new RefreshHealthSnapshot()
+        });
+
+        Assert.NotNull(sink.LastState);
+        Assert.Equal("notepad.exe", settingsViewModel.ExcludedProcessesText);
+        Assert.True(settingsViewModel.IsDirty);
     }
 
     private static MainWindowViewModel CreateMinimalMainWindowViewModel(
