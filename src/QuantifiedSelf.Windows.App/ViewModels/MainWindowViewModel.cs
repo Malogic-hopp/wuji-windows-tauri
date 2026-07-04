@@ -35,6 +35,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly OverviewDataService _overviewDataService;
     private readonly DiagnosticsDataService _diagnosticsDataService;
     private readonly AgentIpcStatusService? _ipcStatusService;
+    private ITrayStateSink? _trayStateSink;
     private readonly SamplesViewModel _samplesViewModel;
     private readonly SessionsViewModel _sessionsViewModel;
     private readonly AppsViewModel _appsViewModel;
@@ -89,7 +90,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SettingsViewModel settingsViewModel,
         SettingsService settingsService,
         AgentIpcStatusService? ipcStatusService = null,
-        RefreshService? refreshService = null)
+        RefreshService? refreshService = null,
+        ITrayStateSink? trayStateSink = null)
     {
         _processService = processService;
         _controlService = controlService;
@@ -98,6 +100,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _diagnosticsDataService = diagnosticsDataService;
         _ipcStatusService = ipcStatusService;
         _refreshService = refreshService;
+        _trayStateSink = trayStateSink;
         _samplesViewModel = samplesViewModel;
         _sessionsViewModel = sessionsViewModel;
         _appsViewModel = appsViewModel;
@@ -154,6 +157,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public AppsViewModel AppsViewModel => _appsViewModel;
 
     public SettingsViewModel SettingsViewModel => _settingsViewModel;
+
+    internal ITrayStateSink? TrayStateSink
+    {
+        get => _trayStateSink;
+        set => _trayStateSink = value;
+    }
 
     public string AgentStatusText
     {
@@ -700,6 +709,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         // Dispatch same status to Settings so buttons stay in sync
         _settingsViewModel.UpdateAgentStatus(status);
+
+        // Sync tray tooltip and menu availability
+        if (_trayStateSink is not null)
+        {
+            var trayState = TrayMenuState.From(status, _commandAvailability,
+                _ipcStatusService?.LastCommandSource);
+            _trayStateSink.UpdateState(trayState);
+        }
 
         AgentStatusText = status.StatusText;
         LastHeartbeatText = status.LastHeartbeatText;

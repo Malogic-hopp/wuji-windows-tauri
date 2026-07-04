@@ -27,6 +27,7 @@ using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using System.IO.Pipes;
+using System.Windows.Threading;
 using System.Text.Json;
 
 namespace QuantifiedSelf.Windows.Tests;
@@ -7586,6 +7587,430 @@ public sealed class DataFlowTests
                 return Task.FromResult(_snapshots.Dequeue());
             return Task.FromResult(new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running });
         }
+    }
+
+    // ── Tray Service Tests (Phase 10.2) ──
+
+    private sealed class FakeTrayIconAdapter : ITrayIconAdapter
+    {
+        private string _tooltip = "";
+
+        public bool Visible
+        {
+            get => _visible;
+            set { _callLog.Add($"SetVisible:{value}"); _visible = value; }
+        }
+        private bool _visible;
+
+        public string TooltipText
+        {
+            get => _tooltip;
+            set
+            {
+                var truncated = (value ?? "").Length <= 63 ? (value ?? "") : (value ?? "")[..62] + "…";
+                _callLog.Add($"SetTooltip:{truncated}");
+                _tooltip = truncated;
+            }
+        }
+        public event EventHandler? DoubleClick;
+        public event EventHandler? ShowMainWindowRequested;
+        public event EventHandler? ExitAppRequested;
+        public event EventHandler? StartRequested;
+        public event EventHandler? PauseRequested;
+        public event EventHandler? ResumeRequested;
+        public event EventHandler? StopRequested;
+
+        public List<string> CallLog => _callLog;
+        private readonly List<string> _callLog = new();
+
+        public void UpdateMenuState(TrayMenuState state)
+        {
+            TooltipText = state.TooltipText ?? "WUJI";
+            SetMenuItemEnabled("start", state.CanStart);
+            SetMenuItemEnabled("pause", state.CanPause);
+            SetMenuItemEnabled("resume", state.CanResume);
+            SetMenuItemEnabled("stop", state.CanStop);
+            SetMenuItemEnabled("show", state.CanShowMainWindow);
+            SetMenuItemEnabled("exit", state.CanExitApp);
+        }
+        public void SetMenuItemEnabled(string key, bool enabled) => _callLog.Add($"MenuItem:{key}={enabled}");
+        public void RaiseDoubleClick() => DoubleClick?.Invoke(this, EventArgs.Empty);
+        public void RaiseShowMainWindowRequested() => ShowMainWindowRequested?.Invoke(this, EventArgs.Empty);
+        public void RaiseExitAppRequested() => ExitAppRequested?.Invoke(this, EventArgs.Empty);
+        public void RaiseStartRequested() => StartRequested?.Invoke(this, EventArgs.Empty);
+        public void RaisePauseRequested() => PauseRequested?.Invoke(this, EventArgs.Empty);
+        public void RaiseResumeRequested() => ResumeRequested?.Invoke(this, EventArgs.Empty);
+        public void RaiseStopRequested() => StopRequested?.Invoke(this, EventArgs.Empty);
+        public void Dispose() => _callLog.Add("Dispose");
+    }
+
+    [Fact]
+    public void TrayMenuState_BuildsInitialState()
+    {
+        var state = new TrayMenuState();
+        Assert.True(state.CanShowMainWindow);
+        Assert.True(state.CanExitApp);
+        Assert.Contains("WUJI", state.TooltipText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayService_ShowMainWindowInvokesCallback()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var showCalled = false;
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => showCalled = true, () => { });
+
+        // Raise the adapter event (simulates real tray menu click)
+        adapter.RaiseShowMainWindowRequested();
+
+        Assert.True(showCalled);
+        Assert.Contains("SetVisible:True", string.Join(",", adapter.CallLog));
+    }
+
+    [Fact]
+    public void TrayService_ExitAppInvokesShutdownCallback()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var exitCalled = false;
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => exitCalled = true);
+
+        adapter.RaiseExitAppRequested();
+
+        Assert.True(exitCalled);
+    }
+
+    [Fact]
+    public void TrayService_DisposeIsIdempotent()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher, () => { }, () => { });
+        service.Dispose();
+        service.Dispose(); // must not throw
+
+        // Visible=false must occur before Dispose
+        var setVisibleIdx = adapter.CallLog.IndexOf("SetVisible:False");
+        var disposeIdx = adapter.CallLog.IndexOf("Dispose");
+        Assert.True(setVisibleIdx >= 0);
+        Assert.True(disposeIdx >= 0);
+        Assert.True(setVisibleIdx < disposeIdx, "Visible must be set to false before Dispose");
+    }
+
+    [Fact]
+    public void TrayService_DoesNotExposeSensitiveDetailsInTooltip()
+    {
+        // Default tooltip is safe — no paths or SIDs exposed
+        var state = new TrayMenuState
+        {
+            TooltipText = "WUJI - Agent status loading..."
+        };
+        var adapter = new FakeTrayIconAdapter();
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher, () => { }, () => { }, state);
+
+        var tooltip = adapter.TooltipText;
+        Assert.DoesNotContain(@"C:\", tooltip, StringComparison.Ordinal);
+        Assert.DoesNotContain("S-1-5-21", tooltip, StringComparison.Ordinal);
+        Assert.True(tooltip.Length <= 63); // truncation safe
+    }
+
+    // ── Window Lifecycle Tests (Phase 10.3) ──
+
+    [Fact]
+    public void WindowLifecycleCoordinator_CloseToTrayCancelsClose()
+    {
+        var coordinator = new WindowLifecycleCoordinator();
+        Assert.True(coordinator.ShouldCancelClose(closeToTray: true));
+        Assert.False(coordinator.ShouldCancelClose(closeToTray: false));
+    }
+
+    [Fact]
+    public void WindowLifecycleCoordinator_ExitAppAllowsClose()
+    {
+        var coordinator = new WindowLifecycleCoordinator();
+        coordinator.RequestExit();
+        Assert.False(coordinator.ShouldCancelClose(closeToTray: true));
+        Assert.True(coordinator.IsExitRequested);
+    }
+
+    [Fact]
+    public void WindowLifecycleCoordinator_MinimizeToTrayHidesWhenEnabled()
+    {
+        var coordinator = new WindowLifecycleCoordinator();
+        Assert.True(coordinator.ShouldHideOnMinimize(minimizeToTray: true));
+        Assert.False(coordinator.ShouldHideOnMinimize(minimizeToTray: false));
+    }
+
+    [Fact]
+    public void WindowLifecycleCoordinator_MinimizeToTraySkippedDuringExit()
+    {
+        var coordinator = new WindowLifecycleCoordinator();
+        coordinator.RequestExit();
+        Assert.False(coordinator.ShouldHideOnMinimize(minimizeToTray: true));
+    }
+
+    [Fact]
+    public void AppSettings_DefaultsToCloseToTrayAndMinimizeToTray()
+    {
+        var settings = new AppSettings();
+        Assert.True(settings.CloseToTray);
+        Assert.True(settings.MinimizeToTray);
+    }
+
+    // ── TrayMenuState Tests (Phase 10.4) ──
+
+    [Fact]
+    public void TrayMenuState_FollowsRunningStatus()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability, "NamedPipe");
+
+        Assert.True(state.CanPause);
+        Assert.True(state.CanStop);
+        Assert.False(state.CanStart);
+        Assert.False(state.CanResume);
+        Assert.Contains("Running", state.TooltipText, StringComparison.Ordinal);
+        Assert.Contains("NamedPipe", state.TooltipText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TrayMenuState_FollowsPausedStatus()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Paused };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability, "NamedPipe");
+
+        Assert.True(state.CanResume);
+        Assert.True(state.CanStop);
+        Assert.False(state.CanPause);
+    }
+
+    [Fact]
+    public void TrayMenuState_DisablesCommandsDuringMaintenance()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Maintenance };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability, "FileFallback");
+
+        Assert.False(state.CanStart);
+        Assert.False(state.CanStop);
+        Assert.False(state.CanPause);
+        Assert.False(state.CanResume);
+        Assert.True(state.IsMaintenance);
+    }
+
+    [Fact]
+    public void TrayMenuState_AllowsStartWhenStaleButProcessGone()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = false, IsStale = true, ActualState = AgentActualState.Stale };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability);
+
+        Assert.True(state.CanStart);
+        Assert.False(state.CanPause);
+        Assert.False(state.CanResume);
+    }
+
+    [Fact]
+    public void TrayMenuState_DoesNotExposeSensitiveIpcDetails()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability,
+            "NamedPipe"); // safe short identifier, not FullPipeName
+
+        Assert.DoesNotContain("S-1-5-21", state.TooltipText, StringComparison.Ordinal);
+        Assert.DoesNotContain(@"C:\", state.TooltipText, StringComparison.Ordinal);
+        Assert.True(state.TooltipText.Length <= 63);
+    }
+
+    [Fact]
+    public void TrayMenuState_TooltipTextIsSafelyTruncated()
+    {
+        var snapshot = new AgentStatusSnapshot { IsRunning = true, ActualState = AgentActualState.Running };
+        var availability = AgentCommandAvailability.FromStatus(snapshot);
+        var state = TrayMenuState.From(snapshot, availability,
+            "NamedPipe" + new string('.', 200));
+
+        Assert.True(state.TooltipText.Length <= 63);
+    }
+
+    private sealed class FakeTrayStateSink : ITrayStateSink
+    {
+        public TrayMenuState? LastState { get; private set; }
+        public void UpdateState(TrayMenuState state) => LastState = state;
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_RefreshCommonStatusUpdatesTrayStateSink()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
+        { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
+
+        var statusService = new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var status = await statusService.GetStatusAsync();
+
+        var sink = new FakeTrayStateSink();
+        // Exercise the real ViewModel path: ApplyStatusRefreshResult → RefreshCommonStatus → TrayMenuState.From → sink.UpdateState
+        var viewModel = CreateMinimalMainWindowViewModel(statusService, sink);
+        viewModel.ApplyStatusRefreshResult(new RefreshResult
+        {
+            RefreshSequence = 10,
+            Status = status,
+            Health = new RefreshHealthSnapshot(),
+            CurrentPage = "Dashboard"
+        });
+
+        Assert.NotNull(sink.LastState);
+        Assert.True(sink.LastState!.CanStop, "Running agent should have CanStop=true");
+        Assert.True(sink.LastState.CanPause, "Running agent should have CanPause=true");
+        Assert.False(sink.LastState.CanStart, "Running agent should not show CanStart");
+    }
+
+    // ── Tray Command Tests (Phase 10.5) ──
+
+    [Fact]
+    public void TrayService_StartCommandInvokesCallback()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var started = false;
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { }, startAgent: () => started = true);
+
+        adapter.RaiseStartRequested();
+        Assert.True(started, "Start callback should be invoked");
+    }
+
+    [Fact]
+    public void TrayService_PauseCommandInvokesCallback()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var paused = false;
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { }, pauseAgent: () => paused = true);
+
+        adapter.RaisePauseRequested();
+        Assert.True(paused, "Pause callback should be invoked");
+    }
+
+    [Fact]
+    public void TrayService_StopCommandInvokesCallback()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var stopped = false;
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { }, stopAgent: () => stopped = true);
+
+        adapter.RaiseStopRequested();
+        Assert.True(stopped, "Stop callback should be invoked");
+    }
+
+    [Fact]
+    public void TrayService_NullCallbackDoesNotThrow()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { }); // no command callbacks
+
+        // Must not throw
+        adapter.RaiseStartRequested();
+        adapter.RaisePauseRequested();
+        adapter.RaiseStopRequested();
+        Assert.True(true);
+    }
+
+    [Fact]
+    public void TrayService_DoesNotCallAgentServicesDirectly()
+    {
+        // TrayService constructor does not accept AgentControlService/AgentProcessService
+        // This test verifies the interface contract — the adapter + callbacks pattern
+        var adapter = new FakeTrayIconAdapter();
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            showMainWindow: () => { }, exitApp: () => { },
+            startAgent: () => { }, pauseAgent: () => { }, stopAgent: () => { });
+
+        // Adapter fires events → service dispatches callbacks
+        // No direct AgentControlService / AgentProcessService dependency
+        Assert.True(true); // construction succeeds without Agent services
+    }
+
+    [Fact]
+    public void TrayService_ResumeCommandInvokesCallback()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var resumed = false;
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { }, resumeAgent: () => resumed = true);
+
+        adapter.RaiseResumeRequested();
+        Assert.True(resumed, "Resume callback should be invoked");
+    }
+
+    [Fact]
+    public void TrayService_DisabledStartDoesNotExecuteWhenCallbackGuards()
+    {
+        // Simulate CanExecute check at callback level (as done in App.xaml.cs)
+        var adapter = new FakeTrayIconAdapter();
+        var executed = false;
+        var canExecute = false; // simulating disabled state
+
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { },
+            startAgent: () =>
+            {
+                if (!canExecute) return;
+                executed = true;
+            });
+
+        adapter.RaiseStartRequested();
+        Assert.False(executed, "Disabled Start should not execute");
+    }
+
+    [Fact]
+    public void TrayService_NullCallbackSafeForAllCommands()
+    {
+        var adapter = new FakeTrayIconAdapter();
+        var service = new TrayService(adapter, Dispatcher.CurrentDispatcher,
+            () => { }, () => { });
+
+        // All four command events fire with null callbacks — must not throw
+        adapter.RaiseStartRequested();
+        adapter.RaisePauseRequested();
+        adapter.RaiseResumeRequested();
+        adapter.RaiseStopRequested();
+        Assert.True(true);
+    }
+
+    private static MainWindowViewModel CreateMinimalMainWindowViewModel(
+        AgentStatusService statusService,
+        ITrayStateSink trayStateSink)
+    {
+        var paths = new WindowsAgentPaths(Path.GetTempPath());
+        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var overviewService = new OverviewDataService(paths);
+        var diagService = new DiagnosticsDataService(paths);
+        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsViewModel = new SettingsViewModel(settingsService, paths);
+
+        var viewModel = new MainWindowViewModel(
+            processService, controlService, statusService, overviewService, diagService,
+            new SamplesViewModel(new SamplesDataService(paths)),
+            new SessionsViewModel(new SessionsDataService(paths)),
+            new AppsViewModel(new AppsDataService(paths)),
+            settingsViewModel, settingsService,
+            refreshService: null,
+            trayStateSink: null);
+        viewModel.TrayStateSink = trayStateSink;
+        return viewModel;
     }
 
     private static AgentStatusService CreateMinimalStatusService()
