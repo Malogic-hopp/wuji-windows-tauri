@@ -420,7 +420,7 @@ MVP 阶段至少保证 App 和安装包版本一致。
 建议新增：
 
 ```text
-build/publish.ps1 或 MSBuild 目标
+publish/scripts/publish.ps1 或 MSBuild 目标
     先 publish App，再 publish Agent，再复制到同一目录
     自包含发布
     单文件输出
