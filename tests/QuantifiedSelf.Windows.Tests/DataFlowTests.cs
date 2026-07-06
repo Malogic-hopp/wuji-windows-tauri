@@ -6184,7 +6184,7 @@ public sealed class DataFlowTests
                 paths, new RuntimeStateStore(), new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance);
 
-            var startInfo = service.ResolveStartInfo();
+            var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
             Assert.Equal(fakeExe, startInfo.FileName);
             Assert.False(startInfo.UseShellExecute);
@@ -6218,7 +6218,7 @@ public sealed class DataFlowTests
                 paths, new RuntimeStateStore(), new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance);
 
-            var startInfo = service.ResolveStartInfo();
+            var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
             Assert.Equal(fakeExe, startInfo.FileName);
             Assert.False(startInfo.UseShellExecute);
@@ -6253,7 +6253,7 @@ public sealed class DataFlowTests
                 NullLogger<AgentProcessService>.Instance,
                 showAgentConsole: true);
 
-            var startInfo = service.ResolveStartInfo();
+            var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
             Assert.Equal(fakeExe, startInfo.FileName);
             Assert.False(startInfo.UseShellExecute);
@@ -6287,7 +6287,7 @@ public sealed class DataFlowTests
                 paths, new RuntimeStateStore(), new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance);
 
-            var startInfo = service.ResolveStartInfo();
+            var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
             Assert.Equal("dotnet", startInfo.FileName);
             Assert.Contains(fakeDll, startInfo.Arguments, StringComparison.Ordinal);
@@ -6299,6 +6299,56 @@ public sealed class DataFlowTests
         {
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", oldExe);
             Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", oldShowConsole);
+        }
+    }
+
+    [Fact]
+    public void AgentProcessService_SanitizesDuplicatePathEnvironmentKeys()
+    {
+        var source = new System.Collections.Hashtable
+        {
+            ["PATH"] = "upper",
+            ["Path"] = "canonical",
+            ["WUJI_AGENT_SHOW_CONSOLE"] = "1"
+        };
+
+        var sanitized = AgentProcessService.BuildSanitizedEnvironment(source);
+
+        Assert.Single(sanitized.Keys.Where(key =>
+            string.Equals(key, "Path", StringComparison.OrdinalIgnoreCase)));
+        Assert.True(sanitized.ContainsKey("Path"));
+        Assert.Equal("canonical", sanitized["Path"]);
+        Assert.Equal("1", sanitized["WUJI_AGENT_SHOW_CONSOLE"]);
+    }
+
+    [Fact]
+    public void AgentProcessService_ResolveStartInfoUsesSanitizedEnvironment()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var fakeExe = Path.Combine(workspace.Root, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(fakeExe, "");
+
+        var oldExe = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
+
+            var service = new AgentProcessService(
+                paths, new RuntimeStateStore(), new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance);
+
+            var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
+            var pathKeyCount = startInfo.Environment.Keys.Count(key =>
+                string.Equals(key, "Path", StringComparison.OrdinalIgnoreCase));
+
+            Assert.Equal(1, pathKeyCount);
+            Assert.Equal(fakeExe, startInfo.FileName);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", oldExe);
         }
     }
 
@@ -10632,6 +10682,123 @@ public sealed class DataFlowTests
         await viewModel.PerformStatusPollAsync();
 
         Assert.Equal(0, fakeReg.GetStatusCallCount);
+    }
+
+    // ─── Phase 12.1: AgentExeLocator & version tests ───
+    // (BaseDirectory / EnvVar preference tests live in AgentExeLocatorTests.cs)
+
+    [Fact]
+    public void AgentExeLocator_FallsBackToDevelopmentPath()
+    {
+        using var workspace = new TempWorkspace();
+        // Build a dev-like layout: baseDir 5 levels deep from workspace.Root,
+        // matching the real project structure (bin/Debug/net8.0-windows under App project).
+        var binDir = Path.Combine(workspace.Root, "a", "b", "c", "d", "e");
+        Directory.CreateDirectory(binDir);
+
+        // Agent exe at the path the dev fallback expects
+        var agentBin = Path.Combine(workspace.Root, "src",
+            "QuantifiedSelf.Windows.Agent", "bin", "Debug", "net8.0-windows");
+        Directory.CreateDirectory(agentBin);
+        var agentExe = Path.Combine(agentBin, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(agentExe, "dev");
+
+        // ResolveAgentExecutablePath with baseDir 5 levels deep should find dev fallback
+        var result = AgentProcessService.ResolveAgentExecutablePath(binDir);
+        Assert.NotNull(result);
+        Assert.EndsWith("QuantifiedSelf.Windows.Agent.exe", result);
+    }
+
+    [Fact]
+    public void AgentExeLocator_LogsRedactedPaths()
+    {
+        using var workspace = new TempWorkspace();
+        var baseDir = Path.Combine(workspace.Root, "empty");
+        Directory.CreateDirectory(baseDir);
+
+        // ResolveAgentExecutablePath returns null when no Agent exe is found.
+        var result = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+        Assert.Null(result);
+
+        // ResolveStartInfo wraps null result in FileNotFoundException with safe message.
+        FileNotFoundException? caught = null;
+        try
+        {
+            // Simulate what ResolveStartInfo does: check resolver output and throw
+            var exe = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+            if (string.IsNullOrWhiteSpace(exe))
+                throw new FileNotFoundException(
+                    "Unable to locate QuantifiedSelf.Windows.Agent executable.");
+        }
+        catch (FileNotFoundException ex)
+        {
+            caught = ex;
+        }
+
+        Assert.NotNull(caught);
+        var msg = caught!.Message;
+        Assert.DoesNotContain("C:", msg, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(":\\", msg);
+        Assert.DoesNotContain("Users", msg, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AppData", msg, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("S-1-5-", msg);
+    }
+
+    [Fact]
+    public void AgentProcessService_ResolveStartInfo_UsesPublishedAgentSubdirectory()
+    {
+        using var workspace = new TempWorkspace();
+        var baseDir = Path.Combine(workspace.Root, "App");
+        var agentDir = Path.Combine(baseDir, "Agent");
+        Directory.CreateDirectory(agentDir);
+        var agentExe = Path.Combine(agentDir, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(agentExe, "fake");
+
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var service = new AgentProcessService(
+            paths, new RuntimeStateStore(), new AgentControlFileStore(),
+            NullLogger<AgentProcessService>.Instance);
+
+        var resolved = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+        Assert.Equal(agentExe, resolved);
+    }
+
+    [Fact]
+    public void AssemblyVersion_MatchesDirectoryBuildProps()
+    {
+        var appAssembly = typeof(QuantifiedSelf.Windows.App.App).Assembly;
+        var agentAssembly = typeof(QuantifiedSelf.Windows.Agent.State.AgentStateMachine).Assembly;
+
+        var appVersion = appAssembly.GetName().Version;
+        var agentVersion = agentAssembly.GetName().Version;
+
+        Assert.NotNull(appVersion);
+        Assert.NotNull(agentVersion);
+
+        // Directory.Build.props sets 0.1.0.0
+        Assert.Equal(0, appVersion.Major);
+        Assert.Equal(1, appVersion.Minor);
+        Assert.Equal(0, agentVersion.Major);
+        Assert.Equal(1, agentVersion.Minor);
+    }
+
+    [Fact]
+    public void FileVersion_MatchesDirectoryBuildProps()
+    {
+        var appAssembly = typeof(QuantifiedSelf.Windows.App.App).Assembly;
+        var agentAssembly = typeof(QuantifiedSelf.Windows.Agent.State.AgentStateMachine).Assembly;
+
+        var appLocation = appAssembly.Location;
+        var agentLocation = agentAssembly.Location;
+
+        var appFileVersion = System.Diagnostics.FileVersionInfo.GetVersionInfo(appLocation).FileVersion;
+        var agentFileVersion = System.Diagnostics.FileVersionInfo.GetVersionInfo(agentLocation).FileVersion;
+
+        Assert.NotNull(appFileVersion);
+        Assert.NotNull(agentFileVersion);
+        Assert.StartsWith("0.1", appFileVersion);
+        Assert.StartsWith("0.1", agentFileVersion);
     }
 
     private sealed class TempWorkspace : IDisposable

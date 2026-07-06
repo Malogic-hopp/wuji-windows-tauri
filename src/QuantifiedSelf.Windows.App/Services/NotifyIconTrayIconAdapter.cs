@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 
 namespace QuantifiedSelf.Windows.App.Services;
@@ -14,7 +15,7 @@ public sealed class NotifyIconTrayIconAdapter : ITrayIconAdapter
     {
         _notifyIcon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = LoadAppIcon(),
             Text = "WUJI",
             Visible = false
         };
@@ -91,5 +92,40 @@ public sealed class NotifyIconTrayIconAdapter : ITrayIconAdapter
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
         _menu.Dispose();
+    }
+
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            // Prefer icon from publish/App directory (co-located with exe)
+            var appDir = AppContext.BaseDirectory;
+            var localIcon = Path.Combine(appDir, "Resources", "app.ico");
+            if (File.Exists(localIcon))
+                return new Icon(localIcon);
+
+            localIcon = Path.Combine(appDir, "app.ico");
+            if (File.Exists(localIcon))
+                return new Icon(localIcon);
+        }
+        catch
+        {
+            // Fall through to embedded resource
+        }
+
+        // Fallback: embedded resource via WPF resource stream
+        try
+        {
+            var uri = new Uri("pack://application:,,,/Resources/app.ico");
+            var streamInfo = System.Windows.Application.GetResourceStream(uri);
+            if (streamInfo?.Stream is not null)
+                return new Icon(streamInfo.Stream);
+        }
+        catch
+        {
+            // Fall through to system default
+        }
+
+        return SystemIcons.Application;
     }
 }

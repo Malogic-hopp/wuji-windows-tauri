@@ -11,6 +11,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="Resources\app.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="CommunityToolkit.Mvvm" Version="*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="*" />
   </ItemGroup>
@@ -25,6 +29,7 @@
     <AssemblyTitle>WUJI</AssemblyTitle>
     <Product>WUJI</Product>
     <Company>WUJI</Company>
+    <ApplicationIcon>Resources\app.ico</ApplicationIcon>
     <AssemblyDescription>WUJI Windows App</AssemblyDescription>
     <Description>WUJI Windows App</Description>
   </PropertyGroup>

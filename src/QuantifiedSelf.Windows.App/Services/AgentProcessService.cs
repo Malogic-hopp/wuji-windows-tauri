@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Diagnostics;
 using System.IO;
 using QuantifiedSelf.Windows.App.Models;
@@ -250,22 +251,57 @@ public sealed class AgentProcessService
         }
     }
 
-    internal ProcessStartInfo ResolveStartInfo()
+    /// <summary>
+    /// Resolves the Agent executable path using the following priority:
+    /// 1. <paramref name="baseDirectory"/>/Agent (publish directory — Agent dependencies isolated by publish/scripts/publish.ps1)
+    /// 2. <paramref name="baseDirectory"/> (legacy co-located publish layout)
+    /// 3. Environment variable QUANTIFIEDSELF_WINDOWS_AGENT_EXE
+    /// 4. Development build output fallback (bin/Debug or bin/Release under repo)
+    /// Returns null if no executable is found anywhere.
+    /// </summary>
+    /// <param name="baseDirectory">
+    /// Optional override for AppContext.BaseDirectory. Used by tests to simulate
+    /// different deployment layouts. When null (production), AppContext.BaseDirectory is used.
+    /// </param>
+    internal static string? ResolveAgentExecutablePath(string? baseDirectory = null)
     {
-        var agentRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-        var executableCandidates = new[]
+        var baseDir = baseDirectory ?? AppContext.BaseDirectory;
+
+        // 1. Publish directory — Agent exe isolated under App\Agent so its
+        // self-contained dependencies do not conflict with App dependencies.
+        var publishSubdirExe = Path.Combine(baseDir, "Agent", "QuantifiedSelf.Windows.Agent.exe");
+        if (File.Exists(publishSubdirExe))
+            return publishSubdirExe;
+
+        // 2. Legacy co-located publish layout.
+        var publishExe = Path.Combine(baseDir, "QuantifiedSelf.Windows.Agent.exe");
+        if (File.Exists(publishExe))
+            return publishExe;
+
+        // 3. Environment variable override
+        var envExe = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
+        if (!string.IsNullOrWhiteSpace(envExe) && File.Exists(envExe))
+            return envExe;
+
+        // 4. Development build fallback: derive repo root from baseDirectory
+        var agentRoot = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", ".."));
+        var devCandidates = new[]
         {
-            Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE"),
-            Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Debug", "net8.0-windows", "QuantifiedSelf.Windows.Agent.exe"),
             Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Release", "net8.0-windows", "QuantifiedSelf.Windows.Agent.exe"),
+            Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Debug", "net8.0-windows", "QuantifiedSelf.Windows.Agent.exe"),
+            Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Release", "net8.0-windows", "QuantifiedSelf.Windows.Agent.dll"),
             Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Debug", "net8.0-windows", "QuantifiedSelf.Windows.Agent.dll"),
-            Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Release", "net8.0-windows", "QuantifiedSelf.Windows.Agent.dll")
         };
 
-        var executable = executableCandidates.FirstOrDefault(File.Exists);
+        return devCandidates.FirstOrDefault(File.Exists);
+    }
+
+    internal ProcessStartInfo ResolveStartInfo(string? baseDirectory = null)
+    {
+        var executable = ResolveAgentExecutablePath(baseDirectory);
         if (string.IsNullOrWhiteSpace(executable))
         {
-            throw new FileNotFoundException("Unable to locate QuantifiedSelf.Windows.Agent output.", executableCandidates[^1]);
+            throw new FileNotFoundException("Unable to locate QuantifiedSelf.Windows.Agent executable.");
         }
 
         if (executable.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
@@ -279,6 +315,7 @@ public sealed class AgentProcessService
             };
 
             ApplyConsoleWindowPolicy(startInfo);
+            ApplySanitizedEnvironment(startInfo);
             return startInfo;
         }
 
@@ -290,7 +327,59 @@ public sealed class AgentProcessService
         };
 
         ApplyConsoleWindowPolicy(executableStartInfo);
+        ApplySanitizedEnvironment(executableStartInfo);
         return executableStartInfo;
+    }
+
+    internal static void ApplySanitizedEnvironment(
+        ProcessStartInfo startInfo,
+        IDictionary? sourceEnvironment = null)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+
+        var sanitized = BuildSanitizedEnvironment(sourceEnvironment ?? Environment.GetEnvironmentVariables());
+        startInfo.Environment.Clear();
+
+        foreach (var (key, value) in sanitized)
+        {
+            startInfo.Environment[key] = value;
+        }
+    }
+
+    internal static IReadOnlyDictionary<string, string> BuildSanitizedEnvironment(IDictionary sourceEnvironment)
+    {
+        ArgumentNullException.ThrowIfNull(sourceEnvironment);
+
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (DictionaryEntry entry in sourceEnvironment)
+        {
+            if (entry.Key is not string key || string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            var value = entry.Value?.ToString() ?? string.Empty;
+            if (!result.TryGetValue(key, out _))
+            {
+                result[key] = value;
+                continue;
+            }
+
+            var existingKey = result.Keys.First(existing =>
+                string.Equals(existing, key, StringComparison.OrdinalIgnoreCase));
+
+            // Windows environment variables are case-insensitive. Some launchers
+            // provide both Path and PATH; prefer the canonical Path spelling.
+            if (string.Equals(key, "Path", StringComparison.Ordinal)
+                && !string.Equals(existingKey, "Path", StringComparison.Ordinal))
+            {
+                result.Remove(existingKey);
+                result[key] = value;
+            }
+        }
+
+        return result;
     }
 
     private void ApplyConsoleWindowPolicy(ProcessStartInfo startInfo)
