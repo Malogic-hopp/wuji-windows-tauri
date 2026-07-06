@@ -297,6 +297,7 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
@@ -339,28 +340,52 @@
                                 </Grid>
                             </Border>
 
-                            <Border Grid.Row="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,16">
+                            <!-- Login Startup section (added in Phase 11.5) -->
+                            <Border Grid.Row="1" Grid.ColumnSpan="3" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,16">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Margin="0,0,32,0">
+                                        <TextBlock Text="Login startup" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding LoginStartupStatusText}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Margin="0,0,32,0">
+                                        <TextBlock Text="Launch mode" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding LaunchModeText}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="2">
+                                        <TextBlock Text="Startup registration" FontSize="16" FontWeight="SemiBold" />
+                                        <TextBlock Text="{Binding StartupRegistrationSummary}" FontSize="18" FontWeight="SemiBold" Margin="0,8,0,0" Foreground="{StaticResource MutedTextBrush}" />
+                                        <TextBlock Text="{Binding LastStartupRegistrationErrorText, StringFormat=Last error: {0}}" FontSize="14" Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}" />
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <Border Grid.Row="2" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,16">
                                 <StackPanel>
                                     <TextBlock Text="runtime_state.json" FontSize="16" FontWeight="SemiBold" />
                                     <TextBox Text="{Binding RuntimeStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="280" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Row="1" Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,16">
+                            <Border Grid.Row="2" Grid.Column="1" Style="{StaticResource CardBorderStyle}" Margin="0,0,12,16">
                                 <StackPanel>
                                     <TextBlock Text="health_state.json" FontSize="16" FontWeight="SemiBold" />
                                     <TextBox Text="{Binding HealthStateJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="280" />
                                 </StackPanel>
                             </Border>
 
-                            <Border Grid.Row="1" Grid.Column="2" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,16">
+                            <Border Grid.Row="2" Grid.Column="2" Style="{StaticResource CardBorderStyle}" Margin="0,0,0,16">
                                 <StackPanel>
                                     <TextBlock Text="agent_control.json" FontSize="16" FontWeight="SemiBold" />
                                     <TextBox Text="{Binding ControlCommandJson, Mode=OneWay}" Margin="0,12,0,0" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" FontFamily="Consolas" FontSize="12" IsReadOnly="True" TextWrapping="NoWrap" MinHeight="280" />
                                 </StackPanel>
                             </Border>
 
-                            <Grid Grid.Row="2" Grid.ColumnSpan="3">
+                            <Grid Grid.Row="3" Grid.ColumnSpan="3">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="*" />

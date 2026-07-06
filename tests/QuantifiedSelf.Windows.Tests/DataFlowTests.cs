@@ -6164,6 +6164,144 @@ public sealed class DataFlowTests
         Assert.Null(readResult.Command); // no stale file
     }
 
+    [Fact]
+    public void AgentProcessService_StartInfoHidesAgentConsoleByDefaultForExe()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var fakeExe = Path.Combine(workspace.Root, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(fakeExe, "");
+
+        var oldExe = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
+        var oldShowConsole = Environment.GetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", null);
+
+            var service = new AgentProcessService(
+                paths, new RuntimeStateStore(), new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance);
+
+            var startInfo = service.ResolveStartInfo();
+
+            Assert.Equal(fakeExe, startInfo.FileName);
+            Assert.False(startInfo.UseShellExecute);
+            Assert.True(startInfo.CreateNoWindow);
+            Assert.Equal(System.Diagnostics.ProcessWindowStyle.Hidden, startInfo.WindowStyle);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", oldExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", oldShowConsole);
+        }
+    }
+
+    [Fact]
+    public void AgentProcessService_StartInfoShowsAgentConsoleWhenDebugEnvEnabled()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var fakeExe = Path.Combine(workspace.Root, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(fakeExe, "");
+
+        var oldExe = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
+        var oldShowConsole = Environment.GetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", "1");
+
+            var service = new AgentProcessService(
+                paths, new RuntimeStateStore(), new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance);
+
+            var startInfo = service.ResolveStartInfo();
+
+            Assert.Equal(fakeExe, startInfo.FileName);
+            Assert.False(startInfo.UseShellExecute);
+            Assert.False(startInfo.CreateNoWindow);
+            Assert.Equal(System.Diagnostics.ProcessWindowStyle.Normal, startInfo.WindowStyle);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", oldExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", oldShowConsole);
+        }
+    }
+
+    [Fact]
+    public void AgentProcessService_StartInfoShowsAgentConsoleWhenCommandLineFlagEnabled()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var fakeExe = Path.Combine(workspace.Root, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(fakeExe, "");
+
+        var oldExe = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
+        var oldShowConsole = Environment.GetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", null);
+
+            var service = new AgentProcessService(
+                paths, new RuntimeStateStore(), new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance,
+                showAgentConsole: true);
+
+            var startInfo = service.ResolveStartInfo();
+
+            Assert.Equal(fakeExe, startInfo.FileName);
+            Assert.False(startInfo.UseShellExecute);
+            Assert.False(startInfo.CreateNoWindow);
+            Assert.Equal(System.Diagnostics.ProcessWindowStyle.Normal, startInfo.WindowStyle);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", oldExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", oldShowConsole);
+        }
+    }
+
+    [Fact]
+    public void AgentProcessService_StartInfoHidesAgentConsoleByDefaultForDll()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+        var fakeDll = Path.Combine(workspace.Root, "QuantifiedSelf.Windows.Agent.dll");
+        File.WriteAllText(fakeDll, "");
+
+        var oldExe = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
+        var oldShowConsole = Environment.GetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE");
+        try
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeDll);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", null);
+
+            var service = new AgentProcessService(
+                paths, new RuntimeStateStore(), new AgentControlFileStore(),
+                NullLogger<AgentProcessService>.Instance);
+
+            var startInfo = service.ResolveStartInfo();
+
+            Assert.Equal("dotnet", startInfo.FileName);
+            Assert.Contains(fakeDll, startInfo.Arguments, StringComparison.Ordinal);
+            Assert.False(startInfo.UseShellExecute);
+            Assert.True(startInfo.CreateNoWindow);
+            Assert.Equal(System.Diagnostics.ProcessWindowStyle.Hidden, startInfo.WindowStyle);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", oldExe);
+            Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", oldShowConsole);
+        }
+    }
+
     // ── Maintenance Command IPC Migration Tests (Phase 8.5) ──
 
     [Fact]
@@ -6910,6 +7048,21 @@ public sealed class DataFlowTests
         Assert.False(availability.CanPruneData);
         Assert.False(availability.CanClearHistory);
         Assert.Contains("not running", availability.ReloadConfigStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AgentCommandAvailability_AllowsStartWhenStoppedStateStillHasProcess()
+    {
+        var availability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot
+        { IsRunning = true, ActualState = AgentActualState.Stopped });
+
+        Assert.True(availability.CanStart);
+        Assert.False(availability.CanStop);
+        Assert.False(availability.CanPause);
+        Assert.False(availability.CanResume);
+        Assert.False(availability.CanReloadConfigNow);
+        Assert.False(availability.CanPruneData);
+        Assert.False(availability.CanClearHistory);
     }
 
     [Fact]
@@ -8778,7 +8931,9 @@ public sealed class DataFlowTests
         Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null,
         Func<CancellationToken, Task<AppSettings>>? settingsLoader = null,
         AgentIpcStatusService? ipcStatusService = null,
-        RefreshService? refreshService = null)
+        RefreshService? refreshService = null,
+        IStartupRegistrationService? startupRegistrationService = null,
+        StartupLaunchOptions? startupLaunchOptions = null)
     {
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
@@ -8815,7 +8970,7 @@ public sealed class DataFlowTests
         var appsViewModel = new AppsViewModel(appLoader ?? ((_, _) =>
             Task.FromResult<IReadOnlyList<AppUsageSummary>>([])));
 
-        return new MainWindowViewModel(
+        var viewModel = new MainWindowViewModel(
             processService,
             controlService,
             statusService,
@@ -8828,6 +8983,13 @@ public sealed class DataFlowTests
             settingsService,
             ipcStatusService,
             refreshService);
+
+        if (startupRegistrationService is not null)
+            viewModel.StartupRegistrationService = startupRegistrationService;
+        if (startupLaunchOptions is not null)
+            viewModel.StartupLaunchOptions = startupLaunchOptions;
+
+        return viewModel;
     }
 
     private static T GetPrivateFieldValue<T>(object instance, string fieldName)
@@ -9100,6 +9262,19 @@ public sealed class DataFlowTests
         Assert.Equal(LaunchMode.AutoStart, options.Mode);
         Assert.True(options.FromAutostart);
         Assert.True(options.StartHidden);
+        Assert.False(options.ShowAgentConsole);
+    }
+
+    [Fact]
+    public void StartupLaunchOptions_ParsesShowAgentConsoleArg()
+    {
+        var args = new[] { "--from-autostart", "--start-hidden", "--show-agent-console" };
+        var options = StartupLaunchOptions.Parse(args);
+
+        Assert.Equal(LaunchMode.AutoStart, options.Mode);
+        Assert.True(options.FromAutostart);
+        Assert.True(options.StartHidden);
+        Assert.True(options.ShowAgentConsole);
     }
 
     [Fact]
@@ -9121,6 +9296,7 @@ public sealed class DataFlowTests
         Assert.Equal(LaunchMode.Manual, options.Mode);
         Assert.False(options.FromAutostart);
         Assert.False(options.StartHidden);
+        Assert.False(options.ShowAgentConsole);
     }
 
     [Fact]
@@ -9198,6 +9374,1264 @@ public sealed class DataFlowTests
         Assert.Equal("Dark", result.Theme);
         Assert.Equal("Settings", result.LastSelectedPage);
         Assert.True(result.StartAppOnWindowsLogin);
+    }
+
+    // ─── Phase 11.2 helpers ───
+
+    private sealed class FakeStartupRegistry : IStartupRegistry
+    {
+        private readonly Dictionary<string, string> _values = new();
+
+        public void SetValue(string name, string command)
+        {
+            _values[name] = command;
+        }
+
+        public string? ReadValue(string name)
+        {
+            return _values.TryGetValue(name, out var value) ? value : null;
+        }
+
+        public void DeleteValue(string name)
+        {
+            _values.Remove(name);
+        }
+
+        public bool HasValue(string name) => _values.ContainsKey(name);
+    }
+
+    private sealed class ThrowingStartupRegistry : IStartupRegistry
+    {
+        public string? ReadValue(string name) => throw new InvalidOperationException("Simulated registry read failure.");
+        public void SetValue(string name, string command) => throw new InvalidOperationException("Simulated registry write failure.");
+        public void DeleteValue(string name) => throw new InvalidOperationException("Simulated registry delete failure.");
+    }
+
+    // ─── Phase 11.2: StartupCommandBuilder ───
+
+    [Fact]
+    public void StartupCommandBuilder_QuotesExecutablePath()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\Program Files\WUJI\WUJI.exe");
+        var command = builder.BuildCommand();
+
+        Assert.NotNull(command);
+        Assert.StartsWith("\"C:", command);
+        Assert.Contains("\" --from-autostart --start-hidden", command);
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_IncludesAutostartHiddenArgs()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var command = builder.BuildCommand();
+
+        Assert.NotNull(command);
+        Assert.Contains("--from-autostart", command);
+        Assert.Contains("--start-hidden", command);
+        Assert.EndsWith("--start-hidden", command);
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_RejectsDotnetHostPath()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\Program Files\dotnet\dotnet.exe");
+        Assert.False(builder.IsValidProcessPath());
+        Assert.Null(builder.BuildCommand());
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_UsesCurrentAppExePath()
+    {
+        var testPath = @"C:\WUJI\QuantifiedSelf.Windows.App.exe";
+        var builder = new StartupCommandBuilder(() => testPath);
+
+        Assert.True(builder.IsValidProcessPath());
+        var command = builder.BuildCommand();
+        Assert.NotNull(command);
+        Assert.Contains(testPath, command);
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_NormalizesPathsBeforeComparing()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        var registered = @"""C:/WUJI/app.exe"" --from-autostart --start-hidden";
+        Assert.True(builder.CommandsMatch(registered));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_HandlesSpacesAndQuotes()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\Program Files\WUJI\My App.exe");
+
+        var registered = @"""C:\Program Files\WUJI\My App.exe"" --from-autostart --start-hidden";
+        Assert.True(builder.CommandsMatch(registered));
+
+        // Extra spaces should be fine
+        var extraSpaces = @"""C:\Program Files\WUJI\My App.exe""   --from-autostart   --start-hidden  ";
+        Assert.True(builder.CommandsMatch(extraSpaces));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_SupportsInjectedProcessPathProvider()
+    {
+        var captured = "";
+        var builder = new StartupCommandBuilder(() =>
+        {
+            captured = "called";
+            return @"C:\Test\WUJI.exe";
+        });
+
+        var command = builder.BuildCommand();
+        Assert.Equal("called", captured);
+        Assert.NotNull(command);
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_RejectsEmptyProcessPath()
+    {
+        var builder = new StartupCommandBuilder(() => "");
+        Assert.False(builder.IsValidProcessPath());
+        Assert.Null(builder.BuildCommand());
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_RejectsNullProcessPath()
+    {
+        var builder = new StartupCommandBuilder(() => null!);
+        Assert.False(builder.IsValidProcessPath());
+        Assert.Null(builder.BuildCommand());
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_RejectsDllPath()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\Test\library.dll");
+        Assert.False(builder.IsValidProcessPath());
+        Assert.Null(builder.BuildCommand());
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_DetectsMissingAutostartArg()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        var registered = @"""C:\WUJI\app.exe"" --start-hidden";
+        Assert.False(builder.CommandsMatch(registered));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_DetectsMissingStartHiddenArg()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        var registered = @"""C:\WUJI\app.exe"" --from-autostart";
+        Assert.False(builder.CommandsMatch(registered));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_DetectsExePathMismatch()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        var registered = @"""C:\Other\different.exe"" --from-autostart --start-hidden";
+        Assert.False(builder.CommandsMatch(registered));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_CommandsMatchIsCaseInsensitive()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        var registered = @"""C:\WUJI\APP.EXE"" --FROM-AUTOSTART --START-HIDDEN";
+        Assert.True(builder.CommandsMatch(registered));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_DoesNotMatchAutostartArgPrefix()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        // --from-autostart-disabled is NOT the same as --from-autostart
+        var registered = @"""C:\WUJI\app.exe"" --from-autostart-disabled --start-hidden";
+        Assert.False(builder.CommandsMatch(registered));
+    }
+
+    [Fact]
+    public void StartupCommandBuilder_DoesNotMatchStartHiddenArgPrefix()
+    {
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+
+        // --start-hidden-old is NOT the same as --start-hidden
+        var registered = @"""C:\WUJI\app.exe"" --from-autostart --start-hidden-old";
+        Assert.False(builder.CommandsMatch(registered));
+    }
+
+    // ─── Phase 11.2: StartupRegistrationService ───
+
+    [Fact]
+    public async Task StartupRegistrationService_RegisterWritesRunKeyCommand()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.RegisterAsync();
+
+        Assert.Equal(StartupRegistrationState.Enabled, status.State);
+        Assert.True(registry.HasValue("WUJI"));
+
+        var command = registry.ReadValue("WUJI");
+        Assert.NotNull(command);
+        Assert.Contains("--from-autostart", command);
+        Assert.Contains("--start-hidden", command);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_UnregisterDeletesRunKeyValue()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        // Register first
+        await service.RegisterAsync();
+        Assert.True(registry.HasValue("WUJI"));
+
+        // Then unregister
+        var status = await service.UnregisterAsync();
+        Assert.Equal(StartupRegistrationState.Disabled, status.State);
+        Assert.False(registry.HasValue("WUJI"));
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_RegisterIsIdempotent()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        await service.RegisterAsync();
+        await service.RegisterAsync();
+        await service.RegisterAsync();
+
+        // Should still have exactly one WUJI value
+        Assert.True(registry.HasValue("WUJI"));
+        var command = registry.ReadValue("WUJI");
+        Assert.NotNull(command);
+        Assert.Contains("--from-autostart", command);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_UnregisterIsIdempotent()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        // Unregister without prior register should succeed
+        var status1 = await service.UnregisterAsync();
+        Assert.Equal(StartupRegistrationState.Disabled, status1.State);
+
+        // Register then unregister twice
+        await service.RegisterAsync();
+        await service.UnregisterAsync();
+        var status2 = await service.UnregisterAsync();
+        Assert.Equal(StartupRegistrationState.Disabled, status2.State);
+        Assert.False(registry.HasValue("WUJI"));
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_StatusDisabledWhenValueMissing()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Disabled, status.State);
+        Assert.Contains("Disabled", status.StatusText);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_StatusEnabledWhenCommandMatches()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        await service.RegisterAsync();
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Enabled, status.State);
+        Assert.Contains("Enabled", status.StatusText);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_StatusMismatchWhenCommandDiffers()
+    {
+        var registry = new FakeStartupRegistry();
+        // Pre-populate with a command pointing to a different exe
+        registry.SetValue("WUJI", @"""C:\Old\WUJI.exe"" --from-autostart --start-hidden");
+
+        var builder = new StartupCommandBuilder(() => @"C:\New\WUJI.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Mismatch, status.State);
+        Assert.Contains("Mismatch", status.StatusText);
+        Assert.Contains("repair", status.DetailText);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_RedactsRegistryErrors()
+    {
+        var registry = new ThrowingStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.RegisterAsync();
+        Assert.Equal(StartupRegistrationState.Error, status.State);
+        // Error text must not contain raw exception, stack trace, or paths
+        Assert.DoesNotContain("Simulated", status.DetailText);
+        Assert.DoesNotContain("InvalidOperationException", status.DetailText);
+        Assert.DoesNotContain("C:", status.DetailText);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_DoesNotRegisterWhenExecutablePathInvalid()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\Program Files\dotnet\dotnet.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.RegisterAsync();
+        Assert.Equal(StartupRegistrationState.UnsupportedInCurrentLaunchMode, status.State);
+        Assert.False(registry.HasValue("WUJI"));
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_NormalizesCommandBeforeComparing()
+    {
+        var registry = new FakeStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        // Register with the builder (normalized)
+        await service.RegisterAsync();
+
+        // Manually override with a differently-formatted but equivalent command
+        registry.SetValue("WUJI", @"""C:/WUJI/app.exe""   --from-autostart     --start-hidden");
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Enabled, status.State);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_GetStatusRedactsErrors()
+    {
+        var registry = new ThrowingStartupRegistry();
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Error, status.State);
+        Assert.DoesNotContain("Simulated", status.DetailText);
+        Assert.DoesNotContain("InvalidOperationException", status.DetailText);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_StatusMismatchWhenMissingAutostartArg()
+    {
+        var registry = new FakeStartupRegistry();
+        registry.SetValue("WUJI", @"""C:\WUJI\app.exe"" --start-hidden");
+
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Mismatch, status.State);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_StatusMismatchWhenMissingStartHiddenArg()
+    {
+        var registry = new FakeStartupRegistry();
+        registry.SetValue("WUJI", @"""C:\WUJI\app.exe"" --from-autostart");
+
+        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.GetStatusAsync();
+        Assert.Equal(StartupRegistrationState.Mismatch, status.State);
+    }
+
+    [Fact]
+    public async Task StartupRegistrationService_UnsupportedButExistingRunKeyReturnsMismatch()
+    {
+        var registry = new FakeStartupRegistry();
+        registry.SetValue("WUJI", @"""C:\WUJI\app.exe"" --from-autostart --start-hidden");
+
+        // Current process path is invalid (dotnet.exe), but an existing Run Key exists
+        var builder = new StartupCommandBuilder(() => @"C:\Program Files\dotnet\dotnet.exe");
+        var service = new StartupRegistrationService(registry, builder);
+
+        var status = await service.GetStatusAsync();
+        // Should return Mismatch, NOT Unsupported
+        Assert.Equal(StartupRegistrationState.Mismatch, status.State);
+    }
+
+    // ─── Phase 11.3 helpers ───
+
+    private sealed class FakeStartupRegistrationService : IStartupRegistrationService
+    {
+        private readonly StartupRegistrationStatus _registerResult;
+        private readonly StartupRegistrationStatus _unregisterResult;
+        private readonly StartupRegistrationStatus _getStatusResult;
+        private int _registerCallCount;
+        private int _unregisterCallCount;
+        private int _getStatusCallCount;
+
+        public FakeStartupRegistrationService(
+            StartupRegistrationStatus? registerResult = null,
+            StartupRegistrationStatus? unregisterResult = null,
+            StartupRegistrationStatus? getStatusResult = null)
+        {
+            _registerResult = registerResult ?? StartupRegistrationStatus.Enabled();
+            _unregisterResult = unregisterResult ?? StartupRegistrationStatus.Disabled();
+            _getStatusResult = getStatusResult ?? StartupRegistrationStatus.Disabled();
+        }
+
+        public int RegisterCallCount => _registerCallCount;
+        public int UnregisterCallCount => _unregisterCallCount;
+        public int GetStatusCallCount => _getStatusCallCount;
+
+        public Task<StartupRegistrationStatus> RegisterAsync()
+        {
+            Interlocked.Increment(ref _registerCallCount);
+            return Task.FromResult(_registerResult);
+        }
+
+        public Task<StartupRegistrationStatus> UnregisterAsync()
+        {
+            Interlocked.Increment(ref _unregisterCallCount);
+            return Task.FromResult(_unregisterResult);
+        }
+
+        public Task<StartupRegistrationStatus> GetStatusAsync()
+        {
+            Interlocked.Increment(ref _getStatusCallCount);
+            return Task.FromResult(_getStatusResult);
+        }
+    }
+
+    // ─── Phase 11.3: SettingsViewModel startup integration ───
+
+    [Fact]
+    public async Task SettingsViewModel_SavesLoginStartupAndRegistersRunKey()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        var fakeReg = new FakeStartupRegistrationService();
+        viewModel.StartupRegistrationService = fakeReg;
+        viewModel.StartAppOnWindowsLogin = true;
+
+        await viewModel.SaveAppSettingsAsync();
+
+        Assert.Equal(1, fakeReg.RegisterCallCount);
+        Assert.Equal(0, fakeReg.UnregisterCallCount);
+        Assert.False(viewModel.IsDirty);
+        Assert.Contains("saved", viewModel.SaveStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_DisablesLoginStartupAndUnregistersRunKey()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { StartAppOnWindowsLogin = true });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+        Assert.True(viewModel.StartAppOnWindowsLogin);
+
+        var fakeReg = new FakeStartupRegistrationService();
+        viewModel.StartupRegistrationService = fakeReg;
+        viewModel.StartAppOnWindowsLogin = false;
+
+        await viewModel.SaveAppSettingsAsync();
+
+        Assert.Equal(0, fakeReg.RegisterCallCount);
+        Assert.Equal(1, fakeReg.UnregisterCallCount);
+        Assert.False(viewModel.IsDirty);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_StartupRegistrationFailureShowsSafeError()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        var fakeReg = new FakeStartupRegistrationService(
+            registerResult: StartupRegistrationStatus.Error("Registration unavailable."));
+        viewModel.StartupRegistrationService = fakeReg;
+        viewModel.StartAppOnWindowsLogin = true;
+
+        await viewModel.SaveAppSettingsAsync();
+
+        Assert.True(viewModel.IsDirty);
+        Assert.True(viewModel.HasSaveError);
+        Assert.Contains("unavailable", viewModel.SaveStatusText, StringComparison.OrdinalIgnoreCase);
+        // Must not contain sensitive info
+        Assert.DoesNotContain("C:", viewModel.SaveStatusText);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ShowsStartupMismatchStatus()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Mismatch("Registered command needs repair."));
+        viewModel.StartupRegistrationService = fakeReg;
+
+        await viewModel.RefreshStartupRegistrationStatusAsync();
+
+        Assert.Contains("Mismatch", viewModel.StartupRegistrationStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("repair", viewModel.StartupRegistrationStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_LoginStartupDirtyDraftNotOverwritten()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+        viewModel.StartAppOnWindowsLogin = true;
+        Assert.True(viewModel.IsDirty);
+
+        // Simulate a background status refresh — must not overwrite the draft
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Disabled());
+        viewModel.StartupRegistrationService = fakeReg;
+
+        await viewModel.RefreshStartupRegistrationStatusAsync();
+
+        // The draft must still be true
+        Assert.True(viewModel.StartAppOnWindowsLogin);
+        Assert.True(viewModel.IsDirty);
+        // Status text should reflect the OS state
+        Assert.Contains("Disabled", viewModel.StartupRegistrationStatusText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_DirtyRefreshDoesNotWriteStartupRegistry()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        var fakeReg = new FakeStartupRegistrationService();
+        viewModel.StartupRegistrationService = fakeReg;
+        viewModel.StartAppOnWindowsLogin = true;
+        Assert.True(viewModel.IsDirty);
+
+        // Refresh status (not save) — must not trigger register/unregister
+        await viewModel.RefreshStartupRegistrationStatusAsync();
+
+        Assert.Equal(0, fakeReg.RegisterCallCount);
+        Assert.Equal(0, fakeReg.UnregisterCallCount);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_ShowsWarningWhenAppSettingsEnabledButRunKeyMissing()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { StartAppOnWindowsLogin = true });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        // OS says Disabled but AppSettings says true
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Disabled());
+        viewModel.StartupRegistrationService = fakeReg;
+
+        await viewModel.RefreshStartupRegistrationStatusAsync();
+
+        Assert.Contains("Not registered", viewModel.StartupRegistrationStatusText, StringComparison.OrdinalIgnoreCase);
+        // The draft must NOT be overwritten
+        Assert.True(viewModel.StartAppOnWindowsLogin);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_AutoStartAgentSettingRemainsIndependent()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        var fakeReg = new FakeStartupRegistrationService();
+        viewModel.StartupRegistrationService = fakeReg;
+
+        // Only change AutoStartAgentWhenAppStarts, NOT StartAppOnWindowsLogin
+        viewModel.AutoStartAgentWhenAppStarts = true;
+
+        await viewModel.SaveAppSettingsAsync();
+
+        // Must NOT call register or unregister
+        Assert.Equal(0, fakeReg.RegisterCallCount);
+        Assert.Equal(0, fakeReg.UnregisterCallCount);
+        Assert.False(viewModel.IsDirty);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_MismatchSavedAsTrueFixesRegistration()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { StartAppOnWindowsLogin = true });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        // OS shows Mismatch, but user keeps StartAppOnWindowsLogin=true and saves
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Mismatch("Registered command needs repair."));
+        viewModel.StartupRegistrationService = fakeReg;
+
+        // User doesn't toggle (keeps true), saves to repair
+        await viewModel.SaveAppSettingsAsync();
+
+        // Should have called RegisterAsync to fix the mismatch
+        Assert.Equal(1, fakeReg.RegisterCallCount);
+        Assert.False(viewModel.IsDirty);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_DisabledSavedAsTrueRepairsRegistration()
+    {
+        // Run Key was externally deleted — AppSettings=true, OS=Disabled.
+        // Saving should call RegisterAsync to repair.
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { StartAppOnWindowsLogin = true });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Disabled());
+        viewModel.StartupRegistrationService = fakeReg;
+
+        await viewModel.SaveAppSettingsAsync();
+
+        Assert.Equal(1, fakeReg.RegisterCallCount);
+        Assert.Equal(0, fakeReg.UnregisterCallCount);
+        Assert.False(viewModel.IsDirty);
+    }
+
+    [Fact]
+    public async Task SettingsViewModel_StartupStatusTextDoesNotSetIsDirty()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var viewModel = new SettingsViewModel(settingsService, paths);
+        await viewModel.LoadAsync();
+        Assert.False(viewModel.IsDirty);
+
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Enabled());
+        viewModel.StartupRegistrationService = fakeReg;
+
+        await viewModel.RefreshStartupRegistrationStatusAsync();
+
+        // Status text update must not set IsDirty
+        Assert.False(viewModel.IsDirty);
+    }
+
+    // ─── Phase 11.4: WindowStartupPolicy ───
+
+    [Fact]
+    public void WindowStartupPolicy_ManualLaunchShowsWindow()
+    {
+        var options = StartupLaunchOptions.Parse([]);
+        var policy = WindowStartupPolicy.Decide(options);
+
+        Assert.True(policy.ShouldShowMainWindowOnLaunch);
+        Assert.False(policy.ShouldStartHidden);
+    }
+
+    [Fact]
+    public void WindowStartupPolicy_AutostartHiddenStartsHidden()
+    {
+        var options = StartupLaunchOptions.Parse(["--from-autostart", "--start-hidden"]);
+        var policy = WindowStartupPolicy.Decide(options);
+
+        Assert.False(policy.ShouldShowMainWindowOnLaunch);
+        Assert.True(policy.ShouldStartHidden);
+    }
+
+    [Fact]
+    public void WindowStartupPolicy_StartHiddenAloneIsManual()
+    {
+        // Only --start-hidden without --from-autostart should NOT hide
+        var options = StartupLaunchOptions.Parse(["--start-hidden"]);
+        var policy = WindowStartupPolicy.Decide(options);
+
+        Assert.True(policy.ShouldShowMainWindowOnLaunch);
+        Assert.False(policy.ShouldStartHidden);
+    }
+
+    [Fact]
+    public void WindowStartupPolicy_AutostartAloneIsManual()
+    {
+        // Only --from-autostart without --start-hidden should NOT hide
+        var options = StartupLaunchOptions.Parse(["--from-autostart"]);
+        var policy = WindowStartupPolicy.Decide(options);
+
+        Assert.True(policy.ShouldShowMainWindowOnLaunch);
+        Assert.False(policy.ShouldStartHidden);
+    }
+
+    [Fact]
+    public void WindowStartupPolicy_DoesNotUseCloseToTrayForAutostartHidden()
+    {
+        // The policy itself has no knowledge of CloseToTray / Window.Closing
+        var options = StartupLaunchOptions.Parse(["--from-autostart", "--start-hidden"]);
+        var policy = WindowStartupPolicy.Decide(options);
+
+        // Policy is pure logic — just decides show/hide, no window lifecycle tricks
+        Assert.False(policy.ShouldShowMainWindowOnLaunch);
+        Assert.True(policy.ShouldStartHidden);
+    }
+
+    [Fact]
+    public void WindowStartupPolicy_DecideThrowsOnNull()
+    {
+        Assert.Throws<ArgumentNullException>(() => WindowStartupPolicy.Decide(null!));
+    }
+
+    // ─── Phase 11.4: InitializeAsync idempotency & Agent auto-start ───
+
+    [Fact]
+    public async Task MainWindowViewModel_InitializeAsyncIsIdempotent()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+            new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var overviewService = new OverviewDataService(paths);
+        var diagService = new DiagnosticsDataService(paths);
+
+        var viewModel = new MainWindowViewModel(
+            processService, controlService, statusService, overviewService, diagService,
+            new SamplesViewModel(new SamplesDataService(paths)),
+            new SessionsViewModel(new SessionsDataService(paths)),
+            new AppsViewModel(new AppsDataService(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService);
+
+        // First call should succeed
+        await viewModel.InitializeAsync();
+        // Second call should be a no-op (idempotent)
+        await viewModel.InitializeAsync();
+        // No crash = pass
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_AutoStartAgentWhenAppStartsTrueTriggersStart()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { AutoStartAgentWhenAppStarts = true });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+            new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var overviewService = new OverviewDataService(paths);
+        var diagService = new DiagnosticsDataService(paths);
+
+        var viewModel = new MainWindowViewModel(
+            processService, controlService, statusService, overviewService, diagService,
+            new SamplesViewModel(new SamplesDataService(paths)),
+            new SessionsViewModel(new SessionsDataService(paths)),
+            new AppsViewModel(new AppsDataService(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService);
+
+        await viewModel.InitializeAsync();
+
+        // AutoStartAgentWhenAppStarts=true + CanStart=true → should trigger auto-start
+        Assert.True(viewModel.AutoStartAgentWasTriggered);
+        // VM should remain functional even if the Agent executable is absent
+        Assert.False(string.IsNullOrEmpty(viewModel.AgentStatusText));
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_AutoStartAgentWhenAppStartsFalseDoesNotTriggerStart()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { AutoStartAgentWhenAppStarts = false });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+            new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var overviewService = new OverviewDataService(paths);
+        var diagService = new DiagnosticsDataService(paths);
+
+        var viewModel = new MainWindowViewModel(
+            processService, controlService, statusService, overviewService, diagService,
+            new SamplesViewModel(new SamplesDataService(paths)),
+            new SessionsViewModel(new SessionsDataService(paths)),
+            new AppsViewModel(new AppsDataService(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService);
+
+        await viewModel.InitializeAsync();
+
+        // AutoStartAgentWhenAppStarts=false → must not trigger auto-start
+        Assert.False(viewModel.AutoStartAgentWasTriggered);
+        Assert.False(string.IsNullOrEmpty(viewModel.AgentStatusText));
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_HiddenStartupThenShowDoesNotReinitialize()
+    {
+        // Simulate the autostart-hidden flow: explicit init call, then window Loaded fires later.
+        // Verify that the second call is a no-op (idempotent) and does not re-trigger auto-start.
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var store = new AppSettingsStore();
+        await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
+            new AppSettings { AutoStartAgentWhenAppStarts = true });
+
+        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+            new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
+        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
+        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var overviewService = new OverviewDataService(paths);
+        var diagService = new DiagnosticsDataService(paths);
+
+        var viewModel = new MainWindowViewModel(
+            processService, controlService, statusService, overviewService, diagService,
+            new SamplesViewModel(new SamplesDataService(paths)),
+            new SessionsViewModel(new SessionsDataService(paths)),
+            new AppsViewModel(new AppsDataService(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService);
+
+        // First init (simulates explicit call in App.xaml.cs hidden mode)
+        await viewModel.InitializeAsync();
+        Assert.True(viewModel.AutoStartAgentWasTriggered);
+
+        // Reset flag to verify second call does NOT set it again
+        viewModel.AutoStartAgentWasTriggered = false;
+
+        // Second init (simulates Loaded event firing when window is later shown via tray)
+        await viewModel.InitializeAsync();
+
+        // Must NOT re-trigger auto-start
+        Assert.False(viewModel.AutoStartAgentWasTriggered);
+    }
+
+    // ─── Phase 11.5: Diagnostics startup registration display ───
+
+    [Fact]
+    public async Task Diagnostics_ShowsLoginStartupEnabled()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Enabled());
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        Assert.Equal("Enabled", viewModel.LoginStartupStatusText);
+        Assert.Equal("Manual", viewModel.LaunchModeText);
+        Assert.Equal("Registered to current app", viewModel.StartupRegistrationSummary);
+        Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ShowsLoginStartupDisabled()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Disabled());
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        Assert.Equal("Disabled", viewModel.LoginStartupStatusText);
+        Assert.Equal("Not registered", viewModel.StartupRegistrationSummary);
+        Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ShowsLoginStartupMismatch()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Mismatch("Registered command needs repair."));
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        Assert.Equal("Mismatch", viewModel.LoginStartupStatusText);
+        Assert.Contains("repair", viewModel.StartupRegistrationSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ShowsLoginStartupError()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Error("Registration unavailable."));
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        Assert.Equal("Error", viewModel.LoginStartupStatusText);
+        Assert.Equal("Registration unavailable", viewModel.StartupRegistrationSummary);
+        Assert.Equal("Registration unavailable.", viewModel.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ShowsLoginStartupUnsupported()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Unsupported());
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        Assert.Equal("Unavailable", viewModel.LoginStartupStatusText);
+        Assert.Contains("current launch mode", viewModel.StartupRegistrationSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_RedactsStartupRegistrationError()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Error(
+                "Registry error: Cannot open key 'C:\\Users\\TestUser\\AppData\\Local\\WUJI'."));
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        // Drive letter paths must be redacted by DiagnosticMessageSanitizer
+        Assert.DoesNotContain("C:", viewModel.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("TestUser", viewModel.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ShowsLaunchModeManual()
+    {
+        using var workspace = new TempWorkspace();
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        Assert.Equal("Manual", viewModel.LaunchModeText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_ShowsLaunchModeAutoStart()
+    {
+        using var workspace = new TempWorkspace();
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupLaunchOptions: StartupLaunchOptions.Parse(["--from-autostart", "--start-hidden"]));
+
+        Assert.Equal("AutoStart", viewModel.LaunchModeText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_KeepsRefreshHealthVisible()
+    {
+        // Verify that RefreshHealthText is not affected by startup registration changes
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        paths.EnsureDirectories();
+
+        var runtimeStore = new RuntimeStateStore();
+        var healthStore = new AgentHealthStateStore();
+        var controlStore = new AgentControlFileStore();
+        var refreshService = new RefreshService(
+            new AgentStatusService(paths, runtimeStore, healthStore, controlStore, new WindowsAgentOptionsStore()),
+            new AgentProcessService(paths, runtimeStore, controlStore,
+                NullLogger<AgentProcessService>.Instance));
+
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Enabled());
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            refreshService: refreshService,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        // Refresh health should be available regardless of startup registration state
+        viewModel.UpdateRefreshHealthPresentation();
+        Assert.Contains("Refresh loop", viewModel.RefreshHealthText, StringComparison.OrdinalIgnoreCase);
+
+        // After refreshing startup registration, RefreshHealthText should still be visible
+        await viewModel.RefreshStartupRegistrationAsync();
+        Assert.Contains("Refresh loop", viewModel.RefreshHealthText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Diagnostics_DoesNotExposeStartupCommandPath()
+    {
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Enabled());
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        // None of the display properties should contain path separators or drive letters
+        Assert.DoesNotContain("C:", viewModel.LoginStartupStatusText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("C:", viewModel.StartupRegistrationSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("C:", viewModel.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(":\\", viewModel.LoginStartupStatusText);
+        Assert.DoesNotContain(":\\", viewModel.StartupRegistrationSummary);
+        Assert.DoesNotContain(":\\", viewModel.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public async Task Diagnostics_DoesNotExposeStartupCommandFullText()
+    {
+        using var workspace = new TempWorkspace();
+        // An error that contains a full path — the sanitized output must redact drive-letter paths
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Error(
+                "Access denied writing Run Key value for 'C:\\Program Files\\WUJI\\wuji.exe'"));
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.RefreshStartupRegistrationAsync();
+
+        // Must not contain full exe path or drive letter
+        Assert.DoesNotContain("C:", viewModel.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("wuji.exe", viewModel.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
+        // The sanitized text should still be a readable short message
+        Assert.False(string.IsNullOrWhiteSpace(viewModel.LastStartupRegistrationErrorText));
+    }
+
+    // ─── StartupRegistrationDisplayModel unit tests ───
+
+    [Fact]
+    public void StartupRegistrationDisplayModel_EnabledFromStatus()
+    {
+        var display = StartupRegistrationDisplayModel.FromStatus(
+            StartupRegistrationStatus.Enabled(),
+            LaunchMode.Manual);
+
+        Assert.Equal("Enabled", display.LoginStartupStatusText);
+        Assert.Equal("Manual", display.LaunchModeText);
+        Assert.Equal("Registered to current app", display.StartupRegistrationSummary);
+        Assert.Equal("None", display.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public void StartupRegistrationDisplayModel_DisabledFromStatus()
+    {
+        var display = StartupRegistrationDisplayModel.FromStatus(
+            StartupRegistrationStatus.Disabled(),
+            LaunchMode.AutoStart);
+
+        Assert.Equal("Disabled", display.LoginStartupStatusText);
+        Assert.Equal("AutoStart", display.LaunchModeText);
+        Assert.Equal("Not registered", display.StartupRegistrationSummary);
+        Assert.Equal("None", display.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public void StartupRegistrationDisplayModel_MismatchFromStatus()
+    {
+        var display = StartupRegistrationDisplayModel.FromStatus(
+            StartupRegistrationStatus.Mismatch("Registered command needs repair."),
+            LaunchMode.Manual);
+
+        Assert.Equal("Mismatch", display.LoginStartupStatusText);
+        Assert.Equal("Registered command needs repair", display.StartupRegistrationSummary);
+        Assert.Equal("None", display.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public void StartupRegistrationDisplayModel_ErrorFromStatus()
+    {
+        var display = StartupRegistrationDisplayModel.FromStatus(
+            StartupRegistrationStatus.Error("Registration unavailable."),
+            LaunchMode.Manual);
+
+        Assert.Equal("Error", display.LoginStartupStatusText);
+        Assert.Equal("Registration unavailable", display.StartupRegistrationSummary);
+        Assert.Equal("Registration unavailable.", display.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public void StartupRegistrationDisplayModel_UnsupportedFromStatus()
+    {
+        var display = StartupRegistrationDisplayModel.FromStatus(
+            StartupRegistrationStatus.Unsupported(),
+            LaunchMode.Manual);
+
+        Assert.Equal("Unavailable", display.LoginStartupStatusText);
+        Assert.Contains("current launch mode", display.StartupRegistrationSummary, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("None", display.LastStartupRegistrationErrorText);
+    }
+
+    [Fact]
+    public void StartupRegistrationDisplayModel_SafeTextDoesNotContainPaths()
+    {
+        // Verify that all pre-defined summary/status/error texts from the factory
+        // are completely free of path separators
+        var enabled = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Enabled(), LaunchMode.Manual);
+        var disabled = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Disabled(), LaunchMode.Manual);
+        var mismatch = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Mismatch("test"), LaunchMode.Manual);
+        var error = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Error("test"), LaunchMode.Manual);
+        var unsupported = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Unsupported(), LaunchMode.Manual);
+
+        foreach (var d in new[] { enabled, disabled, mismatch, error, unsupported })
+        {
+            Assert.DoesNotContain("C:", d.LoginStartupStatusText, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("C:", d.StartupRegistrationSummary, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("C:", d.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(":\\", d.LoginStartupStatusText);
+            Assert.DoesNotContain(":\\", d.StartupRegistrationSummary);
+            Assert.DoesNotContain(":\\", d.LastStartupRegistrationErrorText);
+        }
+    }
+
+    [Fact]
+    public async Task Diagnostics_StatusPollDoesNotCallStartupRegistrationGetStatus()
+    {
+        // Verify that the 2-second status polling path does NOT read startup
+        // registration status — it should only happen on full page refresh.
+        using var workspace = new TempWorkspace();
+        var fakeReg = new FakeStartupRegistrationService(
+            getStatusResult: StartupRegistrationStatus.Enabled());
+        var viewModel = await CreateMainWindowViewModelAsync(
+            workspace,
+            startupRegistrationService: fakeReg,
+            startupLaunchOptions: StartupLaunchOptions.Parse([]));
+
+        await viewModel.PerformStatusPollAsync();
+
+        Assert.Equal(0, fakeReg.GetStatusCallCount);
     }
 
     private sealed class TempWorkspace : IDisposable

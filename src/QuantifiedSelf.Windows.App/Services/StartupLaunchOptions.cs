@@ -11,6 +11,7 @@ public sealed class StartupLaunchOptions
     public LaunchMode Mode { get; init; }
     public bool StartHidden { get; init; }
     public bool FromAutostart { get; init; }
+    public bool ShowAgentConsole { get; init; }
     public string[] RawArgs { get; init; } = [];
 
     public static StartupLaunchOptions Parse(string[] args)
@@ -19,6 +20,7 @@ public sealed class StartupLaunchOptions
 
         var fromAutostart = false;
         var startHidden = false;
+        var showAgentConsole = false;
 
         foreach (var arg in args)
         {
@@ -32,6 +34,9 @@ public sealed class StartupLaunchOptions
                 case "start-hidden":
                     startHidden = true;
                     break;
+                case "show-agent-console":
+                    showAgentConsole = true;
+                    break;
                 default:
                     // Unknown args are safely ignored
                     break;
@@ -43,6 +48,7 @@ public sealed class StartupLaunchOptions
             Mode = fromAutostart ? LaunchMode.AutoStart : LaunchMode.Manual,
             StartHidden = startHidden,
             FromAutostart = fromAutostart,
+            ShowAgentConsole = showAgentConsole,
             RawArgs = args.ToArray()
         };
     }

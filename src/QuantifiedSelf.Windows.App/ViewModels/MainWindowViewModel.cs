@@ -51,6 +51,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     private AppSettings _appSettings = new();
     private bool _suppressPagePersistence;
+    private bool _isInitialized;
+    internal bool AutoStartAgentWasTriggered { get; set; }
 
     private string _agentStatusText = "Not running";
     private string _lastHeartbeatText = "-";
@@ -77,6 +79,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _lastJournalWriteErrorText = "None";
     private string _currentSessionIdText = "-";
     private string _statusMessage = "Ready";
+    private IStartupRegistrationService? _startupRegistrationService;
+    private string _loginStartupStatusText = "Unknown";
+    private string _launchModeText = "Manual";
+    private string _startupRegistrationSummary = "Unknown";
+    private string _lastStartupRegistrationErrorText = "None";
+    private StartupLaunchOptions _startupLaunchOptions = StartupLaunchOptions.Parse([]);
 
     public MainWindowViewModel(
         AgentProcessService processService,
@@ -162,6 +170,30 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         get => _trayStateSink;
         set => _trayStateSink = value;
+    }
+
+    internal IStartupRegistrationService? StartupRegistrationService
+    {
+        get => _startupRegistrationService;
+        set => _startupRegistrationService = value;
+    }
+
+    /// <summary>
+    /// Sets the startup launch options parsed during App startup.
+    /// Also updates LaunchModeText so Diagnostics displays the correct launch mode.
+    /// </summary>
+    internal StartupLaunchOptions StartupLaunchOptions
+    {
+        get => _startupLaunchOptions;
+        set
+        {
+            _startupLaunchOptions = value;
+            LaunchModeText = value.Mode switch
+            {
+                LaunchMode.AutoStart => "AutoStart",
+                _ => "Manual"
+            };
+        }
     }
 
     public string AgentStatusText
@@ -330,8 +362,57 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _statusMessage, value);
     }
 
+    /// <summary>
+    /// Diagnostics display: current login startup status.
+    /// Values: "Enabled", "Disabled", "Mismatch", "Error", "Unavailable", or "Unknown".
+    /// Only refreshed on Diagnostics page refresh, not on 2-second status polling.
+    /// </summary>
+    public string LoginStartupStatusText
+    {
+        get => _loginStartupStatusText;
+        private set => SetProperty(ref _loginStartupStatusText, value);
+    }
+
+    /// <summary>
+    /// Diagnostics display: launch mode. Values: "Manual" or "AutoStart".
+    /// Set once at App startup from parsed StartupLaunchOptions, never re-evaluated.
+    /// </summary>
+    public string LaunchModeText
+    {
+        get => _launchModeText;
+        private set => SetProperty(ref _launchModeText, value);
+    }
+
+    /// <summary>
+    /// Diagnostics display: safe human-readable summary of startup registration.
+    /// Examples: "Registered to current app", "Not registered",
+    /// "Registered command needs repair", "Registration unavailable",
+    /// "Registration unavailable in current launch mode".
+    /// Never contains full paths, SIDs, or raw registry exception text.
+    /// </summary>
+    public string StartupRegistrationSummary
+    {
+        get => _startupRegistrationSummary;
+        private set => SetProperty(ref _startupRegistrationSummary, value);
+    }
+
+    /// <summary>
+    /// Diagnostics display: safe short error text for the last startup registration error.
+    /// "None" if no error. Never contains full paths, SIDs, or raw registry exception text.
+    /// </summary>
+    public string LastStartupRegistrationErrorText
+    {
+        get => _lastStartupRegistrationErrorText;
+        private set => SetProperty(ref _lastStartupRegistrationErrorText, value);
+    }
+
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
+        // Prevent double initialization (e.g. explicit call during hidden startup
+        // plus Loaded event firing when the window is later shown via tray).
+        if (_isInitialized) return;
+        _isInitialized = true;
+
         await _settingsViewModel.LoadAsync(cancellationToken);
         ApplyAppSettings(_settingsViewModel.AppSettings);
 
@@ -343,6 +424,45 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _statusPollTimer.Start();
 
         await RefreshAsync(cancellationToken);
+
+        // Auto-start Agent if configured and allowed — same guard as tray/manual commands.
+        if (_appSettings.AutoStartAgentWhenAppStarts
+            && StartAgentCommand.CanExecute(null))
+        {
+            AutoStartAgentWasTriggered = true;
+            _ = StartAgentAsync();
+        }
+    }
+
+    /// <summary>
+    /// Refreshes startup registration status from the registration service.
+    /// Only called from RefreshDiagnosticsAsync (full page refresh), never from 2-second status polling.
+    /// All display text is pre-sanitized and safe for UI — no paths, SIDs, or raw exception text.
+    /// </summary>
+    internal async Task RefreshStartupRegistrationAsync()
+    {
+        if (_startupRegistrationService is null)
+        {
+            LoginStartupStatusText = "Unknown";
+            StartupRegistrationSummary = "Startup registration service not available";
+            LastStartupRegistrationErrorText = "None";
+            return;
+        }
+
+        try
+        {
+            var status = await _startupRegistrationService.GetStatusAsync();
+            var display = StartupRegistrationDisplayModel.FromStatus(status, _startupLaunchOptions.Mode);
+            LoginStartupStatusText = display.LoginStartupStatusText;
+            StartupRegistrationSummary = display.StartupRegistrationSummary;
+            LastStartupRegistrationErrorText = display.LastStartupRegistrationErrorText;
+        }
+        catch
+        {
+            LoginStartupStatusText = "Error";
+            StartupRegistrationSummary = "Registration unavailable";
+            LastStartupRegistrationErrorText = "Unable to read startup registration status";
+        }
     }
 
     internal void StopStatusPolling()
@@ -640,6 +760,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         UpdateRefreshHealthPresentation();
+
+        // Refresh startup registration status (only on Diagnostics page refresh, not 2s polling)
+        await RefreshStartupRegistrationAsync();
     }
 
     internal void UpdateRefreshHealthPresentation()

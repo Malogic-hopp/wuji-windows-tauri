@@ -21,10 +21,12 @@ public sealed class AgentCommandAvailability
         var state = status.ActualState;
         var isMaintenance = state == AgentActualState.Maintenance;
         var isRunningOrPaused = state is AgentActualState.Running or AgentActualState.Paused;
+        var canStart = !isMaintenance
+            && (!status.IsRunning || state is AgentActualState.NotRunning or AgentActualState.Stopped);
 
         return new AgentCommandAvailability
         {
-            CanStart = !status.IsRunning && !isMaintenance,
+            CanStart = canStart,
             CanStop = (state is AgentActualState.Running or AgentActualState.Paused or AgentActualState.Stale) && !isMaintenance,
             CanPause = state == AgentActualState.Running && !isMaintenance,
             CanResume = state == AgentActualState.Paused && !isMaintenance,

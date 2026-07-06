@@ -67,7 +67,13 @@ public partial class App : Application
         var statusService = new AgentStatusService(
             paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore,
             ipcClient, ipcStatusService);
-        var processService = new AgentProcessService(paths, runtimeStateStore, controlFileStore, NullLogger<AgentProcessService>.Instance, ipcClient);
+        var processService = new AgentProcessService(
+            paths,
+            runtimeStateStore,
+            controlFileStore,
+            NullLogger<AgentProcessService>.Instance,
+            ipcClient,
+            showAgentConsole: _startupLaunchOptions.ShowAgentConsole);
         var controlService = new AgentControlService(paths, controlFileStore, statusService, ipcClient, ipcStatusService);
         var overviewDataService = new OverviewDataService(paths);
         var diagnosticsDataService = new DiagnosticsDataService(paths);
@@ -80,7 +86,11 @@ public partial class App : Application
         Resources.Add("BooleanToVisibilityConverter", new BooleanToVisibilityConverter());
 
         var refreshService = new RefreshService(statusService, processService);
+        var startupRegistry = new RegistryStartupRegistry();
+        var startupCommandBuilder = new StartupCommandBuilder();
+        var startupRegistrationService = new StartupRegistrationService(startupRegistry, startupCommandBuilder);
         var settingsViewModel = new SettingsViewModel(settingsService, statusService, controlService, diagnosticsDataService, paths);
+        settingsViewModel.StartupRegistrationService = startupRegistrationService;
         var viewModel = new MainWindowViewModel(
             processService,
             controlService,
@@ -95,6 +105,10 @@ public partial class App : Application
             ipcStatusService,
             refreshService,
             trayStateSink: null); // set via TrayStateSink after tray creation
+
+        // Inject startup registration service and launch options for Diagnostics display
+        viewModel.StartupRegistrationService = startupRegistrationService;
+        viewModel.StartupLaunchOptions = _startupLaunchOptions;
 
         var window = new MainWindow(viewModel);
         MainWindow = window;
@@ -174,7 +188,20 @@ public partial class App : Application
             trayService?.Dispose();
         };
         viewModel.TrayStateSink = trayService;
-        window.Show();
+
+        // Decide whether to show the main window based on startup launch mode.
+        // AutoStart-hidden (--from-autostart --start-hidden): start services,
+        // create tray, but skip window.Show() so the user isn't interrupted.
+        var startupPolicy = WindowStartupPolicy.Decide(_startupLaunchOptions);
+        if (startupPolicy.ShouldShowMainWindowOnLaunch)
+        {
+            window.Show();
+        }
+        else
+        {
+            // Window.Loaded won't fire, so explicitly initialize (starts status polling, timers, etc.)
+            _ = viewModel.InitializeAsync();
+        }
     }
 
 }

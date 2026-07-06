@@ -69,6 +69,9 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _autoStartAgentWhenAppStartsText = "Disabled";
     private bool _startAppOnWindowsLogin;
     private string _startAppOnWindowsLoginText = "Disabled";
+    private IStartupRegistrationService? _startupRegistrationService;
+    private string _startupRegistrationStatusText = "Login startup: unknown";
+    private bool _loadedStartAppOnWindowsLogin;
     private string _lastSelectedPageText = "Dashboard";
     private string _samplingIntervalSecondsText = "3";
     private string _idleThresholdSecondsText = "60";
@@ -505,6 +508,24 @@ public sealed partial class SettingsViewModel : ObservableObject
         private set => SetProperty(ref _startAppOnWindowsLoginText, value);
     }
 
+    internal IStartupRegistrationService? StartupRegistrationService
+    {
+        get => _startupRegistrationService;
+        set => _startupRegistrationService = value;
+    }
+
+    public string StartupRegistrationStatusText
+    {
+        get => _startupRegistrationStatusText;
+        private set
+        {
+            if (SetProperty(ref _startupRegistrationStatusText, value))
+            {
+                // Updating startup status text must NOT set IsDirty
+            }
+        }
+    }
+
     public string LastSelectedPageText
     {
         get => _lastSelectedPageText;
@@ -733,7 +754,9 @@ public sealed partial class SettingsViewModel : ObservableObject
             HasAgentOptionsSaveError = false;
             HasAgentOptionsReloadError = false;
             IsDirty = false;
+            _loadedStartAppOnWindowsLogin = _startAppOnWindowsLogin;
 
+            await RefreshStartupRegistrationStatusAsync();
             await UpdateAgentStatusAsync(cancellationToken);
         }
         finally
@@ -757,13 +780,57 @@ public sealed partial class SettingsViewModel : ObservableObject
             }
 
             HasValidationError = false;
+
+            // Sync startup registration state before saving
+            var loginStartupChanged = appSettings.StartAppOnWindowsLogin != _loadedStartAppOnWindowsLogin;
+            if (_startupRegistrationService is not null)
+            {
+                // Determine if we need to register or unregister
+                var shouldRegister = loginStartupChanged && appSettings.StartAppOnWindowsLogin;
+                var shouldUnregister = loginStartupChanged && !appSettings.StartAppOnWindowsLogin;
+
+                // Also register if StartAppOnWindowsLogin is already true but OS is Mismatch or Disabled (repair)
+                if (!shouldRegister && !shouldUnregister && appSettings.StartAppOnWindowsLogin)
+                {
+                    var currentStatus = await _startupRegistrationService.GetStatusAsync();
+                    if (currentStatus.State is StartupRegistrationState.Mismatch
+                        or StartupRegistrationState.Disabled)
+                        shouldRegister = true;
+                }
+
+                if (shouldRegister)
+                {
+                    var regStatus = await _startupRegistrationService.RegisterAsync();
+                    if (regStatus.State != StartupRegistrationState.Enabled)
+                    {
+                        HasSaveError = true;
+                        SaveStatusText = $"App settings save failed: {regStatus.DetailText ?? regStatus.StatusText}";
+                        return;
+                    }
+                }
+                else if (shouldUnregister)
+                {
+                    var regStatus = await _startupRegistrationService.UnregisterAsync();
+                    if (regStatus.State != StartupRegistrationState.Disabled)
+                    {
+                        HasSaveError = true;
+                        SaveStatusText = $"App settings save failed: {regStatus.DetailText ?? regStatus.StatusText}";
+                        return;
+                    }
+                }
+            }
+
             await _saveAppSettingsAsync(appSettings, cancellationToken);
             AppSettings = appSettings;
             ApplyAppSettingsToEditor(appSettings);
+            _loadedStartAppOnWindowsLogin = appSettings.StartAppOnWindowsLogin;
             SaveStatusText = "App settings saved.";
             HasSaveError = false;
             IsDirty = false;
             AppSettingsSaved?.Invoke(appSettings);
+
+            // Refresh status text after save
+            await RefreshStartupRegistrationStatusAsync();
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -1118,6 +1185,37 @@ public sealed partial class SettingsViewModel : ObservableObject
             CanReloadAgentConfig = false;
             CanExecuteDataCleanup = false;
             AgentOptionsReloadStatusText = "Unable to determine Agent status. Reload is unavailable.";
+        }
+    }
+
+    internal async Task RefreshStartupRegistrationStatusAsync()
+    {
+        if (_startupRegistrationService is null)
+        {
+            StartupRegistrationStatusText = "Login startup: unknown";
+            return;
+        }
+
+        try
+        {
+            var status = await _startupRegistrationService.GetStatusAsync();
+
+            // Build safe display text from status
+            var text = status.StatusText;
+            if (!string.IsNullOrWhiteSpace(status.DetailText))
+                text += $" — {status.DetailText}";
+
+            // Warn if AppSettings says enabled but OS says Disabled or Mismatch (repairable)
+            // Error / Unsupported are not trivially fixable by saving, so don't suggest repair.
+            if (_startAppOnWindowsLogin && status.State is StartupRegistrationState.Disabled
+                or StartupRegistrationState.Mismatch)
+                text += " (Not registered — save App Settings to repair)";
+
+            StartupRegistrationStatusText = text;
+        }
+        catch
+        {
+            StartupRegistrationStatusText = "Login startup: Error — registration unavailable";
         }
     }
 

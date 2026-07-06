@@ -19,6 +19,7 @@ public sealed class AgentProcessService
     private readonly AgentControlFileStore _controlFileStore;
     private readonly IAgentIpcClient? _ipcClient;
     private readonly ILogger<AgentProcessService> _logger;
+    private readonly bool _showAgentConsole;
 
     internal int StopPollMaxAttempts { get; set; } = 30;
     internal int StopPollDelayMilliseconds { get; set; } = 500;
@@ -28,21 +29,31 @@ public sealed class AgentProcessService
         RuntimeStateStore runtimeStateStore,
         AgentControlFileStore controlFileStore,
         ILogger<AgentProcessService> logger,
-        IAgentIpcClient? ipcClient = null)
+        IAgentIpcClient? ipcClient = null,
+        bool showAgentConsole = false)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
         _controlFileStore = controlFileStore;
         _ipcClient = ipcClient;
         _logger = logger;
+        _showAgentConsole = showAgentConsole;
     }
 
     public async Task<AgentProcessInfo> StartAgentAsync(CancellationToken cancellationToken = default)
     {
-        if (await IsAgentProcessRunningAsync(cancellationToken))
+        var runtimeState = await _runtimeStateStore.ReadAsync(_paths.RuntimeStatePath, cancellationToken);
+        var existing = await GetAgentProcessInfoAsync(cancellationToken);
+        if (existing?.IsRunning == true)
         {
-            var existing = await GetAgentProcessInfoAsync(cancellationToken);
-            if (existing is not null)
+            if (runtimeState?.State == AgentActualState.Stopped
+                && runtimeState.ProcessId > 0
+                && runtimeState.ProcessId == existing.ProcessId
+                && existing.ProcessId is int stoppedProcessId)
+            {
+                await KillProcessByIdAsync(stoppedProcessId, cancellationToken);
+            }
+            else
             {
                 return existing;
             }
@@ -110,6 +121,24 @@ public sealed class AgentProcessService
                 {
                     return true;
                 }
+
+                // If the runtime state explicitly says Stopped and its PID no longer
+                // exists, trust the state rather than falling through to a potentially
+                // unrelated process-name match.
+                var state = await _runtimeStateStore.ReadAsync(_paths.RuntimeStatePath, cancellationToken);
+                if (state?.State == AgentActualState.Stopped && state.ProcessId > 0)
+                {
+                    try
+                    {
+                        using var p = Process.GetProcessById(state.ProcessId);
+                        // Process still exists — not stopped yet
+                    }
+                    catch
+                    {
+                        // PID does not exist — agent is truly gone
+                        return true;
+                    }
+                }
             }
         }
 
@@ -149,10 +178,16 @@ public sealed class AgentProcessService
             return;
         }
 
+        await KillProcessByIdAsync(processId, cancellationToken);
+    }
+
+    private async Task KillProcessByIdAsync(int processId, CancellationToken cancellationToken)
+    {
         try
         {
             using var process = Process.GetProcessById(processId);
             process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -215,7 +250,7 @@ public sealed class AgentProcessService
         }
     }
 
-    private ProcessStartInfo ResolveStartInfo()
+    internal ProcessStartInfo ResolveStartInfo()
     {
         var agentRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var executableCandidates = new[]
@@ -235,21 +270,53 @@ public sealed class AgentProcessService
 
         if (executable.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
         {
-            return new ProcessStartInfo
+            var startInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
                 Arguments = $"\"{executable}\"",
                 WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory,
                 UseShellExecute = false
             };
+
+            ApplyConsoleWindowPolicy(startInfo);
+            return startInfo;
         }
 
-        return new ProcessStartInfo
+        var executableStartInfo = new ProcessStartInfo
         {
             FileName = executable,
             WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory,
             UseShellExecute = false
         };
+
+        ApplyConsoleWindowPolicy(executableStartInfo);
+        return executableStartInfo;
+    }
+
+    private void ApplyConsoleWindowPolicy(ProcessStartInfo startInfo)
+    {
+        if (ShouldShowAgentConsole(_showAgentConsole))
+        {
+            startInfo.CreateNoWindow = false;
+            startInfo.WindowStyle = ProcessWindowStyle.Normal;
+            return;
+        }
+
+        startInfo.CreateNoWindow = true;
+        startInfo.WindowStyle = ProcessWindowStyle.Hidden;
+    }
+
+    internal static bool ShouldShowAgentConsole(bool commandLineFlag = false)
+    {
+        if (commandLineFlag)
+        {
+            return true;
+        }
+
+        var value = Environment.GetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE");
+        return string.Equals(value, "1", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(value, "yes", StringComparison.OrdinalIgnoreCase);
     }
 
     private async Task WaitForRuntimeStateAsync(int processId, CancellationToken cancellationToken)

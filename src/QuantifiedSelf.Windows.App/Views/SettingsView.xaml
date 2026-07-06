@@ -107,6 +107,8 @@
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="220" />
@@ -120,14 +122,34 @@
                                      HorizontalAlignment="Left"
                                      Margin="0,8,0,0" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="autoStartAgentWhenAppStarts" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="WUJI 启动后自动启动 Agent" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <CheckBox Grid.Row="1" Grid.Column="1"
                                       IsChecked="{Binding AutoStartAgentWhenAppStarts, Mode=TwoWay}"
                                       Margin="0,12,0,0"
                                       HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="1"
+                                       Text="WUJI App 启动后自动开始后台采集。"
+                                       Margin="0,32,0,0"
+                                       Foreground="{DynamicResource MutedTextBrush}" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="lastSelectedPage (read-only)" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
-                            <TextBlock Grid.Row="2" Grid.Column="1"
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="登录 Windows 后启动 WUJI" Style="{StaticResource SettingsLabelStyle}" Margin="0,16,12,0" />
+                            <CheckBox Grid.Row="2" Grid.Column="1"
+                                      IsChecked="{Binding StartAppOnWindowsLogin, Mode=TwoWay}"
+                                      Margin="0,18,0,0"
+                                      HorizontalAlignment="Left" />
+                            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="1"
+                                       Text="登录后自动启动 WUJI App，之后可从托盘打开窗口。"
+                                       Margin="0,38,0,0"
+                                       Foreground="{DynamicResource MutedTextBrush}" />
+
+                            <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
+                                       Text="{Binding StartupRegistrationStatusText, Mode=OneWay}"
+                                       Margin="0,10,0,0"
+                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       TextWrapping="Wrap" />
+
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="lastSelectedPage (read-only)" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="4" Grid.Column="1"
                                        Text="{Binding LastSelectedPageText, Mode=OneWay}"
                                        Style="{StaticResource SettingsValueStyle}"
                                        Margin="0,4,0,0" />
