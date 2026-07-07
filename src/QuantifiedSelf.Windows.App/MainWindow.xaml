@@ -61,15 +61,12 @@
 
         <Style x:Key="CardBorderStyle" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="#E3EBF3" />
+            <Setter Property="BorderThickness" Value="1" />
             <Setter Property="CornerRadius" Value="18" />
             <Setter Property="Padding" Value="18" />
             <Setter Property="Margin" Value="0,0,0,16" />
             <Setter Property="SnapsToDevicePixels" Value="True" />
-            <Setter Property="Effect">
-                <Setter.Value>
-                    <DropShadowEffect BlurRadius="24" Color="#33000000" ShadowDepth="2" Opacity="0.12" />
-                </Setter.Value>
-            </Setter>
         </Style>
 
         <Style x:Key="DashboardTopCardStyle" TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
@@ -242,7 +239,7 @@
                                                     <TextBlock Text="{Binding DashboardViewModel.SessionCountText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
                                                 </StackPanel>
                                             </Border>
-                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}" Margin="0,0,0,10">
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
                                                 <StackPanel>
                                                     <TextBlock Text="Samples" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
                                                     <TextBlock Text="{Binding DashboardViewModel.SampleCountText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
@@ -260,7 +257,7 @@
                                                     <TextBlock Text="{Binding DashboardViewModel.LongestFocusText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
                                                 </StackPanel>
                                             </Border>
-                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}" Margin="0,0,0,10">
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
                                                 <StackPanel>
                                                     <TextBlock Text="Time Range" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
                                                     <TextBlock Text="{Binding DashboardViewModel.TimeRangeText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
@@ -328,31 +325,21 @@
                                                        Foreground="{StaticResource MutedTextBrush}" />
 
                                             <!-- Column headers: date labels from ViewModel -->
-                                            <Grid Margin="36,0,0,4">
-                                                <Grid.ColumnDefinitions>
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="*" />
-                                                    <ColumnDefinition Width="*" />
-                                                </Grid.ColumnDefinitions>
-                                                <TextBlock Grid.Column="0" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[0]}" />
-                                                <TextBlock Grid.Column="1" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[1]}" />
-                                                <TextBlock Grid.Column="2" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[2]}" />
-                                                <TextBlock Grid.Column="3" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[3]}" />
-                                                <TextBlock Grid.Column="4" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[4]}" />
-                                                <TextBlock Grid.Column="5" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[5]}" />
-                                                <TextBlock Grid.Column="6" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[6]}" />
-                                            </Grid>
+                                            <ItemsControl Margin="36,0,0,4"
+                                                          ItemsSource="{Binding DashboardViewModel.Heatmap.DateLabels}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Columns="7" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <TextBlock FontSize="9" HorizontalAlignment="Center"
+                                                                   Foreground="{StaticResource MutedTextBrush}"
+                                                                   Text="{Binding}" />
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
 
                                             <!-- Heatmap + hour labels: 24 rows × 7 columns -->
                                             <Grid>
@@ -362,7 +349,7 @@
                                                 </Grid.ColumnDefinitions>
 
                                                 <!-- Hour labels (left side) -->
-                                                <ItemsControl Grid.Column="0" Margin="0,1,4,0"
+                                                <ItemsControl Grid.Column="0" Margin="0,0,4,0"
                                                               ItemsSource="{Binding DashboardViewModel.Heatmap.HourLabels}">
                                                     <ItemsControl.ItemsPanel>
                                                         <ItemsPanelTemplate>
@@ -371,7 +358,7 @@
                                                     </ItemsControl.ItemsPanel>
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
-                                                            <TextBlock Height="18" FontSize="9"
+                                                            <TextBlock Height="20" FontSize="9"
                                                                        VerticalAlignment="Center" HorizontalAlignment="Right"
                                                                        Foreground="{StaticResource MutedTextBrush}"
                                                                        Text="{Binding ., TargetNullValue=''}" />
@@ -496,6 +483,11 @@
                                         <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
                                             <StackPanel>
                                                 <TextBlock Text="Top Apps" FontSize="16" FontWeight="SemiBold" />
+                                                <TextBlock Text="暂无今日应用数据。Agent 运行并写入数据后会显示在这里。"
+                                                           Margin="0,12,0,0"
+                                                           Foreground="{StaticResource MutedTextBrush}"
+                                                           TextWrapping="Wrap"
+                                                           Visibility="{Binding DashboardViewModel.TopApps.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
                                                 <ItemsControl ItemsSource="{Binding DashboardViewModel.TopApps}" Margin="0,12,0,0">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
@@ -521,6 +513,11 @@
                                         <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                                             <StackPanel>
                                                 <TextBlock Text="Top Windows" FontSize="16" FontWeight="SemiBold" />
+                                                <TextBlock Text="暂无今日窗口数据。Agent 运行并写入数据后会显示在这里。"
+                                                           Margin="0,12,0,0"
+                                                           Foreground="{StaticResource MutedTextBrush}"
+                                                           TextWrapping="Wrap"
+                                                           Visibility="{Binding DashboardViewModel.TopWindows.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
                                                 <ItemsControl ItemsSource="{Binding DashboardViewModel.TopWindows}" Margin="0,12,0,0">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
