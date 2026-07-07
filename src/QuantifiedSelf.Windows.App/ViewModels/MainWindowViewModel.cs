@@ -41,6 +41,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AppsViewModel _appsViewModel;
     private readonly SettingsViewModel _settingsViewModel;
     private readonly SettingsService _settingsService;
+    private readonly DashboardViewModel _dashboardViewModel;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _statusPollTimer;
     private CancellationTokenSource? _statusPollCts;
@@ -57,11 +58,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _agentStatusText = "Not running";
     private string _lastHeartbeatText = "-";
     private string _lastSampleText = "-";
-    private string _todayTotalText = "-";
-    private string _todayActiveText = "-";
-    private string _todayIdleText = "-";
-    private string _todayUnknownText = "-";
-    private string _todaySessionCountText = "-";
     private bool _isBusy;
     private bool _isMaintenance;
     private string _currentPage = "Dashboard";
@@ -97,6 +93,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AppsViewModel appsViewModel,
         SettingsViewModel settingsViewModel,
         SettingsService settingsService,
+        DashboardViewModel dashboardViewModel,
         AgentIpcStatusService? ipcStatusService = null,
         RefreshService? refreshService = null,
         ITrayStateSink? trayStateSink = null)
@@ -114,6 +111,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _appsViewModel = appsViewModel;
         _settingsViewModel = settingsViewModel;
         _settingsService = settingsService;
+        _dashboardViewModel = dashboardViewModel;
         _settingsViewModel.AppSettingsSaved += HandleAppSettingsSaved;
 
         StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy && _commandAvailability.CanStart);
@@ -150,10 +148,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public ObservableCollection<string> Messages { get; } = new();
 
-    public ObservableCollection<AppUsageSummary> TopApps { get; } = new();
-
-    public ObservableCollection<AppSession> RecentSessions { get; } = new();
-
     public ObservableCollection<AgentEvent> RecentEvents { get; } = new();
 
     public ObservableCollection<AgentEvent> RecentErrors { get; } = new();
@@ -165,6 +159,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public AppsViewModel AppsViewModel => _appsViewModel;
 
     public SettingsViewModel SettingsViewModel => _settingsViewModel;
+
+    public DashboardViewModel DashboardViewModel => _dashboardViewModel;
 
     internal ITrayStateSink? TrayStateSink
     {
@@ -212,36 +208,6 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         get => _lastSampleText;
         private set => SetProperty(ref _lastSampleText, value);
-    }
-
-    public string TodayTotalText
-    {
-        get => _todayTotalText;
-        private set => SetProperty(ref _todayTotalText, value);
-    }
-
-    public string TodayActiveText
-    {
-        get => _todayActiveText;
-        private set => SetProperty(ref _todayActiveText, value);
-    }
-
-    public string TodayIdleText
-    {
-        get => _todayIdleText;
-        private set => SetProperty(ref _todayIdleText, value);
-    }
-
-    public string TodayUnknownText
-    {
-        get => _todayUnknownText;
-        private set => SetProperty(ref _todayUnknownText, value);
-    }
-
-    public string TodaySessionCountText
-    {
-        get => _todaySessionCountText;
-        private set => SetProperty(ref _todaySessionCountText, value);
     }
 
     public bool IsBusy
@@ -700,18 +666,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AgentStatusSnapshot status,
         CancellationToken cancellationToken)
     {
-        var dashboardSummary = await _overviewDataService.GetDashboardSummaryAsync(cancellationToken);
-        var topApps = await _overviewDataService.GetTopAppsTodayAsync(5, cancellationToken);
-        var recentSessions = await _overviewDataService.GetRecentSessionsAsync(5, cancellationToken);
-
-        TodayTotalText = FormatDuration(dashboardSummary.TotalDurationSeconds);
-        TodayActiveText = FormatDuration(dashboardSummary.ActiveDurationSeconds);
-        TodayIdleText = FormatDuration(dashboardSummary.IdleDurationSeconds);
-        TodayUnknownText = FormatDuration(dashboardSummary.UnknownDurationSeconds);
-        TodaySessionCountText = dashboardSummary.SessionCount.ToString();
-
-        ReplaceCollection(TopApps, topApps);
-        ReplaceCollection(RecentSessions, recentSessions);
+        await _dashboardViewModel.LoadAsync(cancellationToken);
         RefreshMessages(status);
     }
 

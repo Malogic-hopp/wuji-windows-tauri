@@ -72,6 +72,31 @@
             </Setter>
         </Style>
 
+        <Style x:Key="DashboardTopCardStyle" TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
+            <Setter Property="MinHeight" Value="96" />
+            <Setter Property="Margin" Value="0" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+        </Style>
+
+        <Style x:Key="DashboardMetricLabelStyle" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+
+        <Style x:Key="DashboardMetricValueStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="18" />
+            <Setter Property="FontWeight" Value="Bold" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+        </Style>
+
+        <Style x:Key="DashboardInsightMetricCardStyle" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource SurfaceAltBrush}" />
+            <Setter Property="CornerRadius" Value="10" />
+            <Setter Property="Padding" Value="12,10" />
+            <Setter Property="Margin" Value="0,0,10,10" />
+        </Style>
+
         <Style TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
         </Style>
@@ -135,85 +160,334 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
                                 <RowDefinition Height="Auto" />
                             </Grid.RowDefinitions>
 
-                            <UniformGrid Grid.Row="0" Columns="4" Margin="0,0,0,16">
-                                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,16,0">
-                                    <StackPanel>
-                                        <TextBlock Text="Agent state" Foreground="{StaticResource MutedTextBrush}" />
-                                        <TextBlock Text="{Binding AgentStatusText}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,16,0">
-                                    <StackPanel>
-                                        <TextBlock Text="Last heartbeat" Foreground="{StaticResource MutedTextBrush}" />
-                                        <TextBlock Text="{Binding LastHeartbeatText}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,16,0">
-                                    <StackPanel>
-                                        <TextBlock Text="Last sample" Foreground="{StaticResource MutedTextBrush}" />
-                                        <TextBlock Text="{Binding LastSampleText}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
-                                </Border>
-                                <Border Style="{StaticResource CardBorderStyle}">
-                                    <StackPanel>
-                                        <TextBlock Text="Runtime" Foreground="{StaticResource MutedTextBrush}" />
-                                        <TextBlock Text="{Binding TodayTotalText}" FontSize="22" FontWeight="Bold" Margin="0,8,0,0" TextTrimming="CharacterEllipsis" />
-                                    </StackPanel>
-                                </Border>
-                            </UniformGrid>
+                            <!-- Row 0: compact agent overview -->
+                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="0" Padding="14" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="1.05*" />
+                                        <ColumnDefinition Width="1.35*" />
+                                        <ColumnDefinition Width="1.35*" />
+                                        <ColumnDefinition Width="1.05*" />
+                                        <ColumnDefinition Width="2.1*" />
+                                    </Grid.ColumnDefinitions>
 
-                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="1">
-                                <StackPanel>
-                                    <TextBlock Text="Agent process" FontSize="16" FontWeight="SemiBold" />
-                                    <TextBlock Text="{Binding AgentProcessText}" Margin="0,10,0,0" Foreground="{StaticResource MutedTextBrush}" />
-                                </StackPanel>
+                                    <StackPanel Grid.Column="0" Margin="0,0,18,0">
+                                        <TextBlock Text="Agent state" Style="{StaticResource DashboardMetricLabelStyle}" />
+                                        <TextBlock Text="{Binding AgentStatusText}" Style="{StaticResource DashboardMetricValueStyle}" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="1" Margin="0,0,18,0">
+                                        <TextBlock Text="Last heartbeat" Style="{StaticResource DashboardMetricLabelStyle}" />
+                                        <TextBlock Text="{Binding LastHeartbeatText}" Style="{StaticResource DashboardMetricValueStyle}" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="2" Margin="0,0,18,0">
+                                        <TextBlock Text="Last sample" Style="{StaticResource DashboardMetricLabelStyle}" />
+                                        <TextBlock Text="{Binding LastSampleText}" Style="{StaticResource DashboardMetricValueStyle}" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="3" Margin="0,0,18,0">
+                                        <TextBlock Text="Today Active" Style="{StaticResource DashboardMetricLabelStyle}" />
+                                        <TextBlock Text="{Binding DashboardViewModel.TotalActiveText}" Style="{StaticResource DashboardMetricValueStyle}" />
+                                    </StackPanel>
+
+                                    <StackPanel Grid.Column="4">
+                                        <TextBlock Text="Agent process" Style="{StaticResource DashboardMetricLabelStyle}" />
+                                        <TextBlock Text="{Binding AgentProcessText}" Style="{StaticResource DashboardMetricValueStyle}" FontSize="13"
+                                                   FontWeight="SemiBold" Foreground="{StaticResource MutedTextBrush}" />
+                                    </StackPanel>
+                                </Grid>
                             </Border>
 
-                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="2">
-                                <Grid>
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" />
-                                        <RowDefinition Height="Auto" />
-                                    </Grid.RowDefinitions>
+                            <!-- Row 1: Today Insight -->
+                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="1" Margin="0,0,0,0">
+                                <StackPanel>
+                                    <TextBlock Text="Today Insight" FontSize="16" FontWeight="SemiBold" />
 
-                                    <UniformGrid Grid.Row="0" Columns="5" Margin="0,0,0,16">
-                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,0,12,0">
-                                            <StackPanel>
-                                                <TextBlock Text="Today total" Foreground="{StaticResource MutedTextBrush}" />
-                                                <TextBlock Text="{Binding TodayTotalText}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" />
-                                            </StackPanel>
-                                        </Border>
-                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,0,12,0">
-                                            <StackPanel>
-                                                <TextBlock Text="Today active" Foreground="{StaticResource MutedTextBrush}" />
-                                                <TextBlock Text="{Binding TodayActiveText}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" />
-                                            </StackPanel>
-                                        </Border>
-                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="0,0,12,0">
-                                            <StackPanel>
-                                                <TextBlock Text="Today idle" Foreground="{StaticResource MutedTextBrush}" />
-                                                <TextBlock Text="{Binding TodayIdleText}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" />
-                                            </StackPanel>
-                                        </Border>
-                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14">
-                                            <StackPanel>
-                                                <TextBlock Text="Today unknown" Foreground="{StaticResource MutedTextBrush}" />
-                                                <TextBlock Text="{Binding TodayUnknownText}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" />
-                                            </StackPanel>
-                                        </Border>
-                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="14" Padding="14" Margin="12,0,0,0">
-                                            <StackPanel>
-                                                <TextBlock Text="Sessions" Foreground="{StaticResource MutedTextBrush}" />
-                                                <TextBlock Text="{Binding TodaySessionCountText}" FontSize="20" FontWeight="Bold" Margin="0,8,0,0" />
-                                            </StackPanel>
-                                        </Border>
-                                    </UniformGrid>
+                                    <!-- Summary + metrics -->
+                                    <Grid Margin="0,12,0,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="1.35*" />
+                                            <ColumnDefinition Width="2.65*" />
+                                        </Grid.ColumnDefinitions>
 
-                                    <Grid Grid.Row="1">
+                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,0,12,10">
+                                            <StackPanel VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding DashboardViewModel.SummaryText}" FontSize="14"
+                                                           TextWrapping="Wrap" Foreground="{StaticResource MutedTextBrush}" />
+                                                <TextBlock Margin="0,8,0,0" FontSize="11"
+                                                           Foreground="{StaticResource MutedTextBrush}" Opacity="0.6">
+                                                    <TextBlock.Text>
+                                                        <MultiBinding StringFormat="更新于 {0}">
+                                                            <Binding Path="DashboardViewModel.GeneratedAtText" />
+                                                        </MultiBinding>
+                                                    </TextBlock.Text>
+                                                </TextBlock>
+                                            </StackPanel>
+                                        </Border>
+
+                                        <UniformGrid Grid.Column="1" Columns="3" Rows="2">
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
+                                                <StackPanel>
+                                                    <TextBlock Text="Active" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="{Binding DashboardViewModel.TotalActiveText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
+                                                <StackPanel>
+                                                    <TextBlock Text="Sessions" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="{Binding DashboardViewModel.SessionCountText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}" Margin="0,0,0,10">
+                                                <StackPanel>
+                                                    <TextBlock Text="Samples" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="{Binding DashboardViewModel.SampleCountText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
+                                                <StackPanel>
+                                                    <TextBlock Text="Context Switches" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="{Binding DashboardViewModel.ContextSwitchText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
+                                                <StackPanel>
+                                                    <TextBlock Text="Longest Focus" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="{Binding DashboardViewModel.LongestFocusText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
+                                                </StackPanel>
+                                            </Border>
+                                            <Border Style="{StaticResource DashboardInsightMetricCardStyle}" Margin="0,0,0,10">
+                                                <StackPanel>
+                                                    <TextBlock Text="Time Range" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="{Binding DashboardViewModel.TimeRangeText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                                                </StackPanel>
+                                            </Border>
+                                        </UniformGrid>
+                                    </Grid>
+
+                                    <!-- Suggestions -->
+                                    <ItemsControl ItemsSource="{Binding DashboardViewModel.Suggestions}" Margin="0,0,0,14">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border CornerRadius="10" Padding="14" Margin="0,0,0,8"
+                                                        Background="{StaticResource SurfaceAltBrush}">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="Auto" />
+                                                            <ColumnDefinition Width="*" />
+                                                        </Grid.ColumnDefinitions>
+
+                                                        <!-- Severity indicator -->
+                                                        <Border Grid.Column="0" Width="4" CornerRadius="2"
+                                                                VerticalAlignment="Stretch" Margin="0,0,12,0">
+                                                            <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding Severity}" Value="Positive">
+                                                                            <Setter Property="Background" Value="#4CAF50" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding Severity}" Value="Warning">
+                                                                            <Setter Property="Background" Value="#FF9800" />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding Severity}" Value="Neutral">
+                                                                            <Setter Property="Background" Value="#607D8B" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </Border.Style>
+                                                        </Border>
+
+                                                        <StackPanel Grid.Column="1">
+                                                            <TextBlock Text="{Binding Title}" FontSize="14"
+                                                                       FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                            <TextBlock Text="{Binding Message}" FontSize="13"
+                                                                       TextWrapping="Wrap" Margin="0,6,0,0"
+                                                                       Foreground="{StaticResource MutedTextBrush}" />
+                                                            <TextBlock Text="{Binding EvidenceText}" FontSize="12"
+                                                                       TextWrapping="Wrap" Margin="0,6,0,0"
+                                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                                       Opacity="0.8" />
+                                                            <TextBlock Text="{Binding ActionText}" FontSize="13"
+                                                                       TextWrapping="Wrap" Margin="0,8,0,0"
+                                                                       FontStyle="Italic" />
+                                                        </StackPanel>
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+
+                                    <!-- Activity Heatmap -->
+                                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,12,0,0">
+                                        <StackPanel>
+                                            <TextBlock Text="Activity Heatmap" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"
+                                                       Foreground="{StaticResource MutedTextBrush}" />
+
+                                            <!-- Column headers: date labels from ViewModel -->
+                                            <Grid Margin="36,0,0,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Grid.Column="0" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[0]}" />
+                                                <TextBlock Grid.Column="1" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[1]}" />
+                                                <TextBlock Grid.Column="2" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[2]}" />
+                                                <TextBlock Grid.Column="3" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[3]}" />
+                                                <TextBlock Grid.Column="4" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[4]}" />
+                                                <TextBlock Grid.Column="5" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[5]}" />
+                                                <TextBlock Grid.Column="6" FontSize="9" HorizontalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                           Text="{Binding DashboardViewModel.Heatmap.DateLabels[6]}" />
+                                            </Grid>
+
+                                            <!-- Heatmap + hour labels: 24 rows × 7 columns -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="36" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- Hour labels (left side) -->
+                                                <ItemsControl Grid.Column="0" Margin="0,1,4,0"
+                                                              ItemsSource="{Binding DashboardViewModel.Heatmap.HourLabels}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <UniformGrid Columns="1" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Height="18" FontSize="9"
+                                                                       VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                                       Text="{Binding ., TargetNullValue=''}" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+
+                                                <!-- Heatmap cells: 24 rows × 7 columns (hour-major) -->
+                                                <ItemsControl Grid.Column="1" ItemsSource="{Binding DashboardViewModel.Heatmap.Cells}">
+                                                    <ItemsControl.ItemsPanel>
+                                                        <ItemsPanelTemplate>
+                                                            <UniformGrid Columns="7" />
+                                                        </ItemsPanelTemplate>
+                                                    </ItemsControl.ItemsPanel>
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border Height="18" CornerRadius="2" Margin="1"
+                                                                    Background="{Binding Background}"
+                                                                    ToolTip="{Binding TooltipText}" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- 7-Day Trend -->
+                                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,12,0,0">
+                                        <StackPanel>
+                                            <TextBlock Text="7-Day Trend" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"
+                                                       Foreground="{StaticResource MutedTextBrush}" />
+
+                                            <!-- Seven-day bar chart -->
+                                            <ItemsControl ItemsSource="{Binding DashboardViewModel.TrendDays}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Columns="7" />
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid Margin="3,0">
+                                                            <Grid.RowDefinitions>
+                                                                <RowDefinition Height="Auto" />
+                                                                <RowDefinition Height="82" />
+                                                                <RowDefinition Height="Auto" />
+                                                            </Grid.RowDefinitions>
+
+                                                            <TextBlock Text="{Binding ActiveText}" Grid.Row="0" FontSize="11"
+                                                                       HorizontalAlignment="Center" TextAlignment="Center"
+                                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                                       FontWeight="SemiBold" Margin="0,0,0,6" />
+
+                                                            <Grid Grid.Row="1" VerticalAlignment="Bottom" Margin="0,0,0,6">
+                                                                <Border Background="#D9E2EC" Opacity="0.45"
+                                                                        CornerRadius="6"
+                                                                        HorizontalAlignment="Center"
+                                                                        VerticalAlignment="Bottom"
+                                                                        Width="18"
+                                                                        Height="72" />
+
+                                                                <Border Width="18"
+                                                                        Height="{Binding BarHeightPixels}"
+                                                                        HorizontalAlignment="Center"
+                                                                        VerticalAlignment="Bottom"
+                                                                        CornerRadius="6">
+                                                                    <Border.Style>
+                                                                        <Style TargetType="Border">
+                                                                            <Setter Property="Background" Value="#94A3B8" />
+                                                                            <Setter Property="BorderBrush" Value="#94A3B8" />
+                                                                            <Setter Property="BorderThickness" Value="0" />
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding IsToday}" Value="True">
+                                                                                    <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                                                                    <Setter Property="BorderBrush" Value="{StaticResource AccentDarkBrush}" />
+                                                                                    <Setter Property="BorderThickness" Value="1" />
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </Border.Style>
+                                                                </Border>
+                                                            </Grid>
+
+                                                            <StackPanel Grid.Row="2" HorizontalAlignment="Center">
+                                                                <TextBlock Text="{Binding DayLabel}" FontSize="11"
+                                                                           HorizontalAlignment="Center"
+                                                                           Foreground="{StaticResource TextBrush}"
+                                                                           FontWeight="SemiBold" />
+                                                                <TextBlock Text="{Binding DateLabel}" FontSize="10"
+                                                                           HorizontalAlignment="Center"
+                                                                           Foreground="{StaticResource MutedTextBrush}"
+                                                                           Margin="0,2,0,0" />
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+
+                                            <!-- Trend comparison -->
+                                            <TextBlock Margin="0,10,0,0" TextWrapping="Wrap" FontSize="13"
+                                                       Foreground="{StaticResource MutedTextBrush}">
+                                                <TextBlock.Text>
+                                                    <MultiBinding StringFormat="{}{0}&#x0a;{1}&#x0a;{2}&#x0a;{3}&#x0a;{4}">
+                                                        <Binding Path="DashboardViewModel.ActiveTrendText" />
+                                                        <Binding Path="DashboardViewModel.YesterdayActiveTrendText" />
+                                                        <Binding Path="DashboardViewModel.WeekActiveTrendText" />
+                                                        <Binding Path="DashboardViewModel.FocusTrendText" />
+                                                        <Binding Path="DashboardViewModel.SwitchTrendText" />
+                                                    </MultiBinding>
+                                                </TextBlock.Text>
+                                            </TextBlock>
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Top Apps + Top Windows -->
+                                    <Grid Margin="0,16,0,0">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="*" />
@@ -222,14 +496,20 @@
                                         <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
                                             <StackPanel>
                                                 <TextBlock Text="Top Apps" FontSize="16" FontWeight="SemiBold" />
-                                                <ItemsControl ItemsSource="{Binding TopApps}" Margin="0,12,0,0">
+                                                <ItemsControl ItemsSource="{Binding DashboardViewModel.TopApps}" Margin="0,12,0,0">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
                                                             <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
                                                                 <StackPanel>
                                                                     <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                                                    <TextBlock Text="{Binding TotalDurationSeconds, StringFormat=Total {0} sec}" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0" />
-                                                                    <TextBlock Text="{Binding ActiveDurationSeconds, StringFormat=Active {0} sec}" Foreground="{StaticResource MutedTextBrush}" />
+                                                                    <TextBlock Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}">
+                                                                        <TextBlock.Text>
+                                                                            <MultiBinding StringFormat="Active {0}s / Total {1}s">
+                                                                                <Binding Path="ActiveDurationSeconds" />
+                                                                                <Binding Path="TotalDurationSeconds" />
+                                                                            </MultiBinding>
+                                                                        </TextBlock.Text>
+                                                                    </TextBlock>
                                                                 </StackPanel>
                                                             </Border>
                                                         </DataTemplate>
@@ -240,16 +520,21 @@
 
                                         <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
                                             <StackPanel>
-                                                <TextBlock Text="Recent Sessions" FontSize="16" FontWeight="SemiBold" />
-                                                <ItemsControl ItemsSource="{Binding RecentSessions}" Margin="0,12,0,0">
+                                                <TextBlock Text="Top Windows" FontSize="16" FontWeight="SemiBold" />
+                                                <ItemsControl ItemsSource="{Binding DashboardViewModel.TopWindows}" Margin="0,12,0,0">
                                                     <ItemsControl.ItemTemplate>
                                                         <DataTemplate>
                                                             <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
                                                                 <StackPanel>
-                                                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                                                    <TextBlock Text="{Binding StartedAtUtc, StringFormat=Start {0:yyyy-MM-dd HH:mm:ss}}" Foreground="{StaticResource MutedTextBrush}" Margin="0,4,0,0" />
-                                                                    <TextBlock Text="{Binding TotalDurationSeconds, StringFormat=Total {0} sec}" Foreground="{StaticResource MutedTextBrush}" />
-                                                                    <TextBlock Text="{Binding CloseReason, StringFormat=Reason {0}}" Foreground="{StaticResource MutedTextBrush}" />
+                                                                    <TextBlock Text="{Binding SafeWindowTitle, TargetNullValue='(no title)', FallbackValue='(no title)'}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                                                                    <TextBlock Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}">
+                                                                        <TextBlock.Text>
+                                                                            <MultiBinding StringFormat="{}{0} · {1} samples">
+                                                                                <Binding Path="ProcessName" />
+                                                                                <Binding Path="SampleCount" />
+                                                                            </MultiBinding>
+                                                                        </TextBlock.Text>
+                                                                    </TextBlock>
                                                                 </StackPanel>
                                                             </Border>
                                                         </DataTemplate>
@@ -258,10 +543,11 @@
                                             </StackPanel>
                                         </Border>
                                     </Grid>
-                                </Grid>
+                                </StackPanel>
                             </Border>
 
-                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="3">
+                            <!-- Row 3: Messages -->
+                            <Border Style="{StaticResource CardBorderStyle}" Grid.Row="2" Margin="0,16,0,0">
                                 <StackPanel>
                                     <TextBlock Text="Messages" FontSize="16" FontWeight="SemiBold" />
                                     <ItemsControl ItemsSource="{Binding Messages}" Margin="0,12,0,0">

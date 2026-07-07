@@ -270,12 +270,12 @@ public sealed class AgentProcessService
         // 1. Publish directory — Agent exe isolated under App\Agent so its
         // self-contained dependencies do not conflict with App dependencies.
         var publishSubdirExe = Path.Combine(baseDir, "Agent", "QuantifiedSelf.Windows.Agent.exe");
-        if (File.Exists(publishSubdirExe))
+        if (IsRunnableAgentCandidate(publishSubdirExe))
             return publishSubdirExe;
 
         // 2. Legacy co-located publish layout.
         var publishExe = Path.Combine(baseDir, "QuantifiedSelf.Windows.Agent.exe");
-        if (File.Exists(publishExe))
+        if (IsRunnableAgentCandidate(publishExe))
             return publishExe;
 
         // 3. Environment variable override
@@ -294,6 +294,37 @@ public sealed class AgentProcessService
         };
 
         return devCandidates.FirstOrDefault(File.Exists);
+    }
+
+    private static bool IsRunnableAgentCandidate(string executablePath)
+    {
+        if (!File.Exists(executablePath))
+            return false;
+
+        if (!executablePath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var directory = Path.GetDirectoryName(executablePath);
+        if (string.IsNullOrWhiteSpace(directory))
+            return true;
+
+        var fileNameWithoutExtension = Path.GetFileNameWithoutExtension(executablePath);
+        var companionDll = Path.Combine(directory, fileNameWithoutExtension + ".dll");
+        if (File.Exists(companionDll))
+            return true;
+
+        var depsJson = Path.Combine(directory, fileNameWithoutExtension + ".deps.json");
+        var runtimeConfig = Path.Combine(directory, fileNameWithoutExtension + ".runtimeconfig.json");
+
+        // A framework-dependent apphost with deps/runtimeconfig but no companion dll
+        // exits immediately with "The application to execute does not exist".
+        // This can appear in the App debug output because the App project references
+        // the Agent project with ReferenceOutputAssembly=false.
+        if (File.Exists(depsJson) || File.Exists(runtimeConfig))
+            return false;
+
+        // No sidecar metadata: allow possible single-file or test fake executables.
+        return true;
     }
 
     internal ProcessStartInfo ResolveStartInfo(string? baseDirectory = null)

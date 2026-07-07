@@ -80,9 +80,13 @@ public partial class App : Application
         var samplesDataService = new SamplesDataService(paths);
         var sessionsDataService = new SessionsDataService(paths);
         var appsDataService = new AppsDataService(paths);
+        var dailyStatsService = new DailyStatsService(paths);
+        var weeklyTrendService = new WeeklyTrendService(paths);
+        var heatmapService = new HourActivityHeatmapService(paths);
         var samplesViewModel = new SamplesViewModel(samplesDataService);
         var sessionsViewModel = new SessionsViewModel(sessionsDataService);
         var appsViewModel = new AppsViewModel(appsDataService);
+        var dashboardViewModel = new DashboardViewModel(dailyStatsService, weeklyTrendService, heatmapService);
         Resources.Add("BooleanToVisibilityConverter", new BooleanToVisibilityConverter());
 
         var refreshService = new RefreshService(statusService, processService);
@@ -102,6 +106,7 @@ public partial class App : Application
             appsViewModel,
             settingsViewModel,
             settingsService,
+            dashboardViewModel,
             ipcStatusService,
             refreshService,
             trayStateSink: null); // set via TrayStateSink after tray creation
