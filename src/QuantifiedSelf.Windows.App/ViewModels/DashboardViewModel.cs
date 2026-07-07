@@ -43,6 +43,13 @@ public sealed class DashboardViewModel : ObservableObject
     private ISeries[] _activeTrendSeries = CreateTrendSeries([]);
     private Axis[] _activeTrendXAxes = CreateTrendXAxes([]);
     private Axis[] _activeTrendYAxes = CreateTrendYAxes();
+    private ISeries[] _topAppsSeries = [];
+    private Axis[] _topAppsXAxes = [];
+    private Axis[] _topAppsYAxes = [];
+    private ISeries[] _hourlyActiveSeries = [];
+    private Axis[] _hourlyActiveXAxes = [];
+    private Axis[] _hourlyActiveYAxes = [];
+    private ISeries[] _appShareSeries = [];
     private bool _hasLoadError;
     private bool _isLoading;
 
@@ -171,6 +178,48 @@ public sealed class DashboardViewModel : ObservableObject
     {
         get => _activeTrendYAxes;
         private set => SetProperty(ref _activeTrendYAxes, value);
+    }
+
+    public ISeries[] TopAppsSeries
+    {
+        get => _topAppsSeries;
+        private set => SetProperty(ref _topAppsSeries, value);
+    }
+
+    public Axis[] TopAppsXAxes
+    {
+        get => _topAppsXAxes;
+        private set => SetProperty(ref _topAppsXAxes, value);
+    }
+
+    public Axis[] TopAppsYAxes
+    {
+        get => _topAppsYAxes;
+        private set => SetProperty(ref _topAppsYAxes, value);
+    }
+
+    public ISeries[] HourlyActiveSeries
+    {
+        get => _hourlyActiveSeries;
+        private set => SetProperty(ref _hourlyActiveSeries, value);
+    }
+
+    public Axis[] HourlyActiveXAxes
+    {
+        get => _hourlyActiveXAxes;
+        private set => SetProperty(ref _hourlyActiveXAxes, value);
+    }
+
+    public Axis[] HourlyActiveYAxes
+    {
+        get => _hourlyActiveYAxes;
+        private set => SetProperty(ref _hourlyActiveYAxes, value);
+    }
+
+    public ISeries[] AppShareSeries
+    {
+        get => _appShareSeries;
+        private set => SetProperty(ref _appShareSeries, value);
     }
 
     public ObservableCollection<InsightSuggestion> Suggestions { get; } = new();
@@ -353,9 +402,10 @@ public sealed class DashboardViewModel : ObservableObject
             });
         }
 
-        ActiveTrendSeries = CreateTrendSeries(trend.Days.Select(d => d.ActiveSeconds / 3600.0).ToArray());
+        var activeHours = trend.Days.Select(d => d.ActiveSeconds / 3600.0).ToArray();
+        ActiveTrendSeries = CreateTrendSeries(activeHours);
         ActiveTrendXAxes = CreateTrendXAxes(TrendDays.Select(d => $"{d.DayLabel}\n{d.DateLabel}").ToArray());
-        ActiveTrendYAxes = CreateTrendYAxes();
+        ActiveTrendYAxes = CreateTrendYAxes(activeHours.Length == 0 ? null : activeHours.Max());
     }
 
     private void ApplySummary(DailyActivitySummary summary)
@@ -418,6 +468,11 @@ public sealed class DashboardViewModel : ObservableObject
             Suggestions.Add(s);
         }
 
+        // Build chart series
+        BuildTopAppsChart(summary.TopApps);
+        BuildHourlyActiveChart(summary.HourlyActivity);
+        BuildAppShareChart(summary.TopApps, summary.TotalActiveDurationSeconds);
+
         // Record generation time
         GeneratedAtText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
 
@@ -448,6 +503,13 @@ public sealed class DashboardViewModel : ObservableObject
         ActiveTrendSeries = CreateTrendSeries([]);
         ActiveTrendXAxes = CreateTrendXAxes([]);
         ActiveTrendYAxes = CreateTrendYAxes();
+        TopAppsSeries = [];
+        TopAppsXAxes = [];
+        TopAppsYAxes = [];
+        HourlyActiveSeries = [];
+        HourlyActiveXAxes = [];
+        HourlyActiveYAxes = [];
+        AppShareSeries = [];
         Suggestions.Clear();
         Heatmap = new HourActivityHeatmapViewModel();
         GeneratedAtText = "";
@@ -462,6 +524,7 @@ public sealed class DashboardViewModel : ObservableObject
             {
                 Values = activeHours,
                 Name = "Active",
+                AnimationsSpeed = TimeSpan.Zero,
                 Fill = new SolidColorPaint(new SKColor(15, 118, 110)),
                 Stroke = new SolidColorPaint(new SKColor(17, 94, 89)) { StrokeThickness = 1 },
                 MaxBarWidth = 28,
@@ -483,23 +546,30 @@ public sealed class DashboardViewModel : ObservableObject
                 TextSize = 11,
                 LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
                 SeparatorsPaint = null,
-                TicksPaint = null
+                TicksPaint = null,
+                AnimationsSpeed = TimeSpan.Zero
             }
         ];
     }
 
-    private static Axis[] CreateTrendYAxes()
+    private static Axis[] CreateTrendYAxes(double? maxActiveHours = null)
     {
+        var maxLimit = maxActiveHours is > 0
+            ? Math.Max(1.0, maxActiveHours.Value * 1.22)
+            : (double?)null;
+
         return
         [
             new Axis
             {
                 MinLimit = 0,
+                MaxLimit = maxLimit,
                 TextSize = 11,
                 Labeler = value => FormatHoursCompact(value),
                 LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
                 SeparatorsPaint = new SolidColorPaint(new SKColor(226, 232, 240)) { StrokeThickness = 1 },
-                TicksPaint = null
+                TicksPaint = null,
+                AnimationsSpeed = TimeSpan.Zero
             }
         ];
     }
@@ -584,5 +654,227 @@ public sealed class DashboardViewModel : ObservableObject
         return span.TotalHours >= 1
             ? $"{(int)span.TotalHours}h {span.Minutes}m"
             : $"{span.Minutes}m {span.Seconds}s";
+    }
+
+    // ── Top Apps Horizontal Bar Chart ──
+
+    private void BuildTopAppsChart(IReadOnlyList<AppUsageSummary> topApps)
+    {
+        if (topApps.Count == 0)
+        {
+            TopAppsSeries = [];
+            TopAppsXAxes = [];
+            TopAppsYAxes = [];
+            return;
+        }
+
+        // RowSeries draws from bottom to top, so reverse to put #1 at top
+        var ordered = topApps.Take(TopAppsLimit).Reverse().ToList();
+        var values = ordered.Select(a => (double)a.ActiveDurationSeconds).ToArray();
+        var labels = ordered.Select(a => GetAppDisplayLabel(a)).ToArray();
+        var maxValue = values.Length > 0 ? values.Max() : 0.0;
+
+        TopAppsSeries =
+        [
+            new RowSeries<double>
+            {
+                Values = values,
+                Name = "Active",
+                AnimationsSpeed = TimeSpan.Zero,
+                Fill = new SolidColorPaint(new SKColor(15, 118, 110)),
+                Stroke = new SolidColorPaint(new SKColor(17, 94, 89)) { StrokeThickness = 1 },
+                MaxBarWidth = 24,
+                Padding = 6,
+                XToolTipLabelFormatter = point =>
+                {
+                    // RowSeries: SecondaryValue = category index, PrimaryValue = data value
+                    var index = (int)Math.Round(point.Coordinate.SecondaryValue);
+                    var label = index >= 0 && index < labels.Length ? labels[index] : "?";
+                    return $"{label} · {FormatDurationLong((long)point.Coordinate.PrimaryValue)}";
+                },
+                YToolTipLabelFormatter = _ => string.Empty,
+                DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                DataLabelsSize = 11,
+                DataLabelsFormatter = point => FormatDurationLong((long)point.Coordinate.PrimaryValue),
+                DataLabelsPosition = LiveChartsCore.Measure.DataLabelsPosition.End
+            }
+        ];
+
+        TopAppsXAxes =
+        [
+            new Axis
+            {
+                MinLimit = 0,
+                MaxLimit = Math.Max(1.0, maxValue * 1.15),
+                TextSize = 11,
+                Labeler = value => FormatDurationLong((long)value),
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = new SolidColorPaint(new SKColor(226, 232, 240)) { StrokeThickness = 1 },
+                TicksPaint = null,
+                AnimationsSpeed = TimeSpan.Zero
+            }
+        ];
+
+        TopAppsYAxes =
+        [
+            new Axis
+            {
+                Labels = labels,
+                TextSize = 12,
+                LabelsPaint = new SolidColorPaint(new SKColor(16, 42, 67)),
+                SeparatorsPaint = null,
+                TicksPaint = null,
+                AnimationsSpeed = TimeSpan.Zero
+            }
+        ];
+    }
+
+    private static string GetAppDisplayLabel(AppUsageSummary app)
+    {
+        return string.IsNullOrWhiteSpace(app.DisplayName) ? app.ProcessName : app.DisplayName;
+    }
+
+    // ── Today 24h Active Column Chart ──
+
+    private void BuildHourlyActiveChart(IReadOnlyList<HourlyActivity> hourly)
+    {
+        if (hourly.Count == 0)
+        {
+            HourlyActiveSeries = [];
+            HourlyActiveXAxes = [];
+            HourlyActiveYAxes = [];
+            return;
+        }
+
+        var activeValues = hourly.Select(h => h.ActiveSeconds).ToArray();
+        var maxValue = activeValues.Length > 0 ? activeValues.Max() : 0.0;
+        var xLabels = hourly.Select(h => h.Hour % 3 == 0 ? $"{h.Hour}:00" : "").ToArray();
+
+        HourlyActiveSeries =
+        [
+            new ColumnSeries<double>
+            {
+                Values = activeValues,
+                Name = "Active",
+                AnimationsSpeed = TimeSpan.Zero,
+                Fill = new SolidColorPaint(new SKColor(15, 118, 110)),
+                Stroke = null,
+                MaxBarWidth = 18,
+                Padding = 2,
+                XToolTipLabelFormatter = point =>
+                {
+                    // ColumnSeries: SecondaryValue = category index (0-23 = hour)
+                    var hour = (int)Math.Round(point.Coordinate.SecondaryValue);
+                    return $"{hour}:00 · Active {FormatDurationCompact(point.Coordinate.PrimaryValue)}";
+                },
+                YToolTipLabelFormatter = _ => string.Empty
+            }
+        ];
+
+        HourlyActiveXAxes =
+        [
+            new Axis
+            {
+                Labels = xLabels,
+                TextSize = 10,
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = null,
+                TicksPaint = null,
+                AnimationsSpeed = TimeSpan.Zero
+            }
+        ];
+
+        HourlyActiveYAxes =
+        [
+            new Axis
+            {
+                MinLimit = 0,
+                MaxLimit = Math.Max(1.0, maxValue * 1.15),
+                TextSize = 11,
+                Labeler = value => FormatDurationCompact(value),
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = new SolidColorPaint(new SKColor(226, 232, 240)) { StrokeThickness = 1 },
+                TicksPaint = null,
+                AnimationsSpeed = TimeSpan.Zero
+            }
+        ];
+    }
+
+    private static string FormatDurationCompact(double totalSeconds)
+    {
+        if (totalSeconds <= 0) return "0s";
+        if (totalSeconds < 60) return $"{totalSeconds:0}s";
+        if (totalSeconds < 3600) return $"{totalSeconds / 60:0}m";
+        return $"{totalSeconds / 3600:0.#}h";
+    }
+
+    // ── App Share Donut Chart ──
+
+    private void BuildAppShareChart(IReadOnlyList<AppUsageSummary> topApps, long totalActiveSeconds)
+    {
+        if (topApps.Count == 0 || totalActiveSeconds <= 0)
+        {
+            AppShareSeries = [];
+            return;
+        }
+
+        var top5 = topApps.Take(5).ToList();
+        var top5Total = top5.Sum(a => (long)a.ActiveDurationSeconds);
+
+        // Safety: if top5 somehow exceeds the real total, clamp and skip Other
+        if (top5Total > totalActiveSeconds) top5Total = totalActiveSeconds;
+        var otherSeconds = totalActiveSeconds - top5Total;
+
+        var seriesList = new List<ISeries>();
+        var colors = new[]
+        {
+            new SKColor(15, 118, 110),   // #0F766E
+            new SKColor(59, 130, 246),   // #3B82F6
+            new SKColor(168, 85, 247),   // #A855F7
+            new SKColor(245, 158, 11),   // #F59E0B
+            new SKColor(239, 68, 68),    // #EF4444
+            new SKColor(148, 163, 184),  // #94A3B8 — Other
+        };
+
+        for (var i = 0; i < top5.Count; i++)
+        {
+            var app = top5[i];
+            var label = GetAppDisplayLabel(app);
+            seriesList.Add(new PieSeries<double>
+            {
+                Values = [app.ActiveDurationSeconds],
+                Name = label,
+                AnimationsSpeed = TimeSpan.Zero,
+                Pushout = 0,
+                Fill = new SolidColorPaint(colors[i]),
+                Stroke = new SolidColorPaint(new SKColor(255, 255, 255)) { StrokeThickness = 2 },
+                DataLabelsPosition = LiveChartsCore.Measure.PolarLabelsPosition.Outer,
+                DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                DataLabelsSize = 11,
+                DataLabelsFormatter = _ => label,
+                ToolTipLabelFormatter = _ =>
+                    $"{label} · {FormatDurationLong(app.ActiveDurationSeconds)}"
+            });
+        }
+
+        if (otherSeconds > 0)
+        {
+            seriesList.Add(new PieSeries<double>
+            {
+                Values = [otherSeconds],
+                Name = "Other",
+                AnimationsSpeed = TimeSpan.Zero,
+                Pushout = 0,
+                Fill = new SolidColorPaint(colors[5]),
+                Stroke = new SolidColorPaint(new SKColor(255, 255, 255)) { StrokeThickness = 2 },
+                DataLabelsPosition = LiveChartsCore.Measure.PolarLabelsPosition.Outer,
+                DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                DataLabelsSize = 11,
+                DataLabelsFormatter = _ => "Other",
+                ToolTipLabelFormatter = _ => $"Other · {FormatDurationLong(otherSeconds)}"
+            });
+        }
+
+        AppShareSeries = seriesList.ToArray();
     }
 }

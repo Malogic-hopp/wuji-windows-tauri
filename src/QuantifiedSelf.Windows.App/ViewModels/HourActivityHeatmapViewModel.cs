@@ -153,6 +153,7 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
             {
                 Values = values,
                 Name = "Activity",
+                AnimationsSpeed = TimeSpan.Zero,
                 HeatMap =
                 [
                     new LvcColor(241, 245, 249),
@@ -163,7 +164,9 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
                 ColorStops = [0.0, 0.25, 0.65, 1.0],
                 MinValue = 0,
                 MaxValue = 1,
-                PointPadding = new LiveChartsCore.Drawing.Padding(2)
+                PointPadding = new LiveChartsCore.Drawing.Padding(2),
+                XToolTipLabelFormatter = point => FormatHeatmapTooltip(cells, point.Model),
+                YToolTipLabelFormatter = _ => string.Empty
             }
         ];
     }
@@ -180,7 +183,10 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
                 SeparatorsPaint = null,
                 TicksPaint = null,
                 MinLimit = -0.5,
-                MaxLimit = 6.5
+                MaxLimit = 6.5,
+                MinStep = 1,
+                ForceStepToMin = true,
+                AnimationsSpeed = TimeSpan.Zero
             }
         ];
     }
@@ -194,25 +200,42 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
                 MinLimit = -0.5,
                 MaxLimit = 23.5,
                 TextSize = 10,
-                Labeler = FormatHeatmapHourAxis,
+                Labels = CreateHeatmapHourLabels(),
                 LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
                 SeparatorsPaint = null,
-                TicksPaint = null
+                TicksPaint = null,
+                MinStep = 1,
+                ForceStepToMin = true,
+                AnimationsSpeed = TimeSpan.Zero
             }
         ];
     }
 
-    private static string FormatHeatmapHourAxis(double value)
+    private static string[] CreateHeatmapHourLabels()
     {
-        var axisIndex = (int)Math.Round(value);
-        var hour = 23 - axisIndex;
-        return hour switch
+        var labels = new string[24];
+        labels[23 - 21] = "晚上";
+        labels[23 - 15] = "下午";
+        labels[23 - 9] = "上午";
+        labels[23 - 3] = "睡觉";
+        return labels;
+    }
+
+    private static string FormatHeatmapTooltip(IReadOnlyList<HeatmapCellViewModel> cells, object? model)
+    {
+        if (model is not WeightedPoint point)
         {
-            3 => "睡觉",
-            9 => "上午",
-            15 => "下午",
-            21 => "晚上",
-            _ => string.Empty
-        };
+            return string.Empty;
+        }
+
+        var day = (int)Math.Round(point.X ?? -1);
+        var hour = 23 - (int)Math.Round(point.Y ?? -1);
+        if (day < 0 || day >= 7 || hour < 0 || hour >= 24)
+        {
+            return string.Empty;
+        }
+
+        var cell = cells[(hour * 7) + day];
+        return cell.TooltipText;
     }
 }

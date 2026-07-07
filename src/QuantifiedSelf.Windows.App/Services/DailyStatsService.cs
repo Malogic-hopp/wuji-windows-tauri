@@ -132,6 +132,9 @@ public sealed class DailyStatsService
             // Compute focus metrics from active samples
             var focusMetrics = FocusMetricsCalculator.Compute(daySamples);
 
+            // Compute hourly activity breakdown (sample-gap durations capped at 60s)
+            var hourlyActivity = ComputeHourlyActivity(daySamples);
+
             // Apply privacy filtering to window titles
             var topWindows = rawTopWindows.Select(w => new DailyWindowUsageSummary
             {
@@ -159,7 +162,8 @@ public sealed class DailyStatsService
                 RawContextSwitchCount = focusMetrics.RawContextSwitchCount,
                 LongestFocusSession = focusMetrics.LongestFocusSession,
                 FocusSessionCount = focusMetrics.FocusSessionCount,
-                FragmentedTimeSeconds = focusMetrics.FragmentedTimeSeconds
+                FragmentedTimeSeconds = focusMetrics.FragmentedTimeSeconds,
+                HourlyActivity = hourlyActivity
             };
         }
         catch
@@ -170,5 +174,82 @@ public sealed class DailyStatsService
                 Date = localDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Local)
             };
         }
+    }
+
+    /// <summary>
+    /// Computes hour-by-hour activity durations from foreground samples.
+    /// Each sample-to-next-sample gap is attributed to the earlier sample's state,
+    /// capped at 60 seconds (the typical agent sample interval).
+    /// Gaps that cross hour boundaries are split proportionally.
+    /// </summary>
+    private static IReadOnlyList<HourlyActivity> ComputeHourlyActivity(IReadOnlyList<ForegroundSample> daySamples)
+    {
+        const double maxGapSeconds = 60.0;
+
+        // Initialize 24 empty hours
+        var buckets = new (double Active, double Idle, double Unknown)[24];
+
+        if (daySamples.Count == 0)
+        {
+            return Enumerable.Range(0, 24)
+                .Select(h => new HourlyActivity(h, 0, 0, 0))
+                .ToList();
+        }
+
+        // Sort by sample time (should already be sorted from SQL)
+        var sorted = daySamples.OrderBy(s => s.SampleTimeUtc).ToList();
+
+        for (var i = 0; i < sorted.Count; i++)
+        {
+            var sample = sorted[i];
+            var localTime = sample.SampleTimeUtc.ToLocalTime();
+            var sampleDate = DateOnly.FromDateTime(localTime);
+
+            // Compute gap to next sample, or use 1s for the last sample
+            double gapSeconds;
+            if (i < sorted.Count - 1)
+            {
+                var nextSampleTime = sorted[i + 1].SampleTimeUtc;
+                gapSeconds = Math.Min((nextSampleTime - sample.SampleTimeUtc).TotalSeconds, maxGapSeconds);
+                if (gapSeconds < 0) gapSeconds = 0;
+            }
+            else
+            {
+                gapSeconds = 1.0; // last sample: count as 1 second
+            }
+
+            var state = sample.ActivityState?.Trim() ?? string.Empty;
+
+            // Distribute gap across hour boundaries (and stop at day boundary)
+            var remaining = gapSeconds;
+            var cursor = localTime;
+            while (remaining > 0.001)
+            {
+                var hour = cursor.Hour;
+                if (DateOnly.FromDateTime(cursor) != sampleDate) break; // stop at day boundary
+
+                var secondsToNextHour = 3600.0
+                    - (cursor.Minute * 60 + cursor.Second + cursor.Millisecond / 1000.0);
+                var portion = Math.Min(remaining, secondsToNextHour);
+
+                if (string.Equals(state, "Active", StringComparison.OrdinalIgnoreCase))
+                    buckets[hour].Active += portion;
+                else if (string.Equals(state, "Idle", StringComparison.OrdinalIgnoreCase))
+                    buckets[hour].Idle += portion;
+                else
+                    buckets[hour].Unknown += portion;
+
+                remaining -= portion;
+                cursor = cursor.AddSeconds(portion);
+            }
+        }
+
+        return Enumerable.Range(0, 24)
+            .Select(h => new HourlyActivity(
+                h,
+                Math.Round(buckets[h].Active, 1),
+                Math.Round(buckets[h].Idle, 1),
+                Math.Round(buckets[h].Unknown, 1)))
+            .ToList();
     }
 }

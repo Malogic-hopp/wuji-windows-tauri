@@ -81,4 +81,20 @@ public sealed class DailyActivitySummary
     /// Total active seconds spent in high-switch (fragmented) segments today.
     /// </summary>
     public long FragmentedTimeSeconds { get; set; }
+
+    /// <summary>
+    /// Hour-by-hour breakdown of today's activity (0-23), derived from foreground samples.
+    /// </summary>
+    public IReadOnlyList<HourlyActivity> HourlyActivity { get; set; } = [];
 }
+
+/// <summary>
+/// Activity breakdown for a single hour of the day, derived from foreground samples.
+/// Durations are estimated from sample-to-sample gaps, capped at the typical sample interval.
+/// </summary>
+public sealed record HourlyActivity(
+    int Hour,
+    double ActiveSeconds,
+    double IdleSeconds,
+    double UnknownSeconds
+);

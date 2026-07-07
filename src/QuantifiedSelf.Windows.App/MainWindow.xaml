@@ -327,9 +327,27 @@
 
                                             <lvc:CartesianChart Height="286"
                                                                 Background="Transparent"
+                                                                AnimationsSpeed="0:0:0"
                                                                 Series="{Binding DashboardViewModel.Heatmap.HeatmapSeries}"
                                                                 XAxes="{Binding DashboardViewModel.Heatmap.HeatmapXAxes}"
                                                                 YAxes="{Binding DashboardViewModel.Heatmap.HeatmapYAxes}"
+                                                                LegendPosition="Hidden"
+                                                                TooltipPosition="Top"
+                                                                Margin="0,2,0,0" />
+                                        </StackPanel>
+                                    </Border>
+
+                                    <!-- Today 24h Stacked -->
+                                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,12,0,0">
+                                        <StackPanel>
+                                            <TextBlock Text="Today 24h" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"
+                                                       Foreground="{StaticResource MutedTextBrush}" />
+                                            <lvc:CartesianChart Height="200"
+                                                                Background="Transparent"
+                                                                AnimationsSpeed="0:0:0"
+                                                                Series="{Binding DashboardViewModel.HourlyActiveSeries}"
+                                                                XAxes="{Binding DashboardViewModel.HourlyActiveXAxes}"
+                                                                YAxes="{Binding DashboardViewModel.HourlyActiveYAxes}"
                                                                 LegendPosition="Hidden"
                                                                 TooltipPosition="Top"
                                                                 Margin="0,2,0,0" />
@@ -344,6 +362,7 @@
 
                                             <lvc:CartesianChart Height="178"
                                                                 Background="Transparent"
+                                                                AnimationsSpeed="0:0:0"
                                                                 Series="{Binding DashboardViewModel.ActiveTrendSeries}"
                                                                 XAxes="{Binding DashboardViewModel.ActiveTrendXAxes}"
                                                                 YAxes="{Binding DashboardViewModel.ActiveTrendYAxes}"
@@ -367,73 +386,80 @@
                                         </StackPanel>
                                     </Border>
 
-                                    <!-- Top Apps + Top Windows -->
+                                    <!-- Top Apps Bar Chart + App Share Donut -->
                                     <Grid Margin="0,16,0,0">
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="1.6*" />
                                             <ColumnDefinition Width="*" />
                                         </Grid.ColumnDefinitions>
 
-                                        <Border Style="{StaticResource CardBorderStyle}" Margin="0,0,12,0">
+                                        <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,0,12,0">
                                             <StackPanel>
-                                                <TextBlock Text="Top Apps" FontSize="16" FontWeight="SemiBold" />
+                                                <TextBlock Text="Top Apps" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"
+                                                           Foreground="{StaticResource MutedTextBrush}" />
                                                 <TextBlock Text="暂无今日应用数据。Agent 运行并写入数据后会显示在这里。"
-                                                           Margin="0,12,0,0"
                                                            Foreground="{StaticResource MutedTextBrush}"
                                                            TextWrapping="Wrap"
                                                            Visibility="{Binding DashboardViewModel.TopApps.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
-                                                <ItemsControl ItemsSource="{Binding DashboardViewModel.TopApps}" Margin="0,12,0,0">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
-                                                                <StackPanel>
-                                                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                                                    <TextBlock Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}">
-                                                                        <TextBlock.Text>
-                                                                            <MultiBinding StringFormat="Active {0}s / Total {1}s">
-                                                                                <Binding Path="ActiveDurationSeconds" />
-                                                                                <Binding Path="TotalDurationSeconds" />
-                                                                            </MultiBinding>
-                                                                        </TextBlock.Text>
-                                                                    </TextBlock>
-                                                                </StackPanel>
-                                                            </Border>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
+                                                <lvc:CartesianChart Height="280"
+                                                                    Background="Transparent"
+                                                                    AnimationsSpeed="0:0:0"
+                                                                    Series="{Binding DashboardViewModel.TopAppsSeries}"
+                                                                    XAxes="{Binding DashboardViewModel.TopAppsXAxes}"
+                                                                    YAxes="{Binding DashboardViewModel.TopAppsYAxes}"
+                                                                    LegendPosition="Hidden"
+                                                                    TooltipPosition="Top" />
                                             </StackPanel>
                                         </Border>
 
-                                        <Border Grid.Column="1" Style="{StaticResource CardBorderStyle}">
+                                        <Border Grid.Column="1" Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14">
                                             <StackPanel>
-                                                <TextBlock Text="Top Windows" FontSize="16" FontWeight="SemiBold" />
-                                                <TextBlock Text="暂无今日窗口数据。Agent 运行并写入数据后会显示在这里。"
-                                                           Margin="0,12,0,0"
+                                                <TextBlock Text="App Share" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"
+                                                           Foreground="{StaticResource MutedTextBrush}" />
+                                                <TextBlock Text="暂无今日应用数据。Agent 运行并写入数据后会显示在这里。"
                                                            Foreground="{StaticResource MutedTextBrush}"
                                                            TextWrapping="Wrap"
-                                                           Visibility="{Binding DashboardViewModel.TopWindows.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
-                                                <ItemsControl ItemsSource="{Binding DashboardViewModel.TopWindows}" Margin="0,12,0,0">
-                                                    <ItemsControl.ItemTemplate>
-                                                        <DataTemplate>
-                                                            <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,0,0,8">
-                                                                <StackPanel>
-                                                                    <TextBlock Text="{Binding SafeWindowTitle, TargetNullValue='(no title)', FallbackValue='(no title)'}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
-                                                                    <TextBlock Margin="0,4,0,0" Foreground="{StaticResource MutedTextBrush}">
-                                                                        <TextBlock.Text>
-                                                                            <MultiBinding StringFormat="{}{0} · {1} samples">
-                                                                                <Binding Path="ProcessName" />
-                                                                                <Binding Path="SampleCount" />
-                                                                            </MultiBinding>
-                                                                        </TextBlock.Text>
-                                                                    </TextBlock>
-                                                                </StackPanel>
-                                                            </Border>
-                                                        </DataTemplate>
-                                                    </ItemsControl.ItemTemplate>
-                                                </ItemsControl>
+                                                           Visibility="{Binding DashboardViewModel.TopApps.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
+                                                <lvc:PieChart Height="280"
+                                                              Background="Transparent"
+                                                              AnimationsSpeed="0:0:0"
+                                                              Series="{Binding DashboardViewModel.AppShareSeries}"
+                                                              LegendPosition="Bottom"
+                                                              TooltipPosition="Top" />
                                             </StackPanel>
                                         </Border>
                                     </Grid>
+
+                                    <!-- Top Windows -->
+                                    <Border Background="{StaticResource SurfaceAltBrush}" CornerRadius="12" Padding="14" Margin="0,12,0,0">
+                                        <StackPanel>
+                                            <TextBlock Text="Top Windows" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8"
+                                                       Foreground="{StaticResource MutedTextBrush}" />
+                                            <TextBlock Text="暂无今日窗口数据。Agent 运行并写入数据后会显示在这里。"
+                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                       TextWrapping="Wrap"
+                                                       Visibility="{Binding DashboardViewModel.TopWindows.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
+                                            <ItemsControl ItemsSource="{Binding DashboardViewModel.TopWindows}" Margin="0,8,0,0">
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Border Background="White" CornerRadius="10" Padding="10" Margin="0,0,0,6">
+                                                            <StackPanel>
+                                                                <TextBlock Text="{Binding SafeWindowTitle, TargetNullValue='(no title)', FallbackValue='(no title)'}" FontWeight="SemiBold" FontSize="13" TextTrimming="CharacterEllipsis" />
+                                                                <TextBlock Margin="0,2,0,0" FontSize="12" Foreground="{StaticResource MutedTextBrush}">
+                                                                    <TextBlock.Text>
+                                                                        <MultiBinding StringFormat="{}{0} · {1} samples">
+                                                                            <Binding Path="ProcessName" />
+                                                                            <Binding Path="SampleCount" />
+                                                                        </MultiBinding>
+                                                                    </TextBlock.Text>
+                                                                </TextBlock>
+                                                            </StackPanel>
+                                                        </Border>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </StackPanel>
+                                    </Border>
                                 </StackPanel>
                             </Border>
 
