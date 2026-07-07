@@ -1,5 +1,7 @@
 using System.Globalization;
 using System.IO;
+using LiveChartsCore.Defaults;
+using LiveChartsCore.SkiaSharpView;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -11724,6 +11726,17 @@ public sealed class DataFlowTests
         Assert.NotEmpty(dashboardVm.WeekActiveTrendText);
         Assert.NotEmpty(dashboardVm.FocusTrendText);
         Assert.NotEmpty(dashboardVm.SwitchTrendText);
+
+        var trendSeries = Assert.Single(dashboardVm.ActiveTrendSeries);
+        var columnSeries = Assert.IsType<ColumnSeries<double>>(trendSeries);
+        var values = Assert.IsAssignableFrom<IEnumerable<double>>(columnSeries.Values);
+        var activeHours = values.ToArray();
+        Assert.Equal(7, activeHours.Length);
+        Assert.Contains(activeHours, value => value > 0);
+
+        var xAxis = Assert.Single(dashboardVm.ActiveTrendXAxes);
+        Assert.NotNull(xAxis.Labels);
+        Assert.Equal(7, xAxis.Labels!.Count);
     }
 
     [Fact]
@@ -12220,6 +12233,15 @@ public sealed class DataFlowTests
 
         Assert.Equal(168, dashboardVm.Heatmap.Cells.Count);
         Assert.True(dashboardVm.Heatmap.HasData);
+
+        var heatmapSeries = Assert.IsType<HeatSeries<WeightedPoint>>(
+            Assert.Single(dashboardVm.Heatmap.HeatmapSeries));
+        var values = Assert.IsAssignableFrom<IEnumerable<WeightedPoint>>(heatmapSeries.Values);
+        var weightedPoints = values.ToArray();
+        Assert.Equal(168, weightedPoints.Length);
+        Assert.Contains(weightedPoints, point => point.Weight > 0);
+        Assert.Single(dashboardVm.Heatmap.HeatmapXAxes);
+        Assert.Single(dashboardVm.Heatmap.HeatmapYAxes);
     }
 
     [Fact]

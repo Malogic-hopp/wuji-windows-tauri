@@ -1,6 +1,12 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using LiveChartsCore;
+using LiveChartsCore.Defaults;
+using LiveChartsCore.Drawing;
+using LiveChartsCore.SkiaSharpView;
+using LiveChartsCore.SkiaSharpView.Painting;
 using QuantifiedSelf.Windows.Core.Models;
+using SkiaSharp;
 
 namespace QuantifiedSelf.Windows.App.ViewModels;
 
@@ -26,6 +32,9 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
                 Cells.Add(new HeatmapCellViewModel());
         }
 
+        HeatmapSeries = CreateHeatmapSeries(Cells);
+        HeatmapXAxes = CreateHeatmapXAxes(DateLabels);
+        HeatmapYAxes = CreateHeatmapYAxes();
         HasData = false;
     }
 
@@ -61,6 +70,9 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
         }
 
         HasData = hasAnyData;
+        HeatmapSeries = CreateHeatmapSeries(Cells);
+        HeatmapXAxes = CreateHeatmapXAxes(DateLabels);
+        HeatmapYAxes = CreateHeatmapYAxes();
     }
 
     public ObservableCollection<HeatmapCellViewModel> Cells { get; } = new();
@@ -68,6 +80,12 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
     public ObservableCollection<string> DateLabels { get; } = new();
 
     public ObservableCollection<string?> HourLabels { get; } = new();
+
+    public ISeries[] HeatmapSeries { get; }
+
+    public Axis[] HeatmapXAxes { get; }
+
+    public Axis[] HeatmapYAxes { get; }
 
     public bool HasData
     {
@@ -114,6 +132,87 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
             15 => "下午 12-18",
             21 => "晚上 18-24",
             _ => null
+        };
+    }
+
+    private static ISeries[] CreateHeatmapSeries(IReadOnlyList<HeatmapCellViewModel> cells)
+    {
+        var values = new List<WeightedPoint>(cells.Count);
+        for (var hour = 0; hour < 24; hour++)
+        {
+            for (var day = 0; day < 7; day++)
+            {
+                var cell = cells[(hour * 7) + day];
+                values.Add(new WeightedPoint(day, 23 - hour, cell.ActiveIntensity));
+            }
+        }
+
+        return
+        [
+            new HeatSeries<WeightedPoint>
+            {
+                Values = values,
+                Name = "Activity",
+                HeatMap =
+                [
+                    new LvcColor(241, 245, 249),
+                    new LvcColor(153, 246, 228),
+                    new LvcColor(20, 184, 166),
+                    new LvcColor(15, 118, 110)
+                ],
+                ColorStops = [0.0, 0.25, 0.65, 1.0],
+                MinValue = 0,
+                MaxValue = 1,
+                PointPadding = new LiveChartsCore.Drawing.Padding(2)
+            }
+        ];
+    }
+
+    private static Axis[] CreateHeatmapXAxes(IReadOnlyList<string> labels)
+    {
+        return
+        [
+            new Axis
+            {
+                Labels = labels.ToArray(),
+                TextSize = 10,
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = null,
+                TicksPaint = null,
+                MinLimit = -0.5,
+                MaxLimit = 6.5
+            }
+        ];
+    }
+
+    private static Axis[] CreateHeatmapYAxes()
+    {
+        return
+        [
+            new Axis
+            {
+                MinLimit = -0.5,
+                MaxLimit = 23.5,
+                TextSize = 10,
+                Labeler = FormatHeatmapHourAxis,
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = null,
+                TicksPaint = null
+            }
+        ];
+    }
+
+    private static string FormatHeatmapHourAxis(double value)
+    {
+        var axisIndex = (int)Math.Round(value);
+        var hour = 23 - axisIndex;
+        return hour switch
+        {
+            3 => "睡觉",
+            9 => "上午",
+            15 => "下午",
+            21 => "晚上",
+            _ => string.Empty
         };
     }
 }

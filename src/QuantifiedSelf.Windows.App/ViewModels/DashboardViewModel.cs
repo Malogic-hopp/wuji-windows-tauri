@@ -1,9 +1,13 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using LiveChartsCore;
+using LiveChartsCore.SkiaSharpView;
+using LiveChartsCore.SkiaSharpView.Painting;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
+using SkiaSharp;
 
 namespace QuantifiedSelf.Windows.App.ViewModels;
 
@@ -36,6 +40,9 @@ public sealed class DashboardViewModel : ObservableObject
     private string _focusTrendText = "";
     private string _switchTrendText = "";
     private string _generatedAtText = "";
+    private ISeries[] _activeTrendSeries = CreateTrendSeries([]);
+    private Axis[] _activeTrendXAxes = CreateTrendXAxes([]);
+    private Axis[] _activeTrendYAxes = CreateTrendYAxes();
     private bool _hasLoadError;
     private bool _isLoading;
 
@@ -147,6 +154,24 @@ public sealed class DashboardViewModel : ObservableObject
     }
 
     public ObservableCollection<TrendDayItem> TrendDays { get; } = new();
+
+    public ISeries[] ActiveTrendSeries
+    {
+        get => _activeTrendSeries;
+        private set => SetProperty(ref _activeTrendSeries, value);
+    }
+
+    public Axis[] ActiveTrendXAxes
+    {
+        get => _activeTrendXAxes;
+        private set => SetProperty(ref _activeTrendXAxes, value);
+    }
+
+    public Axis[] ActiveTrendYAxes
+    {
+        get => _activeTrendYAxes;
+        private set => SetProperty(ref _activeTrendYAxes, value);
+    }
 
     public ObservableCollection<InsightSuggestion> Suggestions { get; } = new();
 
@@ -286,6 +311,9 @@ public sealed class DashboardViewModel : ObservableObject
         TrendDays.Clear();
         if (trend.Days.Count == 0)
         {
+            ActiveTrendSeries = CreateTrendSeries([]);
+            ActiveTrendXAxes = CreateTrendXAxes([]);
+            ActiveTrendYAxes = CreateTrendYAxes();
             return;
         }
 
@@ -324,6 +352,10 @@ public sealed class DashboardViewModel : ObservableObject
                 IsToday = localDate == today
             });
         }
+
+        ActiveTrendSeries = CreateTrendSeries(trend.Days.Select(d => d.ActiveSeconds / 3600.0).ToArray());
+        ActiveTrendXAxes = CreateTrendXAxes(TrendDays.Select(d => $"{d.DayLabel}\n{d.DateLabel}").ToArray());
+        ActiveTrendYAxes = CreateTrendYAxes();
     }
 
     private void ApplySummary(DailyActivitySummary summary)
@@ -413,10 +445,78 @@ public sealed class DashboardViewModel : ObservableObject
         TopApps.Clear();
         TopWindows.Clear();
         TrendDays.Clear();
+        ActiveTrendSeries = CreateTrendSeries([]);
+        ActiveTrendXAxes = CreateTrendXAxes([]);
+        ActiveTrendYAxes = CreateTrendYAxes();
         Suggestions.Clear();
         Heatmap = new HourActivityHeatmapViewModel();
         GeneratedAtText = "";
         SummaryText = "暂无今日活动数据。Agent 运行并写入数据后会显示在这里。";
+    }
+
+    private static ISeries[] CreateTrendSeries(double[] activeHours)
+    {
+        return
+        [
+            new ColumnSeries<double>
+            {
+                Values = activeHours,
+                Name = "Active",
+                Fill = new SolidColorPaint(new SKColor(15, 118, 110)),
+                Stroke = new SolidColorPaint(new SKColor(17, 94, 89)) { StrokeThickness = 1 },
+                MaxBarWidth = 28,
+                Padding = 8,
+                DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                DataLabelsSize = 11,
+                DataLabelsFormatter = point => FormatHoursCompact(point.Coordinate.PrimaryValue)
+            }
+        ];
+    }
+
+    private static Axis[] CreateTrendXAxes(string[] labels)
+    {
+        return
+        [
+            new Axis
+            {
+                Labels = labels,
+                TextSize = 11,
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = null,
+                TicksPaint = null
+            }
+        ];
+    }
+
+    private static Axis[] CreateTrendYAxes()
+    {
+        return
+        [
+            new Axis
+            {
+                MinLimit = 0,
+                TextSize = 11,
+                Labeler = value => FormatHoursCompact(value),
+                LabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
+                SeparatorsPaint = new SolidColorPaint(new SKColor(226, 232, 240)) { StrokeThickness = 1 },
+                TicksPaint = null
+            }
+        ];
+    }
+
+    private static string FormatHoursCompact(double hours)
+    {
+        if (hours <= 0)
+        {
+            return "0m";
+        }
+
+        if (hours < 1)
+        {
+            return $"{Math.Round(hours * 60):0}m";
+        }
+
+        return $"{hours:0.#}h";
     }
 
     private static string BuildSummaryText(DailyActivitySummary summary)

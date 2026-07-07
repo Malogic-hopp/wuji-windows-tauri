@@ -283,8 +283,10 @@ public sealed class AgentProcessService
         if (!string.IsNullOrWhiteSpace(envExe) && File.Exists(envExe))
             return envExe;
 
-        // 4. Development build fallback: derive repo root from baseDirectory
-        var agentRoot = Path.GetFullPath(Path.Combine(baseDir, "..", "..", "..", "..", ".."));
+        // 4. Development build fallback: derive repo root from baseDirectory.
+        // App output paths can change with the target framework moniker, so walk
+        // upward instead of assuming a fixed bin/Debug/<tfm> depth.
+        var agentRoot = ResolveDevelopmentRepositoryRoot(baseDir);
         var devCandidates = new[]
         {
             Path.Combine(agentRoot, "src", "QuantifiedSelf.Windows.Agent", "bin", "Release", "net8.0-windows", "QuantifiedSelf.Windows.Agent.exe"),
@@ -294,6 +296,24 @@ public sealed class AgentProcessService
         };
 
         return devCandidates.FirstOrDefault(File.Exists);
+    }
+
+    private static string ResolveDevelopmentRepositoryRoot(string baseDirectory)
+    {
+        var current = new DirectoryInfo(Path.GetFullPath(baseDirectory));
+        while (current is not null)
+        {
+            var root = current.FullName;
+            if (File.Exists(Path.Combine(root, "QuantifiedSelf.Windows.sln"))
+                || Directory.Exists(Path.Combine(root, "src", "QuantifiedSelf.Windows.Agent")))
+            {
+                return root;
+            }
+
+            current = current.Parent;
+        }
+
+        return Path.GetFullPath(Path.Combine(baseDirectory, "..", "..", "..", "..", ".."));
     }
 
     private static bool IsRunnableAgentCandidate(string executablePath)

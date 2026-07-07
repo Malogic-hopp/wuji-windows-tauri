@@ -146,6 +146,36 @@ public sealed class AgentExeLocatorTests
         }
     }
 
+    [Fact]
+    public void ResolveAgentExecutablePath_FindsDevelopmentPath_WhenTargetFrameworkDepthChanges()
+    {
+        using var workspace = new TempDir();
+        var baseDir = Path.Combine(
+            workspace.Path,
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "bin",
+            "Debug",
+            "net8.0-windows10.0.19041");
+        Directory.CreateDirectory(baseDir);
+
+        var agentBin = Path.Combine(
+            workspace.Path,
+            "src",
+            "QuantifiedSelf.Windows.Agent",
+            "bin",
+            "Debug",
+            "net8.0-windows");
+        Directory.CreateDirectory(agentBin);
+        var agentExe = Path.Combine(agentBin, "QuantifiedSelf.Windows.Agent.exe");
+        File.WriteAllText(agentExe, "dev");
+
+        var result = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+
+        Assert.NotNull(result);
+        Assert.Equal(agentExe, result, ignoreCase: true);
+    }
+
     /// <summary>
     /// Temporary directory for test isolation. Disposed automatically.
     /// </summary>
