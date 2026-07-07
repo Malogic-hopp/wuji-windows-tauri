@@ -658,6 +658,15 @@ public sealed class DashboardViewModel : ObservableObject
 
     // ── Top Apps Horizontal Bar Chart ──
 
+    private static readonly SKColor[] TopAppBarColors =
+    [
+        new(15, 118, 110),   // #0F766E teal
+        new(59, 130, 246),   // #3B82F6 blue
+        new(168, 85, 247),   // #A855F7 purple
+        new(245, 158, 11),   // #F59E0B amber
+        new(239, 68, 68),    // #EF4444 red
+    ];
+
     private void BuildTopAppsChart(IReadOnlyList<AppUsageSummary> topApps)
     {
         if (topApps.Count == 0)
@@ -676,13 +685,11 @@ public sealed class DashboardViewModel : ObservableObject
 
         TopAppsSeries =
         [
-            new RowSeries<double>
+            new MultiColorRowSeries(TopAppBarColors.Take(values.Length).Reverse().ToArray())
             {
                 Values = values,
                 Name = "Active",
                 AnimationsSpeed = TimeSpan.Zero,
-                Fill = new SolidColorPaint(new SKColor(15, 118, 110)),
-                Stroke = new SolidColorPaint(new SKColor(17, 94, 89)) { StrokeThickness = 1 },
                 MaxBarWidth = 24,
                 Padding = 6,
                 XToolTipLabelFormatter = point =>
@@ -826,15 +833,6 @@ public sealed class DashboardViewModel : ObservableObject
         var otherSeconds = totalActiveSeconds - top5Total;
 
         var seriesList = new List<ISeries>();
-        var colors = new[]
-        {
-            new SKColor(15, 118, 110),   // #0F766E
-            new SKColor(59, 130, 246),   // #3B82F6
-            new SKColor(168, 85, 247),   // #A855F7
-            new SKColor(245, 158, 11),   // #F59E0B
-            new SKColor(239, 68, 68),    // #EF4444
-            new SKColor(148, 163, 184),  // #94A3B8 — Other
-        };
 
         for (var i = 0; i < top5.Count; i++)
         {
@@ -846,7 +844,7 @@ public sealed class DashboardViewModel : ObservableObject
                 Name = label,
                 AnimationsSpeed = TimeSpan.Zero,
                 Pushout = 0,
-                Fill = new SolidColorPaint(colors[i]),
+                Fill = new SolidColorPaint(TopAppBarColors[i]),
                 Stroke = new SolidColorPaint(new SKColor(255, 255, 255)) { StrokeThickness = 2 },
                 DataLabelsPosition = LiveChartsCore.Measure.PolarLabelsPosition.Outer,
                 DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
@@ -865,7 +863,7 @@ public sealed class DashboardViewModel : ObservableObject
                 Name = "Other",
                 AnimationsSpeed = TimeSpan.Zero,
                 Pushout = 0,
-                Fill = new SolidColorPaint(colors[5]),
+                Fill = new SolidColorPaint(new SKColor(148, 163, 184)), // #94A3B8 — Other
                 Stroke = new SolidColorPaint(new SKColor(255, 255, 255)) { StrokeThickness = 2 },
                 DataLabelsPosition = LiveChartsCore.Measure.PolarLabelsPosition.Outer,
                 DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),

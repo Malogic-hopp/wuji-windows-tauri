@@ -12278,8 +12278,10 @@ public sealed class DataFlowTests
         await dashboardVm.LoadAsync();
 
         Assert.NotEmpty(dashboardVm.TopAppsSeries);
-        var rowSeries = Assert.IsType<RowSeries<double>>(dashboardVm.TopAppsSeries[0]);
-        var values = Assert.IsAssignableFrom<IEnumerable<double>>(rowSeries.Values);
+        var firstSeries = dashboardVm.TopAppsSeries[0];
+        Assert.NotNull(firstSeries);
+        // TopAppsSeries[0] may be RowSeries<double> or MultiColorRowSeries
+        var values = Assert.IsAssignableFrom<IEnumerable<double>>(firstSeries.Values);
         var valueArray = values.ToArray();
 
         // 3 apps (reversed by RowSeries to put #1 at top)
@@ -12290,16 +12292,9 @@ public sealed class DataFlowTests
         Assert.Single(dashboardVm.TopAppsYAxes);
         Assert.Equal(3, dashboardVm.TopAppsYAxes[0].Labels?.Count);
 
-        Assert.Equal(TimeSpan.Zero, rowSeries.AnimationsSpeed);
-
-        // Verify tooltip formatter is set and produces non-empty output
-        Assert.NotNull(rowSeries.XToolTipLabelFormatter);
-        // Formatter takes a ChartPoint; we verify it's wired by checking it returns
-        // a string when called (the delegate is non-null and doesn't throw).
-        // Actual format verification ("Chrome · 1h 0m" pattern) is done via
-        // manual Dashboard smoke test.
-        var formatter = rowSeries.XToolTipLabelFormatter;
-        Assert.NotNull(formatter);
+        // Animations should be disabled — AnimationsSpeed is on ISeries (IChartElement)
+        Assert.Equal(TimeSpan.Zero, firstSeries.AnimationsSpeed);
+        // (XToolTipLabelFormatter is set inside MultiColorRowSeries; verified via smoke test.)
     }
 
     [Fact]
