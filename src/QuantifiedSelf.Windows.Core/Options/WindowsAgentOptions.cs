@@ -28,8 +28,12 @@ public sealed class WindowsAgentOptions
     {
         "KeePass",
         "1Password",
-        "Bitwarden"
+        "Bitwarden",
+        "explorer"
     };
 
-    public List<string> ExcludedTitlePatterns { get; set; } = new();
+    public List<string> ExcludedTitlePatterns { get; set; } = new()
+    {
+        "InPrivate"
+    };
 }

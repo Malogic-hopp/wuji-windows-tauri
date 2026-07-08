@@ -98,9 +98,9 @@ public static class InsightSuggestionEngine
         {
             Severity = "Warning",
             Category = "Switch",
-            Title = "今天跨任务切换较频繁",
-            Message = "今天跨任务语境切换较多，可以尝试安排一个 25 分钟单任务块。",
-            EvidenceText = $"今天跨任务语境切换 {today.ContextSwitchCount} 次"
+            Title = "今天任务切换较频繁",
+            Message = "今天任务切换较多，可以尝试安排一个 25 分钟单任务块。",
+            EvidenceText = $"今天任务切换 {today.ContextSwitchCount} 次"
                 + (today.RawContextSwitchCount > today.ContextSwitchCount
                     ? $"（原始工具跳转 {today.RawContextSwitchCount} 次）"
                     : "")

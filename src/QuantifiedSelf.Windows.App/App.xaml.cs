@@ -87,6 +87,8 @@ public partial class App : Application
         var sessionsViewModel = new SessionsViewModel(sessionsDataService);
         var appsViewModel = new AppsViewModel(appsDataService);
         var dashboardViewModel = new DashboardViewModel(dailyStatsService, weeklyTrendService, heatmapService);
+        var insightService = new FocusInterruptionInsightService(paths.DatabasePath);
+        var insightsViewModel = new InsightsViewModel(insightService);
         Resources.Add("BooleanToVisibilityConverter", new BooleanToVisibilityConverter());
 
         var refreshService = new RefreshService(statusService, processService);
@@ -107,6 +109,7 @@ public partial class App : Application
             settingsViewModel,
             settingsService,
             dashboardViewModel,
+            insightsViewModel,
             ipcStatusService,
             refreshService,
             trayStateSink: null); // set via TrayStateSink after tray creation

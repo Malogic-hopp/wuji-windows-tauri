@@ -86,7 +86,10 @@ public static class FocusMetricsCalculator
                 var prevContext = ClassifyContext(prev);
                 if (context != prevContext)
                 {
-                    meaningfulSwitches++;
+                    // 开发 ↔ dev_tool 双向豁免
+                    if (!IsDevToolSwitch(prevContext, sample.ProcessName)
+                        && !IsDevToolSwitch(context, prev.ProcessName))
+                        meaningfulSwitches++;
                 }
             }
 
@@ -140,7 +143,17 @@ public static class FocusMetricsCalculator
             // Detect meaningful task-context switches within the segment.
             if (context != current.LastContext)
             {
-                current.SwitchCount++;
+                // 开发 ↔ dev_tool 双向豁免
+                if (!IsDevToolSwitch(current.LastContext, sample.ProcessName)
+                    && !IsDevToolSwitch(context, current.LastApp))
+                {
+                    current.SwitchCount++;
+                    current.LastContext = context;
+                }
+                // else: same workflow, keep LastContext unchanged
+            }
+            else
+            {
                 current.LastContext = context;
             }
 
@@ -312,6 +325,16 @@ public static class FocusMetricsCalculator
     private static bool IsBrowser(string process)
     {
         return ContainsAny(process, "msedge", "edge", "chrome", "firefox", "browser");
+    }
+
+    private static bool IsDevToolSwitch(ActivityContext previousContext, string processName)
+    {
+        if (previousContext != ActivityContext.Development)
+            return false;
+
+        var n = Normalize(processName);
+        return n is "explorer" or "windowsterminal" or "terminal"
+            or "powershell" or "pwsh" or "cmd";
     }
 
     private static string Normalize(string value)

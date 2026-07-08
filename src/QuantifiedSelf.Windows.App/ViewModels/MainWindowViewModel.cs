@@ -25,6 +25,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         "Sessions",
         "Samples",
         "Diagnostics",
+        "Insights",
         "Settings"
     ];
 
@@ -42,6 +43,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SettingsViewModel _settingsViewModel;
     private readonly SettingsService _settingsService;
     private readonly DashboardViewModel _dashboardViewModel;
+    private readonly InsightsViewModel _insightsViewModel;
     private readonly DispatcherTimer _refreshTimer;
     private readonly DispatcherTimer _statusPollTimer;
     private CancellationTokenSource? _statusPollCts;
@@ -94,6 +96,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SettingsViewModel settingsViewModel,
         SettingsService settingsService,
         DashboardViewModel dashboardViewModel,
+        InsightsViewModel insightsViewModel,
         AgentIpcStatusService? ipcStatusService = null,
         RefreshService? refreshService = null,
         ITrayStateSink? trayStateSink = null)
@@ -112,6 +115,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _settingsViewModel = settingsViewModel;
         _settingsService = settingsService;
         _dashboardViewModel = dashboardViewModel;
+        _insightsViewModel = insightsViewModel;
         _settingsViewModel.AppSettingsSaved += HandleAppSettingsSaved;
 
         StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy && _commandAvailability.CanStart);
@@ -161,6 +165,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public SettingsViewModel SettingsViewModel => _settingsViewModel;
 
     public DashboardViewModel DashboardViewModel => _dashboardViewModel;
+
+    public InsightsViewModel InsightsViewModel => _insightsViewModel;
 
     internal ITrayStateSink? TrayStateSink
     {
@@ -651,6 +657,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 break;
             case "Diagnostics":
                 await RefreshDiagnosticsAsync(status, cancellationToken);
+                break;
+            case "Insights":
+                await _insightsViewModel.LoadAsync(cancellationToken);
                 break;
             case "Settings":
                 if (!_settingsViewModel.IsDirty)

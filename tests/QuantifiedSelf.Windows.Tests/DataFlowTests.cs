@@ -1871,7 +1871,7 @@ public sealed class DataFlowTests
     public void NavigationOrder_IsDashboardAppsSessionsSamplesDiagnosticsSettings()
     {
         Assert.Equal(
-            ["Dashboard", "Apps", "Sessions", "Samples", "Diagnostics", "Settings"],
+            ["Dashboard", "Apps", "Sessions", "Samples", "Diagnostics", "Insights", "Settings"],
             MainWindowViewModel.NavigationPages);
     }
 
@@ -1891,7 +1891,7 @@ public sealed class DataFlowTests
         Assert.Equal("Samples", viewModel.CurrentPage);
 
         viewModel.OpenSettingsCommand.Execute(null);
-        Assert.Equal(5, viewModel.SelectedTabIndex);
+        Assert.Equal(6, viewModel.SelectedTabIndex);
         Assert.Equal("Settings", viewModel.CurrentPage);
     }
 
@@ -1948,10 +1948,38 @@ public sealed class DataFlowTests
         Assert.Equal(1, samplesLoads);
         Assert.Equal(0, settingsLoads);
 
-        viewModel.SelectedTabIndex = 5;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         Assert.Equal(1, settingsLoads);
+    }
+
+    [Fact]
+    public async Task MainWindowViewModel_RefreshesInsightsPageThroughRealPath()
+    {
+        using var workspace = new TempWorkspace();
+        var paths = new WindowsAgentPaths(workspace.Root);
+        var viewModel = await CreateMainWindowViewModelAsync(workspace);
+        var startLocal = DateTime.Today.AddHours(10);
+
+        for (var i = 0; i < 30; i++)
+        {
+            await InsertSampleAsync(
+                paths.DatabasePath,
+                startLocal.AddMinutes(i).ToUniversalTime(),
+                "Code",
+                "Program.cs",
+                "Active");
+        }
+
+        viewModel.SelectedTabIndex = 5; // Insights
+        await viewModel.RefreshAsync();
+
+        Assert.Equal("Insights", viewModel.CurrentPage);
+        Assert.Equal("30", viewModel.InsightsViewModel.ActiveSampleText);
+        Assert.True(viewModel.InsightsViewModel.HasInsightData);
+        Assert.NotEmpty(viewModel.InsightsViewModel.WorkBlocks);
+        Assert.Contains("专注", viewModel.InsightsViewModel.SummaryText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -2008,7 +2036,7 @@ public sealed class DataFlowTests
             appsViewModel,
             settingsViewModel,
             settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)));
+            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
 
         await mainViewModel.InitializeAsync();
 
@@ -2335,8 +2363,8 @@ public sealed class DataFlowTests
 
         Assert.True(result.IsValid);
         Assert.Equal("Agent options are valid.", result.SafeMessageText);
-        Assert.Equal(["KeePass", "1Password", "Bitwarden"], result.NormalizedOptions.ExcludedProcesses);
-        Assert.Empty(result.NormalizedOptions.ExcludedTitlePatterns);
+        Assert.Equal(["KeePass", "1Password", "Bitwarden", "explorer"], result.NormalizedOptions.ExcludedProcesses);
+        Assert.Equal(["InPrivate"], result.NormalizedOptions.ExcludedTitlePatterns);
     }
 
     [Fact]
@@ -3384,7 +3412,7 @@ public sealed class DataFlowTests
                 IdleThresholdSeconds = 5,      // invalid: below min 10
                 HeartbeatIntervalSeconds = 1,
                 UseMockCapture = true,
-                ExcludedProcesses = []         // empty → defaults have KeePass/1Password/Bitwarden
+                ExcludedProcesses = []         // empty → defaults have KeePass/1Password/Bitwarden/explorer
             });
 
         var logger1 = new TestLogger<AgentStateMachine>();
@@ -5048,7 +5076,7 @@ public sealed class DataFlowTests
             .SetValue(viewModel.SettingsViewModel, true);
 
         // Navigate to Settings and refresh
-        viewModel.SelectedTabIndex = 5; // Settings tab
+        viewModel.SelectedTabIndex = 6; // Settings tab
         await viewModel.RefreshAsync();
 
         // Dirty guard: LoadAsync should NOT have been called because IsDirty was true
@@ -7487,7 +7515,7 @@ public sealed class DataFlowTests
             .GetProperty("IsDirty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!
             .SetValue(viewModel.SettingsViewModel, true);
 
-        viewModel.SelectedTabIndex = 5; // Settings
+        viewModel.SelectedTabIndex = 6; // Settings
         await viewModel.RefreshAsync();
 
         Assert.True(viewModel.SettingsViewModel.IsDirty);
@@ -8367,7 +8395,7 @@ public sealed class DataFlowTests
             new SessionsViewModel(new SessionsDataService(paths)),
             new AppsViewModel(new AppsDataService(paths)),
             settingsViewModel, settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)),
+            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
             trayStateSink: sink);
 
         // Apply status update — tray should receive it, but settings drafts must stay
@@ -8402,7 +8430,7 @@ public sealed class DataFlowTests
             new SessionsViewModel(new SessionsDataService(paths)),
             new AppsViewModel(new AppsDataService(paths)),
             settingsViewModel, settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)),
+            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
             refreshService: null,
             trayStateSink: null);
         viewModel.TrayStateSink = trayStateSink;
@@ -9036,7 +9064,7 @@ public sealed class DataFlowTests
             appsViewModel,
             settingsViewModel,
             settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)),
+            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
             ipcStatusService,
             refreshService);
 
@@ -10254,7 +10282,7 @@ public sealed class DataFlowTests
             new SamplesViewModel(new SamplesDataService(paths)),
             new SessionsViewModel(new SessionsDataService(paths)),
             new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)));
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
 
         // First call should succeed
         await viewModel.InitializeAsync();
@@ -10288,7 +10316,7 @@ public sealed class DataFlowTests
             new SamplesViewModel(new SamplesDataService(paths)),
             new SessionsViewModel(new SessionsDataService(paths)),
             new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)));
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
 
         await viewModel.InitializeAsync();
 
@@ -10323,7 +10351,7 @@ public sealed class DataFlowTests
             new SamplesViewModel(new SamplesDataService(paths)),
             new SessionsViewModel(new SessionsDataService(paths)),
             new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)));
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
 
         await viewModel.InitializeAsync();
 
@@ -10359,7 +10387,7 @@ public sealed class DataFlowTests
             new SamplesViewModel(new SamplesDataService(paths)),
             new SessionsViewModel(new SessionsDataService(paths)),
             new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)));
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
 
         // First init (simulates explicit call in App.xaml.cs hidden mode)
         await viewModel.InitializeAsync();
@@ -11795,7 +11823,7 @@ public sealed class DataFlowTests
         Assert.Contains(suggestions, s => s.Category == "Switch");
         var s = suggestions.First(x => x.Category == "Switch");
         Assert.Equal("Warning", s.Severity);
-        Assert.Contains("跨任务", s.Title, StringComparison.Ordinal);
+        Assert.Contains("任务切换", s.Title, StringComparison.Ordinal);
         Assert.NotEmpty(s.EvidenceText);
         Assert.NotEmpty(s.ActionText);
     }

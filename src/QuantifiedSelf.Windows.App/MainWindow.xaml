@@ -248,7 +248,7 @@
                                             </Border>
                                             <Border Style="{StaticResource DashboardInsightMetricCardStyle}">
                                                 <StackPanel>
-                                                    <TextBlock Text="Context Switches" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
+                                                    <TextBlock Text="任务切换" FontSize="12" Foreground="{StaticResource MutedTextBrush}" />
                                                     <TextBlock Text="{Binding DashboardViewModel.ContextSwitchText}" FontSize="18" FontWeight="Bold" Margin="0,4,0,0" />
                                                 </StackPanel>
                                             </Border>
@@ -648,6 +648,10 @@
                             </Grid>
                         </Grid>
                     </ScrollViewer>
+                </TabItem>
+
+                <TabItem Header="Insights">
+                    <views:InsightsView DataContext="{Binding InsightsViewModel}" />
                 </TabItem>
 
                 <TabItem Header="Settings">

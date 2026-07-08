@@ -17,4 +17,11 @@ public sealed class ForegroundSample
     public int IdleSeconds { get; set; }
 
     public string ActivityState { get; set; } = "Active";
+
+    /// <summary>
+    /// Transient context classification set by analysis services (Development, Communication, etc.).
+    /// Not persisted to SQLite.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string Context { get; set; } = string.Empty;
 }
