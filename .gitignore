@@ -17,3 +17,4 @@ packages/
 publish/release/
 .codex/
 ref/
+scripts/*.png

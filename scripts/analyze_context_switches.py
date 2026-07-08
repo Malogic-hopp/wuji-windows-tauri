@@ -203,39 +203,55 @@ def classify_context(process: str, title: str) -> str:
         return classify_browser_title(title)
 
     if contains_any(p, DEV_TOKENS):
-        return "Development"
+        return "开发"
     if contains_any(p, COMM_TOKENS):
-        return "Communication"
+        return "沟通"
     if contains_any(p, ENTERTAINMENT_TOKENS):
-        return "Entertainment"
+        return "娱乐"
     if contains_any(p, SYSTEM_TOKENS):
-        return "System"
+        return "系统"
     if contains_any(p, PRODUCTIVITY_TOKENS):
-        return "Productivity"
-    return "Other"
+        return "效率"
+    return "其他"
 
 
 def classify_browser_title(title: str) -> str:
     if contains_any(title, BROWSER_ENTERTAINMENT_TITLES):
-        return "Entertainment"
+        return "娱乐"
     if contains_any(title, BROWSER_COMM_TITLES):
-        return "Communication"
+        return "沟通"
     if contains_any(title, BROWSER_DEV_TITLES):
-        return "Development"
-    return "Research"
+        return "开发"
+    return "研究"
 
 
 def short_name(process: str) -> str:
-    """Human-readable short name for a process."""
+    """Human-readable short name for a process with friendly display overrides."""
     n = normalize(process)
     # Remove common suffixes
     for suf in [".exe", "-win64", "-x64", "-x86"]:
         if n.endswith(suf):
             n = n[: -len(suf)]
-    return n
+    overrides = {
+        "quantifiedself.windows.app": "WUJI",
+        "quantifiedself.windows.agent": "WUJI Agent",
+        "applicationframehost": "AppFrameHost",
+        "shellexperiencehost": "ShellExperience",
+        "searchhost": "SearchHost",
+    }
+    return overrides.get(n.lower(), n)
 
 
 # ── Switch analysis ────────────────────────────────────────────────────────
+
+
+def is_dev_tool_app(process_name: str) -> bool:
+    """Apps that are part of the development workflow.
+    Switching to these from 开发 should not count as a context change."""
+    n = normalize(process_name)
+    return n in (
+        "explorer", "windowsterminal", "terminal", "powershell", "pwsh", "cmd"
+    )
 
 
 def detect_switches(active_samples: list[Sample]) -> list[SwitchEvent]:
@@ -248,6 +264,15 @@ def detect_switches(active_samples: list[Sample]) -> list[SwitchEvent]:
         title_changed = prev.window_title != cur.window_title
         if not app_changed and not title_changed:
             continue  # no switch
+
+        # 开发 ↔ dev_tool（Explorer/Terminal 等）双向豁免，同一工作流
+        context_changed = prev.context != cur.context
+        if context_changed and (
+            (prev.context == "开发" and is_dev_tool_app(cur.process_name))
+            or (cur.context == "开发" and is_dev_tool_app(prev.process_name))
+        ):
+            context_changed = False
+
         switches.append(
             SwitchEvent(
                 from_app=prev.process_name,
@@ -257,7 +282,7 @@ def detect_switches(active_samples: list[Sample]) -> list[SwitchEvent]:
                 from_context=prev.context,
                 to_context=cur.context,
                 time_utc=cur.sample_time_utc,
-                is_meaningful=prev.context != cur.context,
+                is_meaningful=context_changed,
             )
         )
     return switches
@@ -273,12 +298,23 @@ def build_switch_pairs(switches: list[SwitchEvent]) -> Counter:
     return pairs
 
 
-def build_app_switch_matrix(switches: list[SwitchEvent]) -> Counter:
-    """Count (from_app → to_app) pairs for the top switching apps."""
-    pairs = Counter()
+def build_app_switch_matrix(switches: list[SwitchEvent]) -> tuple[Counter, Counter]:
+    """
+    Count (from_app → to_app) pairs.
+    Returns:
+      cross_app:  different-app switches (App 间切换)
+      same_app:   same-app window/title changes (App 内窗口切换)
+    """
+    cross_app = Counter()
+    same_app = Counter()
     for s in switches:
-        pairs[(short_name(s.from_app), short_name(s.to_app))] += 1
-    return pairs
+        a = short_name(s.from_app)
+        b = short_name(s.to_app)
+        if a == b:
+            same_app[(a, b)] += 1
+        else:
+            cross_app[(a, b)] += 1
+    return cross_app, same_app
 
 
 # ── Focus segment detection (mirrors FocusMetricsCalculator) ──────────────
@@ -317,9 +353,9 @@ def detect_focus_segments(
             seg.duration_min = round(dur, 1)
             seg.is_fragmented = seg.switch_count > max_switches
             if dur < min_focus_min:
-                seg.break_reason = f"duration too short ({seg.duration_min:.0f}m < {min_focus_min}m)"
+                seg.break_reason = f"时长不足（{seg.duration_min:.0f}m < {min_focus_min}m）"
             elif seg.is_fragmented:
-                seg.break_reason = f"too many switches ({seg.switch_count} > {max_switches})"
+                seg.break_reason = f"切换过多（{seg.switch_count} > {max_switches}）"
             segments.append(seg)
 
             seg = FocusSegment(
@@ -338,8 +374,15 @@ def detect_focus_segments(
         seg.app_counts[short_name(s.process_name)] += 1
 
         if s.context != last_context:
-            seg.switch_count += 1
-        last_context = s.context
+            # 开发 ↔ dev_tool（Explorer/Terminal 等）双向豁免
+            if (last_context == "开发" and is_dev_tool_app(s.process_name)) \
+               or (s.context == "开发" and is_dev_tool_app(last_app)):
+                pass  # same workflow, keep last_context unchanged
+            else:
+                seg.switch_count += 1
+                last_context = s.context
+        else:
+            last_context = s.context
         last_app = s.process_name
         last_title = s.window_title
 
@@ -349,9 +392,9 @@ def detect_focus_segments(
     seg.duration_min = round(dur, 1)
     seg.is_fragmented = seg.switch_count > max_switches
     if dur < min_focus_min:
-        seg.break_reason = f"duration too short ({seg.duration_min:.0f}m < {min_focus_min}m)"
+        seg.break_reason = f"时长不足（{seg.duration_min:.0f}m < {min_focus_min}m）"
     elif seg.is_fragmented:
-        seg.break_reason = f"too many switches ({seg.switch_count} > {max_switches})"
+        seg.break_reason = f"切换过多（{seg.switch_count} > {max_switches}）"
     segments.append(seg)
     return segments
 
@@ -443,6 +486,43 @@ def hourly_switch_distribution(
     return hours
 
 
+# ── Browser title analysis ─────────────────────────────────────────────────
+
+
+def build_browser_title_details(
+    switches: list[SwitchEvent], top_n: int = 15
+) -> list[dict]:
+    """
+    Extract browser window titles from switches, grouped by title + context.
+    Shows which specific pages the user was looking at in the browser.
+    """
+    title_counts: dict[tuple[str, str], int] = defaultdict(int)
+
+    for s in switches:
+        # When switching TO a browser, record the destination title
+        if contains_any(normalize(s.to_app), BROWSER_TOKENS):
+            key = (s.to_title[:120], s.to_context)
+            title_counts[key] += 1
+        # Also record when switching FROM a browser (browser tab change)
+        if contains_any(normalize(s.from_app), BROWSER_TOKENS):
+            key = (s.from_title[:120], s.from_context)
+            title_counts[key] += 1
+
+    # Remove empty-title entries and deduplicate
+    result = []
+    seen_titles = set()
+    for (title, ctx), count in sorted(
+        title_counts.items(), key=lambda x: -x[1]
+    ):
+        t = title.strip()
+        if not t or t in seen_titles:
+            continue
+        seen_titles.add(t)
+        result.append({"title": t, "context": ctx, "count": count})
+
+    return result[:top_n]
+
+
 # ── Report formatting ─────────────────────────────────────────────────────
 
 
@@ -480,59 +560,97 @@ def print_report(
     valid_focus = [s for s in segments if not s.break_reason]
 
     # ── 1. Executive Summary ──────────────────────────────────────────
-    print_header("📊 Context Switch & Focus Analysis")
+    print_header("📊 任务切换与专注分析")
 
     active_min = sum(
         (s.end_utc - s.start_utc).total_seconds() / 60 for s in segments
     )
-    print(f"\n  Active samples today:  {len(active_samples):,}")
-    print(f"  Total samples today:   {len(samples):,}")
-    print(f"  Est. active duration:  {format_duration(active_min * 60)}")
+    print(f"\n  今日活跃样本数：  {len(active_samples):,}")
+    print(f"  今日总样本数：    {len(samples):,}")
+    print(f"  预估活跃时长：    {format_duration(active_min * 60)}")
     print(
-        f"  Raw tool switches:     {raw_switches:,}  "
-        f"(every app or window title change between active samples)"
+        f"  工具跳转（原始）：{raw_switches:,}  "
+        f"（活跃样本间每次 App 或窗口标题变更）"
     )
     print(
-        f"  Meaningful switches:   {meaningful_switches:,}  "
-        f"(context-level: Dev→Comm, etc.)"
+        f"  任务切换：{meaningful_switches:,}  "
+        f"（跨语境级别切换，如开发→沟通）"
     )
     print(
-        f"  Focus threshold:       ≥{args.min_focus_min}min continuous, "
-        f"≤{args.max_switches} context switches, "
-        f"gaps ≤{args.max_gap_min}min"
+        f"  专注阈值：        连续 ≥{args.min_focus_min} 分钟，"
+        f"任务切换 ≤{args.max_switches} 次，"
+        f"采样间隔 ≤{args.max_gap_min} 分钟"
     )
-    print(f"  Valid focus sessions:  {len(valid_focus)}")
-    print(f"  Fragmented segments:   {sum(1 for s in segments if s.is_fragmented)}")
+    print(f"  有效专注段：      {len(valid_focus)}")
+    print(f"  碎片化段：        {sum(1 for s in segments if s.is_fragmented)}")
 
     # ── 2. Why So Many Switches ───────────────────────────────────────
-    print_header("🔀 Why Context Switching Is High")
+    print_header("🔀 为什么任务切换频繁")
 
     # 2a. Context-level switch breakdown
     context_pairs = build_switch_pairs(switches)
     meaningful_pairs = {
         (f, t): c for (f, t), c in context_pairs.items() if f != t
     }
+
+    # Build example map: (from_ctx, to_ctx) → list of concrete switch descriptions
+    def _make_example(sw: SwitchEvent) -> str:
+        """Build a concrete description of a switch, using window titles."""
+        from_label = short_name(sw.from_app)
+        to_label = short_name(sw.to_app)
+        from_title = sw.from_title.strip()[:50] if sw.from_title.strip() else ""
+        to_title = sw.to_title.strip()[:50] if sw.to_title.strip() else ""
+
+        # For same-app switches, the title change IS the story
+        if sw.from_app == sw.to_app:
+            return f"{from_label}: 「{from_title}」→「{to_title}」"
+
+        # Cross-app: show the destination title if it has substance
+        if to_title and to_title.lower() != to_label.lower():
+            return f"{from_label} → {to_label}「{to_title}」"
+        return f"{from_label} → {to_label}"
+
+    ctx_examples: dict[tuple[str, str], Counter] = defaultdict(Counter)
+    for s in switches:
+        if s.is_meaningful:
+            key = (s.from_context, s.to_context)
+            example = _make_example(s)
+            ctx_examples[key][example] += 1
+
     if meaningful_pairs:
-        print_subheader("Context-level switch directions (ranked)")
+        print_subheader("任务切换方向（按次数排序）")
         for (f, t), count in sorted(
             meaningful_pairs.items(), key=lambda x: -x[1]
         ):
             pct = count / meaningful_switches * 100 if meaningful_switches else 0
             bar = "█" * max(1, int(pct / 2))
-            print(f"  {f:>16} → {t:<16}  {count:>4}  ({pct:5.1f}%)  {bar}")
+            print(f"  {f:>6} → {t:<6}  {count:>4}  ({pct:5.1f}%)  {bar}")
+            # Show top 3 by frequency for this direction
+            top_examples = ctx_examples.get((f, t), Counter()).most_common(3)
+            if top_examples:
+                items = [f"{ex}（{n}次）" for ex, n in top_examples]
+                print(f"         次数前三：{'、'.join(items)}")
 
     # 2b. Top app-switch pairs
-    print_subheader("Top app → app switch pairs (all switches)")
-    app_pairs = build_app_switch_matrix(switches)
-    for (a, b), count in app_pairs.most_common(args.top):
+    cross_app, same_app = build_app_switch_matrix(switches)
+    same_total = sum(same_app.values())
+
+    print_subheader("App 间切换 Top 对（不同 App 之间）")
+    for (a, b), count in cross_app.most_common(args.top):
         pct = count / total_switches * 100 if total_switches else 0
         print(f"  {a:>20} → {b:<20}  {count:>4}  ({pct:5.1f}%)")
 
+    if same_total > 0:
+        print(
+            f"\n  （另有 {same_total} 次为 App 内窗口/标签切换，"
+            f"如 Terminal 切目录、Code 切文件、Edge 切标签页）"
+        )
+
     # 2c. Interrupters
-    work_contexts = {"Development", "Productivity", "Research"}
+    work_contexts = {"开发", "效率", "研究"}
     interrupters = find_interrupters(switches, work_contexts)
     if interrupters:
-        print_subheader("Top interrupter apps (pulling away from work)")
+        print_subheader("主要中断来源（将你从工作语境拉走的 App）")
         for item in interrupters[: args.top]:
             pct = (
                 item["total_pulls"] / meaningful_switches * 100
@@ -543,7 +661,7 @@ def print_report(
                 f"{ctx}({n})" for ctx, n in item["destinations"][:3]
             )
             print(
-                f"  {item['app']:>20}  →  {item['total_pulls']:>4} pulls  "
+                f"  {item['app']:>20}  →  {item['total_pulls']:>4} 次  "
                 f"({pct:5.1f}%)  [{dests}]"
             )
 
@@ -558,22 +676,39 @@ def print_report(
         else:
             desktop_switches += 1
 
-    print_subheader("Switch type breakdown")
+    print_subheader("切换类型分布")
     print(
-        f"  Browser-involved switches:  {browser_switches:>4}  "
+        f"  浏览器相关切换：  {browser_switches:>4}  "
         f"({browser_switches / total_switches * 100:5.1f}%)"
         if total_switches
         else ""
     )
     print(
-        f"  Desktop-only switches:      {desktop_switches:>4}  "
+        f"  纯桌面应用切换：  {desktop_switches:>4}  "
         f"({desktop_switches / total_switches * 100:5.1f}%)"
         if total_switches
         else ""
     )
 
+    # 2e. Browser title details
+    browser_titles = build_browser_title_details(switches)
+    if browser_titles:
+        print_subheader("浏览器标签页标题详情（Top 15）")
+        # Group by context
+        by_ctx: dict[str, list[dict]] = defaultdict(list)
+        for item in browser_titles:
+            by_ctx[item["context"]].append(item)
+        for ctx in ["娱乐", "沟通", "开发", "研究", "效率", "系统", "其他"]:
+            items = by_ctx.get(ctx, [])
+            if not items:
+                continue
+            print(f"\n  ▸ {ctx}")
+            for item in items[:6]:
+                title_preview = item["title"][:96]
+                print(f"    [{item['count']:>3}×] {title_preview}")
+
     # ── 3. Time Distribution ──────────────────────────────────────────
-    print_header("⏰ Switch Distribution by Hour")
+    print_header("⏰ 各时段切换分布")
 
     hourly = hourly_switch_distribution(switches)
     max_h = max((h["total"] for h in hourly.values()), default=1)
@@ -584,19 +719,19 @@ def print_report(
         bar_w = max(1, int(d["total"] / max(max_h, 1) * 30))
         bar = "█" * bar_w
         print(
-            f"  {h:02d}:00  total:{d['total']:>4}  "
-            f"meaningful:{d['meaningful']:>4}  {bar}"
+            f"  {h:02d}:00  总计:{d['total']:>4}  "
+            f"有意义:{d['meaningful']:>4}  {bar}"
         )
 
     # Peak switch hour
     peak_hour = max(hourly.items(), key=lambda x: x[1]["total"])
     print(
-        f"\n  Peak switch hour: {peak_hour[0]:02d}:00 "
-        f"({peak_hour[1]['total']} switches)"
+        f"\n  切换高峰时段：{peak_hour[0]:02d}:00 "
+        f"（{peak_hour[1]['total']} 次切换）"
     )
 
     # ── 4. Why No Continuous Focus ────────────────────────────────────
-    print_header("🎯 Why Continuous Focus Sessions Are Missing")
+    print_header("🎯 为什么缺少连续专注")
 
     long_segments = [s for s in segments if s.duration_min >= 3]
     focus_candidates = [
@@ -607,92 +742,92 @@ def print_report(
     ]
 
     if valid_focus:
-        print_subheader("Valid focus sessions today")
+        print_subheader("今日有效专注段")
         for fs in valid_focus:
             print(
                 f"  {fs.dominant_app:<20}  "
                 f"{fs.duration_min:>6.1f}m  "
-                f"{fs.switch_count} switches  "
+                f"{fs.switch_count} 次切换  "
                 f"{fs.start_utc.astimezone().strftime('%H:%M')} – "
                 f"{fs.end_utc.astimezone().strftime('%H:%M')}"
             )
 
     blockers = find_potential_focus_blockers(segments, args.min_focus_min)
     if blockers:
-        print_subheader("Segments that FAILED to become focus sessions")
+        print_subheader("未能形成专注的段")
         for b in blockers[:12]:
             other_info = ", ".join(f"{a}({n})" for a, n in b["other_apps"][:3])
             print(f"  ⚠ {b['time_range']}  {b['dominant_app']:<16}  "
                   f"{b['duration_min']:>5.1f}m  "
-                  f"switches:{b['switch_count']}")
-            print(f"     Reason: {b['reason']}")
+                  f"切换:{b['switch_count']}")
+            print(f"     原因: {b['reason']}")
             if other_info:
-                print(f"     Also present: {other_info}")
+                print(f"     同时出现: {other_info}")
     else:
-        print_subheader("Analysis")
+        print_subheader("分析")
         if len(segments) <= 1:
             print(
-                "  The entire active period is one continuous segment — "
-                "switches may be distributed across the whole day."
+                "  整个活跃时段是一个连续段——"
+                "切换可能均匀分布在全天。"
             )
         if active_min < args.min_focus_min:
             print(
-                f"  Total active time ({active_min:.0f}m) is less than "
-                f"the minimum focus threshold ({args.min_focus_min}m)."
+                f"  总活跃时间（{active_min:.0f}m）低于"
+                f"最小专注阈值（{args.min_focus_min}m）。"
             )
 
     # ── 5. Key Apps Summary ───────────────────────────────────────────
-    print_header("📱 App Activity Summary")
+    print_header("📱 App 活跃度概览")
 
     app_counter = Counter()
     for s in active_samples:
         app_counter[short_name(s.process_name)] += 1
 
-    print_subheader("Top apps by sample count")
+    print_subheader("按样本数排序的 Top App")
     for app, count in app_counter.most_common(args.top):
         bar_w = max(1, int(count / max(app_counter.values()) * 30))
         bar = "█" * bar_w
         print(f"  {app:>24}  {count:>5}  {bar}")
 
     # ── 6. Recommendations ────────────────────────────────────────────
-    print_header("💡 Recommendations")
+    print_header("💡 建议")
 
     if meaningful_switches >= 20:
-        print("  • Context switching is high — consider these specific actions:")
+        print("  • 任务切换频繁 — 可以考虑以下具体行动：")
         if interrupters:
             top_interrupter = interrupters[0]
             print(
-                f"    - Biggest interrupter: '{top_interrupter['app']}' "
-                f"({top_interrupter['total_pulls']} times). "
-                f"Try closing or muting notifications from it during work blocks."
+                f"    - 最大中断源：'{top_interrupter['app']}' "
+                f"（{top_interrupter['total_pulls']} 次）。"
+                f"试试在工作块期间关闭或静音它的通知。"
             )
         peak_h = peak_hour[0]
         print(
-            f"    - Worst hour for switching: {peak_h:02d}:00. "
-            f"Schedule a 25-minute focus block before or after this period."
+            f"    - 切换最严重时段：{peak_h:02d}:00。"
+            f"在这个时段前后安排一个 25 分钟的专注块。"
         )
         if browser_switches > desktop_switches:
             print(
-                "    - Browser tab switching dominates. "
-                "Consider grouping research tabs and batch-checking them."
+                "    - 浏览器标签切换占主导。"
+                "考虑分组整理研究类标签，批量查阅。"
             )
 
     if not valid_focus:
-        print("  • No valid focus sessions detected today:")
+        print("  • 今日未检测到有效专注段：")
         if blockers:
             worst = blockers[0]
             print(
-                f"    - Closest candidate: '{worst['dominant_app']}' "
-                f"for {worst['duration_min']:.0f}m but {worst['reason']}."
+                f"    - 最近候选：'{worst['dominant_app']}' "
+                f"持续 {worst['duration_min']:.0f}m，但 {worst['reason']}。"
             )
         print(
-            f"    - Try: pick ONE app (IDE, doc editor), close everything else, "
-            f"set a timer for {args.min_focus_min}min."
+            f"    - 试试：选择一个 App（IDE 或文档编辑器），关掉其他一切，"
+            f"设定 {args.min_focus_min} 分钟计时器。"
         )
     else:
         print(
-            f"  ✅ {len(valid_focus)} focus sessions detected — "
-            f"keep building on this pattern."
+            f"  ✅ 检测到 {len(valid_focus)} 段有效专注 — "
+            f"继续保持这个节奏。"
         )
 
     print()
@@ -745,22 +880,22 @@ def main() -> None:
     # Resolve database path
     db_path = args.db or find_db_path()
     if not os.path.exists(db_path):
-        print(f"ERROR: Database not found at {db_path}", file=sys.stderr)
+        print(f"错误：找不到数据库文件 {db_path}", file=sys.stderr)
         sys.exit(1)
-    print(f"📁 Database: {db_path}")
+    print(f"📁 数据库：{db_path}")
 
     # Resolve date
     target_date = (
         date.fromisoformat(args.date) if args.date else date.today()
     )
-    print(f"📅 Date:     {target_date.isoformat()}")
+    print(f"📅 日期：   {target_date.isoformat()}")
 
     # Read samples
     samples = read_samples(db_path, target_date)
     if not samples:
-        print("\n⚠ No foreground samples found for this date.")
+        print("\n⚠ 该日期没有找到任何前台样本数据。")
         print(
-            "  Make sure the QuantifiedSelf agent has been running and collecting data."
+            "  请确保 QuantifiedSelf Agent 已运行并在采集数据。"
         )
         sys.exit(0)
 
@@ -776,7 +911,7 @@ def main() -> None:
     active_samples.sort(key=lambda s: s.sample_time_utc)
 
     if len(active_samples) < 2:
-        print("\n⚠ Too few active samples to analyze switches.")
+        print("\n⚠ 活跃样本太少，无法分析切换。")
         sys.exit(0)
 
     # Detect switches
