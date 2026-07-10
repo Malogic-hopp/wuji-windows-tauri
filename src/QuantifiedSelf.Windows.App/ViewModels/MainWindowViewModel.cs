@@ -78,6 +78,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _currentSessionIdText = "-";
     private string _statusMessage = "Ready";
     private IStartupRegistrationService? _startupRegistrationService;
+    private string _lastTickPhaseText = "-";
+    private string _lastTickDurationText = "-";
+    private string _lastCaptureDurationText = "-";
+    private string _lastPersistDurationText = "-";
+    private string _lastMaintenanceDurationText = "-";
+    private string _lastTickErrorText = "None";
     private string _loginStartupStatusText = "Unknown";
     private string _launchModeText = "Manual";
     private string _startupRegistrationSummary = "Unknown";
@@ -302,6 +308,42 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         get => _ipcStatusText;
         private set => SetProperty(ref _ipcStatusText, value);
+    }
+
+    public string LastTickPhaseText
+    {
+        get => _lastTickPhaseText;
+        private set => SetProperty(ref _lastTickPhaseText, value);
+    }
+
+    public string LastTickDurationText
+    {
+        get => _lastTickDurationText;
+        private set => SetProperty(ref _lastTickDurationText, value);
+    }
+
+    public string LastCaptureDurationText
+    {
+        get => _lastCaptureDurationText;
+        private set => SetProperty(ref _lastCaptureDurationText, value);
+    }
+
+    public string LastPersistDurationText
+    {
+        get => _lastPersistDurationText;
+        private set => SetProperty(ref _lastPersistDurationText, value);
+    }
+
+    public string LastMaintenanceDurationText
+    {
+        get => _lastMaintenanceDurationText;
+        private set => SetProperty(ref _lastMaintenanceDurationText, value);
+    }
+
+    public string LastTickErrorText
+    {
+        get => _lastTickErrorText;
+        private set => SetProperty(ref _lastTickErrorText, value);
     }
 
     public string RefreshHealthText
@@ -700,6 +742,24 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ? "None"
             : $"{status.HealthState?.LastJournalWriteErrorUtc:yyyy-MM-dd HH:mm:ss} UTC - {status.HealthState?.LastJournalWriteError}";
         CurrentSessionIdText = status.HealthState?.CurrentSessionId?.ToString() ?? "-";
+
+        // Tick-level diagnostics
+        LastTickPhaseText = status.HealthState?.LastTickPhase ?? "-";
+        LastTickDurationText = status.HealthState?.LastTickDurationMs is { } d
+            ? $"{d:F0} ms"
+            : "-";
+        LastCaptureDurationText = status.HealthState?.LastCaptureDurationMs is { } cd
+            ? $"{cd:F0} ms"
+            : "-";
+        LastPersistDurationText = status.HealthState?.LastPersistDurationMs is { } pd
+            ? $"{pd:F0} ms"
+            : "-";
+        LastMaintenanceDurationText = status.HealthState?.LastMaintenanceDurationMs is { } md
+            ? $"{md:F0} ms"
+            : "-";
+        LastTickErrorText = status.HealthState?.LastErrorCode is null
+            ? "None"
+            : $"[{status.HealthState.LastErrorCode}] {status.HealthState.LastErrorMessage ?? "-"}";
 
         ReplaceCollection(RecentEvents, recentEvents);
         ReplaceCollection(RecentErrors, recentErrors);

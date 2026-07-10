@@ -54,6 +54,16 @@ public sealed class AgentStateMachine
     private int _databaseWriteErrorCount;
     private int _captureErrorCount;
 
+    // Tick-level diagnostics for stale root-cause analysis
+    private string? _lastTickPhase;
+    private double _lastTickDurationMs;
+    private double _lastCaptureDurationMs;
+    private double _lastPersistDurationMs;
+    private double _lastMaintenanceDurationMs;
+    private string? _lastTickErrorCode;
+    private string? _lastTickErrorMessage;
+    private DateTime? _lastTickSuccessUtc;
+
     public AgentStateMachine(
         WindowsAgentPaths paths,
         RuntimeStateStore runtimeStateStore,
@@ -241,9 +251,14 @@ public sealed class AgentStateMachine
 
     public async Task<bool> TickAsync(CancellationToken cancellationToken)
     {
+        var tickStart = DateTime.UtcNow;
+
+        _lastTickPhase = "ControlRead";
         var commandRead = await _controlFileStore.ReadForAgentAsync(_paths.AgentControlPath, cancellationToken);
         if (commandRead.WasMalformed)
         {
+            _lastTickErrorCode = "MalformedControlFile";
+            _lastTickErrorMessage = commandRead.ErrorMessage;
             _logger.LogWarning(
                 "控制文件格式错误：errorCode=MalformedControlFile，path={ControlPath}，message={ErrorMessage}",
                 _paths.AgentControlPath,
@@ -304,24 +319,32 @@ public sealed class AgentStateMachine
 
         if (ActualState == AgentActualState.Running && sampleDue)
         {
+            _lastTickPhase = "Capture";
             ForegroundSample sample = null!;
+            var captureStart = DateTime.UtcNow;
             try
             {
                 sample = NormalizeActivityState(_foregroundSampleProvider.Capture(_options), _options);
             }
             catch (Exception ex)
             {
+                _lastCaptureDurationMs = (DateTime.UtcNow - captureStart).TotalMilliseconds;
+                _lastTickErrorCode = "ForegroundWindowUnavailable";
+                _lastTickErrorMessage = GetShortExceptionMessage(ex);
                 _captureErrorCount++;
                 await WriteCaptureFailedEventAsync(ex, "ForegroundWindowUnavailable", "Foreground window capture failed", cancellationToken);
                 await PersistAsync($"Foreground capture failed: {GetShortExceptionMessage(ex)}", cancellationToken, "ForegroundWindowUnavailable");
                 LogCaptureFailed("ForegroundWindowUnavailable", ex);
+                _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
                 return true;
             }
+            _lastCaptureDurationMs = (DateTime.UtcNow - captureStart).TotalMilliseconds;
 
             var privacyDecision = _privacyFilter.Apply(sample, _options);
 
             if (!privacyDecision.ShouldWriteSample)
             {
+                _lastTickPhase = "PrivacyFilter";
                 if (privacyDecision.ShouldCloseOpenSession)
                 {
                     var closedSessionResult = await CloseOpenSessionSafelyAsync("PrivacyExcluded", "SessionWriteFailed", cancellationToken);
@@ -334,26 +357,38 @@ public sealed class AgentStateMachine
                 _lastSampleAtUtc = now;
                 LogPrivacyFiltered(privacyDecision);
                 await WritePrivacyFilteredEventAsync(sample, privacyDecision, cancellationToken);
+
+                _lastTickErrorCode = null;
+                _lastTickErrorMessage = null;
+                _lastTickSuccessUtc = DateTime.UtcNow;
+                var persistPrivacyStart = DateTime.UtcNow;
                 await PersistAsync(
                     $"Sample excluded: {GetPrivacyPersistMessage(privacyDecision)}",
                     cancellationToken);
+                _lastPersistDurationMs = (DateTime.UtcNow - persistPrivacyStart).TotalMilliseconds;
+                _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
                 return true;
             }
 
             var filteredSample = privacyDecision.Sample ?? sample;
+            _lastTickPhase = "SampleInsert";
             try
             {
                 await _foregroundSampleRepository.InsertAsync(filteredSample, cancellationToken);
             }
             catch (Exception ex)
             {
+                _lastTickErrorCode = "SampleWriteFailed";
+                _lastTickErrorMessage = GetShortExceptionMessage(ex);
                 _databaseWriteErrorCount++;
                 await WriteCaptureFailedEventAsync(ex, "SampleWriteFailed", "Sample write failed", cancellationToken);
                 await PersistAsync($"Sample write failed: {GetShortExceptionMessage(ex)}", cancellationToken, "SampleWriteFailed");
                 LogCaptureFailed("SampleWriteFailed", ex);
+                _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
                 return true;
             }
 
+            _lastTickPhase = "SessionAggregation";
             try
             {
                 var sessionAggregationResult = await _sessionAggregator.HandleSampleAsync(filteredSample, _options.SamplingIntervalSeconds, cancellationToken);
@@ -361,17 +396,26 @@ public sealed class AgentStateMachine
             }
             catch (Exception ex)
             {
+                _lastTickErrorCode = "SessionAggregationFailed";
+                _lastTickErrorMessage = GetShortExceptionMessage(ex);
                 _databaseWriteErrorCount++;
                 await WriteCaptureFailedEventAsync(ex, "SessionAggregationFailed", "Session aggregation failed", cancellationToken);
                 await PersistAsync($"Session aggregation failed: {GetShortExceptionMessage(ex)}", cancellationToken, "SessionAggregationFailed");
                 LogCaptureFailed("SessionAggregationFailed", ex);
+                _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
                 return true;
             }
 
             LastSampleUtc = filteredSample.SampleTimeUtc;
             _lastSampleAtUtc = filteredSample.SampleTimeUtc;
             _sampleCountSinceStart++;
+            _lastTickErrorCode = null;
+            _lastTickErrorMessage = null;
+            _lastTickSuccessUtc = DateTime.UtcNow;
+            var persistSampleStart = DateTime.UtcNow;
+            _lastTickPhase = "Persist";
             await PersistAsync("Sample captured", cancellationToken);
+            _lastPersistDurationMs = (DateTime.UtcNow - persistSampleStart).TotalMilliseconds;
             LogSampleCaptured(filteredSample);
         }
 
@@ -379,23 +423,45 @@ public sealed class AgentStateMachine
         {
             if (heartbeatDue)
             {
+                _lastTickErrorCode = null;
+                _lastTickErrorMessage = null;
+                _lastTickSuccessUtc = DateTime.UtcNow;
+                var persistPauseStart = DateTime.UtcNow;
+                _lastTickPhase = "Persist";
                 await PersistAsync("Paused heartbeat", cancellationToken);
+                _lastPersistDurationMs = (DateTime.UtcNow - persistPauseStart).TotalMilliseconds;
             }
 
+            _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
             return true;
         }
 
         if (ActualState == AgentActualState.Stopped)
         {
+            _lastTickPhase = "Persist";
             await PersistAsync("Agent stopped", cancellationToken);
+            _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
             return false;
         }
 
         if (heartbeatDue)
         {
+            _lastTickErrorCode = null;
+            _lastTickErrorMessage = null;
+            _lastTickSuccessUtc = DateTime.UtcNow;
+            var persistHbStart = DateTime.UtcNow;
+            _lastTickPhase = "Persist";
             await PersistAsync("Heartbeat", cancellationToken);
+            _lastPersistDurationMs = (DateTime.UtcNow - persistHbStart).TotalMilliseconds;
+        }
+        else
+        {
+            _lastTickErrorCode = null;
+            _lastTickErrorMessage = null;
+            _lastTickSuccessUtc = DateTime.UtcNow;
         }
 
+        _lastTickDurationMs = (DateTime.UtcNow - tickStart).TotalMilliseconds;
         return true;
     }
 
@@ -541,6 +607,8 @@ public sealed class AgentStateMachine
                 await WriteCommandAcceptedEventAsync(command, cancellationToken);
                 {
                     var previousState = ActualState;
+                    var maintenanceStart = DateTime.UtcNow;
+                    _lastTickPhase = "PruneData";
                     try
                     {
                         ActualState = AgentActualState.Maintenance;
@@ -548,6 +616,9 @@ public sealed class AgentStateMachine
 
                         if (_dataMaintenanceService is null)
                         {
+                            _lastMaintenanceDurationMs = (DateTime.UtcNow - maintenanceStart).TotalMilliseconds;
+                            _lastTickErrorCode = "PruneDataUnavailable";
+                            _lastTickErrorMessage = "PruneData service is not available.";
                             result.Completed = false;
                             result.ErrorCode = "PruneDataUnavailable";
                             result.Message = "PruneData service is not available.";
@@ -555,6 +626,7 @@ public sealed class AgentStateMachine
 
                             ActualState = previousState;
                             await PersistAsync("PruneData unavailable, exiting maintenance", cancellationToken);
+                            _lastMaintenanceDurationMs = (DateTime.UtcNow - maintenanceStart).TotalMilliseconds;
                             return result;
                         }
 
@@ -565,6 +637,9 @@ public sealed class AgentStateMachine
                         {
                             var errorCode = pruneResult.ErrorCode ?? "PruneDataFailed";
                             var safeMessage = pruneResult.SafeMessage ?? "PruneData failed.";
+                            _lastMaintenanceDurationMs = (DateTime.UtcNow - maintenanceStart).TotalMilliseconds;
+                            _lastTickErrorCode = errorCode;
+                            _lastTickErrorMessage = safeMessage;
                             result.Completed = false;
                             result.ErrorCode = errorCode;
                             result.Message = safeMessage;
@@ -578,6 +653,10 @@ public sealed class AgentStateMachine
                         await WriteDataPrunedEventAsync(command, pruneResult, cancellationToken);
 
                         ActualState = previousState;
+                        _lastMaintenanceDurationMs = (DateTime.UtcNow - maintenanceStart).TotalMilliseconds;
+                        _lastTickErrorCode = null;
+                        _lastTickErrorMessage = null;
+                        _lastTickSuccessUtc = DateTime.UtcNow;
                         await PersistAsync("PruneData completed", cancellationToken);
                         result.Completed = true;
                         result.ActualState = ActualState;
@@ -592,6 +671,9 @@ public sealed class AgentStateMachine
                             safeMessage = "PruneData failed.";
                         }
 
+                        _lastMaintenanceDurationMs = (DateTime.UtcNow - maintenanceStart).TotalMilliseconds;
+                        _lastTickErrorCode = errorCode;
+                        _lastTickErrorMessage = safeMessage;
                         result.Completed = false;
                         result.ErrorCode = errorCode;
                         result.Message = safeMessage;
@@ -619,6 +701,8 @@ public sealed class AgentStateMachine
                 await WriteCommandAcceptedEventAsync(command, cancellationToken);
 
                 var prevStateClear = ActualState;
+                var clearHistoryStart = DateTime.UtcNow;
+                _lastTickPhase = "ClearHistory";
                 try
                 {
                     ActualState = AgentActualState.Maintenance;
@@ -633,6 +717,9 @@ public sealed class AgentStateMachine
 
                     if (_dataMaintenanceService is null)
                     {
+                        _lastMaintenanceDurationMs = (DateTime.UtcNow - clearHistoryStart).TotalMilliseconds;
+                        _lastTickErrorCode = "ClearHistoryUnavailable";
+                        _lastTickErrorMessage = "ClearHistory service is not available.";
                         result.Completed = false;
                         result.ErrorCode = "ClearHistoryUnavailable";
                         result.Message = "ClearHistory service is not available.";
@@ -647,8 +734,11 @@ public sealed class AgentStateMachine
 
                     if (!clearResult.SqliteCleared)
                     {
+                        _lastMaintenanceDurationMs = (DateTime.UtcNow - clearHistoryStart).TotalMilliseconds;
                         var errorCode = clearResult.ErrorCode ?? "ClearHistoryFailed";
                         var safeMessage = clearResult.SafeMessage ?? "ClearHistory failed.";
+                        _lastTickErrorCode = errorCode;
+                        _lastTickErrorMessage = safeMessage;
                         result.Completed = false;
                         result.ErrorCode = errorCode;
                         result.Message = safeMessage;
@@ -671,6 +761,10 @@ public sealed class AgentStateMachine
                     // JSONL partial failures are recorded in the payload but don't block completion.
                     await WriteHistoryClearedEventAsync(command, clearResult, historyClearedFinalState, cancellationToken);
 
+                    _lastMaintenanceDurationMs = (DateTime.UtcNow - clearHistoryStart).TotalMilliseconds;
+                    _lastTickErrorCode = null;
+                    _lastTickErrorMessage = null;
+                    _lastTickSuccessUtc = DateTime.UtcNow;
                     await PersistAsync("ClearHistory completed", cancellationToken);
                     result.Completed = true;
                     result.ActualState = ActualState;
@@ -687,6 +781,9 @@ public sealed class AgentStateMachine
                         safeMessage = "ClearHistory failed.";
                     }
 
+                    _lastMaintenanceDurationMs = (DateTime.UtcNow - clearHistoryStart).TotalMilliseconds;
+                    _lastTickErrorCode = errorCode;
+                    _lastTickErrorMessage = safeMessage;
                     result.Completed = false;
                     result.ErrorCode = errorCode;
                     result.Message = safeMessage;
@@ -748,7 +845,15 @@ public sealed class AgentStateMachine
             LastEventWriteErrorUtc = _eventWriter?.LastEventWriteErrorUtc,
             LastJournalWriteErrorUtc = _eventWriter?.LastJournalWriteErrorUtc,
             Message = message,
-            ErrorCode = errorCode ?? (ActualState == AgentActualState.Error ? "AgentError" : null)
+            ErrorCode = errorCode ?? (ActualState == AgentActualState.Error ? "AgentError" : null),
+            LastTickPhase = _lastTickPhase,
+            LastTickDurationMs = _lastTickDurationMs > 0 ? _lastTickDurationMs : null,
+            LastCaptureDurationMs = _lastCaptureDurationMs > 0 ? _lastCaptureDurationMs : null,
+            LastPersistDurationMs = _lastPersistDurationMs > 0 ? _lastPersistDurationMs : null,
+            LastMaintenanceDurationMs = _lastMaintenanceDurationMs > 0 ? _lastMaintenanceDurationMs : null,
+            LastErrorCode = _lastTickErrorCode,
+            LastErrorMessage = _lastTickErrorMessage,
+            LastSuccessUtc = _lastTickSuccessUtc
         };
     }
 

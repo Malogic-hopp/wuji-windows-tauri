@@ -4025,6 +4025,14 @@ public sealed class DataFlowTests
         var runtimeJson = await File.ReadAllTextAsync(paths.RuntimeStatePath);
         Assert.Contains("\"state\": \"Running\"", runtimeJson, StringComparison.Ordinal);
         Assert.DoesNotContain("\"state\": \"Maintenance\"", runtimeJson, StringComparison.Ordinal);
+
+        var health = await new AgentHealthStateStore().ReadAsync(paths.HealthStatePath);
+        Assert.NotNull(health);
+        Assert.Equal("PruneData", health.LastTickPhase);
+        Assert.NotNull(health.LastMaintenanceDurationMs);
+        Assert.True(health.LastMaintenanceDurationMs >= 0);
+        Assert.Null(health.LastErrorCode);
+        Assert.Null(health.LastErrorMessage);
     }
 
     [Fact]
@@ -4069,6 +4077,14 @@ public sealed class DataFlowTests
 
         var events = await ReadEventsAsync(paths.DatabasePath);
         Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "clear-history");
+
+        var health = await new AgentHealthStateStore().ReadAsync(paths.HealthStatePath);
+        Assert.NotNull(health);
+        Assert.Equal("ClearHistory", health.LastTickPhase);
+        Assert.NotNull(health.LastMaintenanceDurationMs);
+        Assert.True(health.LastMaintenanceDurationMs >= 0);
+        Assert.Null(health.LastErrorCode);
+        Assert.Null(health.LastErrorMessage);
     }
 
     [Fact]

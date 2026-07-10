@@ -76,17 +76,20 @@ public class Win32ForegroundSampleProvider : IForegroundSampleProvider
         };
     }
 
+    private const int MaxWindowTitleChars = 512;
+
     private static string? GetWindowTitle(IntPtr windowHandle)
     {
-        var length = NativeMethods.GetWindowTextLength(windowHandle);
-        if (length <= 0)
-        {
-            return null;
-        }
-
-        var builder = new StringBuilder(length + 1);
-        var copied = NativeMethods.GetWindowText(windowHandle, builder, builder.Capacity);
-        return copied <= 0 ? null : builder.ToString();
+        var builder = new StringBuilder(MaxWindowTitleChars);
+        var result = NativeMethods.SendMessageTimeout(
+            windowHandle,
+            NativeMethods.WM_GETTEXT,
+            (IntPtr)MaxWindowTitleChars,
+            builder,
+            NativeMethods.SMTO_ABORTIFHUNG,
+            (uint)NativeMethods.DefaultGetWindowTextTimeoutMs,
+            out _);
+        return result != IntPtr.Zero ? builder.ToString() : null;
     }
 
     private static string? TryGetExecutablePath(Process process)
