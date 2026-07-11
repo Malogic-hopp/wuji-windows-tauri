@@ -8,6 +8,7 @@ using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
+using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Infrastructure.Control;
 using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
@@ -27,8 +28,9 @@ public partial class App : Application
         base.OnStartup(e);
 
         _startupLaunchOptions = StartupLaunchOptions.Parse(e.Args);
+        var runtimeChannel = RuntimeChannel.Parse(_startupLaunchOptions.ChannelName);
 
-        var paths = new WindowsAgentPaths();
+        var paths = new WindowsAgentPaths(channelName: runtimeChannel.Name);
         paths.EnsureDirectories();
         var runtimeStateStore = new RuntimeStateStore();
         var healthStateStore = new AgentHealthStateStore();
@@ -53,7 +55,7 @@ public partial class App : Application
 
         try
         {
-            var pipeName = new AgentPipeName(userSid);
+            var pipeName = new AgentPipeName(userSid, runtimeChannel.Name);
             ipcStatusService.Initialize(pipeName);
             var ipcOptions = new AgentIpcClientOptions();
             ipcClient = new NamedPipeAgentControlClient(pipeName, ipcOptions);
@@ -73,7 +75,8 @@ public partial class App : Application
             controlFileStore,
             NullLogger<AgentProcessService>.Instance,
             ipcClient,
-            showAgentConsole: _startupLaunchOptions.ShowAgentConsole);
+            showAgentConsole: _startupLaunchOptions.ShowAgentConsole,
+            channelName: runtimeChannel.Name);
         var controlService = new AgentControlService(paths, controlFileStore, statusService, ipcClient, ipcStatusService);
         var overviewDataService = new OverviewDataService(paths);
         var diagnosticsDataService = new DiagnosticsDataService(paths);
@@ -93,8 +96,11 @@ public partial class App : Application
 
         var refreshService = new RefreshService(statusService, processService);
         var startupRegistry = new RegistryStartupRegistry();
-        var startupCommandBuilder = new StartupCommandBuilder();
-        var startupRegistrationService = new StartupRegistrationService(startupRegistry, startupCommandBuilder);
+        var startupCommandBuilder = new StartupCommandBuilder(channelName: runtimeChannel.Name);
+        var startupRegistrationService = new StartupRegistrationService(
+            startupRegistry,
+            startupCommandBuilder,
+            runtimeChannel.StartupRegistryValueName);
         var settingsViewModel = new SettingsViewModel(settingsService, statusService, controlService, diagnosticsDataService, paths);
         settingsViewModel.StartupRegistrationService = startupRegistrationService;
         var viewModel = new MainWindowViewModel(
@@ -119,6 +125,10 @@ public partial class App : Application
         viewModel.StartupLaunchOptions = _startupLaunchOptions;
 
         var window = new MainWindow(viewModel);
+        if (!runtimeChannel.IsDefault)
+        {
+            window.Title = $"{runtimeChannel.ProductDisplayName} - {window.Title}";
+        }
         MainWindow = window;
 
         // Tray icon setup — create before window.Closed so it can be disposed there

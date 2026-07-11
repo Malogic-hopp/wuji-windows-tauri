@@ -39,7 +39,7 @@ public sealed class AgentCommandServerHostedService : BackgroundService
         AgentPipeName pipeName;
         try
         {
-            pipeName = new AgentPipeName(userSid);
+            pipeName = new AgentPipeName(userSid, _paths.ChannelName);
         }
         catch (Exception ex)
         {

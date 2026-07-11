@@ -14,9 +14,13 @@ using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Infrastructure.Settings;
 using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Core.Options;
+using QuantifiedSelf.Windows.Core.Runtime;
 
+var runtimeChannel = RuntimeChannel.Parse(ReadChannelArg(args));
 var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
-var mutexName = $@"Local\QuantifiedSelf.Windows.Agent.{userSid}";
+var mutexName = runtimeChannel.IsDefault
+    ? $@"Local\QuantifiedSelf.Windows.Agent.{userSid}"
+    : $@"Local\QuantifiedSelf.Windows.Agent.{runtimeChannel.Name}.{userSid}";
 using var singleInstanceMutex = new Mutex(false, mutexName);
 bool mutexAcquired;
 try
@@ -30,12 +34,12 @@ catch (AbandonedMutexException)
 
 if (!mutexAcquired)
 {
-    Console.Error.WriteLine("Agent 已在运行：当前用户下已有一个 QuantifiedSelf.Windows.Agent 实例。");
+    Console.Error.WriteLine($"Agent 已在运行：当前用户下已有一个 QuantifiedSelf.Windows.Agent ({runtimeChannel.Name}) 实例。");
     return;
 }
 
 var builder = Host.CreateApplicationBuilder(args);
-builder.Services.AddSingleton(new WindowsAgentPaths());
+builder.Services.AddSingleton(new WindowsAgentPaths(channelName: runtimeChannel.Name));
 builder.Services.AddSingleton<RuntimeStateStore>();
 builder.Services.AddSingleton<AgentHealthStateStore>();
 builder.Services.AddSingleton<AgentControlFileStore>();
@@ -79,3 +83,24 @@ builder.Services.AddHostedService<Worker>();
 
 var host = builder.Build();
 host.Run();
+
+static string? ReadChannelArg(string[] args)
+{
+    for (var i = 0; i < args.Length; i++)
+    {
+        var arg = args[i];
+        var normalized = arg.TrimStart('-').ToLowerInvariant();
+
+        if (normalized.StartsWith("channel=", StringComparison.OrdinalIgnoreCase))
+        {
+            return arg[(arg.IndexOf('=') + 1)..];
+        }
+
+        if (normalized == "channel" && i + 1 < args.Length)
+        {
+            return args[i + 1];
+        }
+    }
+
+    return Environment.GetEnvironmentVariable("WUJI_RUNTIME_CHANNEL");
+}
