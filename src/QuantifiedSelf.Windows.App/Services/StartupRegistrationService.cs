@@ -10,13 +10,16 @@ public sealed class StartupRegistrationService : IStartupRegistrationService
 
     private readonly IStartupRegistry _registry;
     private readonly StartupCommandBuilder _commandBuilder;
+    private readonly string _valueName;
 
     public StartupRegistrationService(
         IStartupRegistry registry,
-        StartupCommandBuilder commandBuilder)
+        StartupCommandBuilder commandBuilder,
+        string? valueName = null)
     {
         _registry = registry ?? throw new ArgumentNullException(nameof(registry));
         _commandBuilder = commandBuilder ?? throw new ArgumentNullException(nameof(commandBuilder));
+        _valueName = string.IsNullOrWhiteSpace(valueName) ? ValueName : valueName;
     }
 
     /// <summary>
@@ -33,7 +36,7 @@ public sealed class StartupRegistrationService : IStartupRegistrationService
             if (command is null)
                 return Task.FromResult(StartupRegistrationStatus.Unsupported());
 
-            _registry.SetValue(ValueName, command);
+            _registry.SetValue(_valueName, command);
             return Task.FromResult(StartupRegistrationStatus.Enabled());
         }
         catch (Exception)
@@ -52,7 +55,7 @@ public sealed class StartupRegistrationService : IStartupRegistrationService
     {
         try
         {
-            _registry.DeleteValue(ValueName);
+            _registry.DeleteValue(_valueName);
             return Task.FromResult(StartupRegistrationStatus.Disabled());
         }
         catch (Exception)
@@ -103,6 +106,6 @@ public sealed class StartupRegistrationService : IStartupRegistrationService
 
     private string? ReadValueSafe()
     {
-        return _registry.ReadValue(ValueName);
+        return _registry.ReadValue(_valueName);
     }
 }

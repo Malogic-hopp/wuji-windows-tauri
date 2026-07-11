@@ -21,6 +21,7 @@ public sealed class AgentProcessService
     private readonly IAgentIpcClient? _ipcClient;
     private readonly ILogger<AgentProcessService> _logger;
     private readonly bool _showAgentConsole;
+    private readonly RuntimeChannel _runtimeChannel;
 
     internal int StopPollMaxAttempts { get; set; } = 30;
     internal int StopPollDelayMilliseconds { get; set; } = 500;
@@ -31,7 +32,8 @@ public sealed class AgentProcessService
         AgentControlFileStore controlFileStore,
         ILogger<AgentProcessService> logger,
         IAgentIpcClient? ipcClient = null,
-        bool showAgentConsole = false)
+        bool showAgentConsole = false,
+        string? channelName = null)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
@@ -39,6 +41,7 @@ public sealed class AgentProcessService
         _ipcClient = ipcClient;
         _logger = logger;
         _showAgentConsole = showAgentConsole;
+        _runtimeChannel = RuntimeChannel.Parse(channelName ?? paths.ChannelName);
     }
 
     public async Task<AgentProcessInfo> StartAgentAsync(CancellationToken cancellationToken = default)
@@ -232,9 +235,20 @@ public sealed class AgentProcessService
             return null;
         }
 
+        var expectedExecutable = ResolveAgentExecutablePath();
         try
         {
-            using var process = processMatches[0];
+            var matchingProcess = string.IsNullOrWhiteSpace(expectedExecutable)
+                ? processMatches[0]
+                : processMatches.FirstOrDefault(process =>
+                    ProcessMatchesExpectedExecutable(process, expectedExecutable));
+
+            if (matchingProcess is null)
+            {
+                return null;
+            }
+
+            using var process = matchingProcess;
             return new AgentProcessInfo
             {
                 ProcessId = process.Id,
@@ -248,6 +262,27 @@ public sealed class AgentProcessService
         catch
         {
             return null;
+        }
+    }
+
+    private static bool ProcessMatchesExpectedExecutable(Process process, string? expectedExecutable)
+    {
+        if (string.IsNullOrWhiteSpace(expectedExecutable))
+        {
+            return true;
+        }
+
+        try
+        {
+            var processPath = process.MainModule?.FileName;
+            return string.Equals(
+                Path.GetFullPath(processPath ?? string.Empty),
+                Path.GetFullPath(expectedExecutable),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -360,26 +395,42 @@ public sealed class AgentProcessService
             var startInfo = new ProcessStartInfo
             {
                 FileName = "dotnet",
-                Arguments = $"\"{executable}\"",
+                Arguments = JoinArguments($"\"{executable}\"", _runtimeChannel.AgentLaunchArguments),
                 WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory,
                 UseShellExecute = false
             };
 
             ApplyConsoleWindowPolicy(startInfo);
             ApplySanitizedEnvironment(startInfo);
+            ApplyRuntimeChannelEnvironment(startInfo);
             return startInfo;
         }
 
         var executableStartInfo = new ProcessStartInfo
         {
             FileName = executable,
+            Arguments = _runtimeChannel.AgentLaunchArguments ?? string.Empty,
             WorkingDirectory = Path.GetDirectoryName(executable) ?? AppContext.BaseDirectory,
             UseShellExecute = false
         };
 
         ApplyConsoleWindowPolicy(executableStartInfo);
         ApplySanitizedEnvironment(executableStartInfo);
+        ApplyRuntimeChannelEnvironment(executableStartInfo);
         return executableStartInfo;
+    }
+
+    private void ApplyRuntimeChannelEnvironment(ProcessStartInfo startInfo)
+    {
+        if (!_runtimeChannel.IsDefault)
+        {
+            startInfo.Environment["WUJI_RUNTIME_CHANNEL"] = _runtimeChannel.Name;
+        }
+    }
+
+    private static string JoinArguments(params string?[] values)
+    {
+        return string.Join(" ", values.Where(value => !string.IsNullOrWhiteSpace(value)));
     }
 
     internal static void ApplySanitizedEnvironment(

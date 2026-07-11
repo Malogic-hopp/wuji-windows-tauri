@@ -1,4 +1,5 @@
 using System.IO;
+using QuantifiedSelf.Windows.Core.Runtime;
 
 namespace QuantifiedSelf.Windows.App.Services;
 
@@ -9,21 +10,23 @@ namespace QuantifiedSelf.Windows.App.Services;
 public sealed class StartupCommandBuilder
 {
     private readonly Func<string?> _getProcessPath;
+    private readonly RuntimeChannel _runtimeChannel;
 
     public static readonly string[] RequiredArgs = ["--from-autostart", "--start-hidden"];
 
     /// <summary>
     /// Production constructor using Environment.ProcessPath.
     /// </summary>
-    public StartupCommandBuilder()
-        : this(() => Environment.ProcessPath) { }
+    public StartupCommandBuilder(string? channelName = null)
+        : this(() => Environment.ProcessPath, channelName) { }
 
     /// <summary>
     /// Test constructor with injectable process path provider.
     /// </summary>
-    public StartupCommandBuilder(Func<string?> getProcessPath)
+    public StartupCommandBuilder(Func<string?> getProcessPath, string? channelName = null)
     {
         _getProcessPath = getProcessPath ?? throw new ArgumentNullException(nameof(getProcessPath));
+        _runtimeChannel = RuntimeChannel.Parse(channelName);
     }
 
     /// <summary>
@@ -45,7 +48,10 @@ public sealed class StartupCommandBuilder
         if (!IsValidExecutablePath(path))
             return null;
 
-        return $"\"{path}\" --from-autostart --start-hidden";
+        var channelArgs = _runtimeChannel.AgentLaunchArguments;
+        return string.IsNullOrWhiteSpace(channelArgs)
+            ? $"\"{path}\" --from-autostart --start-hidden"
+            : $"\"{path}\" --from-autostart --start-hidden {channelArgs}";
     }
 
     /// <summary>
@@ -121,7 +127,41 @@ public sealed class StartupCommandBuilder
                 return false;
         }
 
+        var registeredChannel = ExtractChannel(argsTokens);
+        if (!_runtimeChannel.IsDefault)
+        {
+            if (!string.Equals(registeredChannel, _runtimeChannel.Name, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+        else if (!string.Equals(registeredChannel, RuntimeChannel.DefaultName, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
         return true;
+    }
+
+    private static string ExtractChannel(string[] argsTokens)
+    {
+        for (var i = 0; i < argsTokens.Length; i++)
+        {
+            var token = argsTokens[i];
+            if (token.StartsWith("--channel=", StringComparison.OrdinalIgnoreCase))
+            {
+                var value = token[("--channel=".Length)..];
+                return RuntimeChannel.Normalize(value);
+            }
+
+            if (string.Equals(token, "--channel", StringComparison.OrdinalIgnoreCase)
+                && i + 1 < argsTokens.Length)
+            {
+                return RuntimeChannel.Normalize(argsTokens[i + 1]);
+            }
+        }
+
+        return RuntimeChannel.DefaultName;
     }
 
     /// <summary>
