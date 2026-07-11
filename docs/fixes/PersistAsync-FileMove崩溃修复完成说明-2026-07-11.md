@@ -49,12 +49,12 @@ System.UnauthorizedAccessException: Access to the path is denied.
 
 | 层 | 文件 | 修复 |
 |---|---|---|
-| 1 读端 | [RuntimeStateStore.cs](../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/RuntimeStateStore.cs) | `ReadAsync`: `File.OpenRead` → `FileStream(..., FileShare.ReadWrite\|FileShare.Delete)` |
-| 1 读端 | [AgentHealthStateStore.cs](../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/AgentHealthStateStore.cs) | 同上 |
-| 2 写端 | [RuntimeStateStore.cs](../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/RuntimeStateStore.cs) | `WriteAsync`: `File.Move(overwrite:true)` → `MoveWithRetryAsync`（`File.Delete` + `File.Move`，3 次重试，间隔 50ms） |
-| 2 写端 | [AgentHealthStateStore.cs](../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/AgentHealthStateStore.cs) | 同上 |
-| 3 调用端 | [AgentStateMachine.cs](../src/QuantifiedSelf.Windows.Agent/State/AgentStateMachine.cs) | `PersistAsync` 内 `WriteAsync` 调用加 try/catch（放行 `OperationCanceledException`），异常记日志不传播 |
-| 兜底 | [Worker.cs](../src/QuantifiedSelf.Windows.Agent/Worker.cs) | `TickAsync` 调用加 try/catch（放行 `OperationCanceledException`），未处理异常只记日志不杀进程 |
+| 1 读端 | [RuntimeStateStore.cs](../../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/RuntimeStateStore.cs) | `ReadAsync`: `File.OpenRead` → `FileStream(..., FileShare.ReadWrite\|FileShare.Delete)` |
+| 1 读端 | [AgentHealthStateStore.cs](../../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/AgentHealthStateStore.cs) | 同上 |
+| 2 写端 | [RuntimeStateStore.cs](../../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/RuntimeStateStore.cs) | `WriteAsync`: `File.Move(overwrite:true)` → `MoveWithRetryAsync`（`File.Delete` + `File.Move`，3 次重试，间隔 50ms） |
+| 2 写端 | [AgentHealthStateStore.cs](../../src/QuantifiedSelf.Windows.Infrastructure/RuntimeState/AgentHealthStateStore.cs) | 同上 |
+| 3 调用端 | [AgentStateMachine.cs](../../src/QuantifiedSelf.Windows.Agent/State/AgentStateMachine.cs) | `PersistAsync` 内 `WriteAsync` 调用加 try/catch（放行 `OperationCanceledException`），异常记日志不传播 |
+| 兜底 | [Worker.cs](../../src/QuantifiedSelf.Windows.Agent/Worker.cs) | `TickAsync` 调用加 try/catch（放行 `OperationCanceledException`），未处理异常只记日志不杀进程 |
 
 ### 关键代码变化
 
