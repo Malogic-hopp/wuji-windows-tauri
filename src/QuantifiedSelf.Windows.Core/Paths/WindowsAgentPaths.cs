@@ -1,7 +1,13 @@
+using QuantifiedSelf.Windows.Core.Runtime;
+
 namespace QuantifiedSelf.Windows.Core.Paths;
 
 public sealed class WindowsAgentPaths
 {
+    private readonly RuntimeChannel _channel;
+
+    public string ChannelName => _channel.Name;
+
     public string Root { get; }
 
     public string ConfigDir => Path.Combine(Root, "config");
@@ -22,18 +28,20 @@ public sealed class WindowsAgentPaths
 
     public string DatabasePath => Path.Combine(DataDir, "quantified_self_windows.db");
 
-    public WindowsAgentPaths(string? root = null)
+    public WindowsAgentPaths(string? root = null, string? channelName = null)
     {
+        _channel = RuntimeChannel.Parse(channelName);
+
         Root = root
             ?? Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_ROOT")
 #if DEBUG
-            ?? (Directory.Exists(@"D:\WUJI\WindowsAgent")
+            ?? (_channel.IsDefault && Directory.Exists(@"D:\WUJI\WindowsAgent")
                 ? @"D:\WUJI\WindowsAgent"
                 : null)
 #endif
             ?? Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "WUJI",
+                _channel.DataRootProductFolder,
                 "WindowsAgent");
     }
 

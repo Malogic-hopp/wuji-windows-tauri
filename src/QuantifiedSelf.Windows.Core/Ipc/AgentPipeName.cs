@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 
+using QuantifiedSelf.Windows.Core.Runtime;
+
 namespace QuantifiedSelf.Windows.Core.Ipc;
 
 public sealed class AgentPipeName
@@ -11,16 +13,20 @@ public sealed class AgentPipeName
     public string DisplayPipeName { get; }
     public string SidHash { get; }
 
-    public AgentPipeName(string userSid)
+    public AgentPipeName(string userSid, string? channelName = null)
     {
         if (string.IsNullOrWhiteSpace(userSid))
         {
             throw new ArgumentException("User SID must not be empty.", nameof(userSid));
         }
 
+        var channel = RuntimeChannel.Parse(channelName);
         SidHash = ComputeSha256Hex(userSid);
-        FullPipeName = $"{PipePrefix}.{SidHash}";
-        DisplayPipeName = $"{PipePrefix}.{SidHash[..Math.Min(12, SidHash.Length)]}";
+        var channelPart = channel.PipeQualifier is null
+            ? string.Empty
+            : $".{channel.PipeQualifier}";
+        FullPipeName = $"{PipePrefix}{channelPart}.{SidHash}";
+        DisplayPipeName = $"{PipePrefix}{channelPart}.{SidHash[..Math.Min(12, SidHash.Length)]}";
     }
 
     private static string ComputeSha256Hex(string input)
