@@ -12604,6 +12604,86 @@ public sealed class DataFlowTests
         return Convert.ToInt64(result);
     }
 
+    [Fact]
+    public async Task RuntimeStateStore_WriteCanReplaceFile_WhileReaderHoldsOpenHandle()
+    {
+        // Arrange: write initial state, then open a read handle with permissive sharing
+        // to simulate the App's new ReadAsync behavior.
+        using var workspace = new TempWorkspace();
+        var store = new RuntimeStateStore();
+        var path = Path.Combine(workspace.Root, "runtime_state.json");
+
+        var initialState = new RuntimeState
+        {
+            ProcessId = 12345,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow.AddSeconds(-30)
+        };
+        await store.WriteAsync(path, initialState);
+
+        // Open a read handle that allows concurrent writes and deletes (same as fixed ReadAsync)
+        await using var readStream = new FileStream(
+            path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+
+        // Act: write updated state while the read handle is still open
+        var updatedState = new RuntimeState
+        {
+            ProcessId = 12345,
+            State = AgentActualState.Running,
+            LastHeartbeatUtc = DateTime.UtcNow
+        };
+        await store.WriteAsync(path, updatedState);
+
+        // Assert: the file was replaced successfully
+        readStream.Close();
+
+        var readBack = await store.ReadAsync(path);
+        Assert.NotNull(readBack);
+        // The new content should reflect the update, not the initial write
+        Assert.Equal(updatedState.LastHeartbeatUtc, readBack!.LastHeartbeatUtc);
+    }
+
+    [Fact]
+    public async Task AgentHealthStateStore_WriteCanReplaceFile_WhileReaderHoldsOpenHandle()
+    {
+        // Arrange: write initial health state, then open a read handle with permissive sharing
+        using var workspace = new TempWorkspace();
+        var store = new AgentHealthStateStore();
+        var path = Path.Combine(workspace.Root, "health_state.json");
+
+        var initialState = new AgentHealthState
+        {
+            ActualState = AgentActualState.Running,
+            IsHealthy = true,
+            LastHeartbeatUtc = DateTime.UtcNow.AddSeconds(-30),
+            Message = "Initial"
+        };
+        await store.WriteAsync(path, initialState);
+
+        // Open a read handle that allows concurrent writes and deletes (same as fixed ReadAsync)
+        await using var readStream = new FileStream(
+            path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+
+        // Act: write updated health state while the read handle is still open
+        var updatedState = new AgentHealthState
+        {
+            ActualState = AgentActualState.Running,
+            IsHealthy = true,
+            LastHeartbeatUtc = DateTime.UtcNow,
+            Message = "Updated"
+        };
+        await store.WriteAsync(path, updatedState);
+
+        // Assert: the file was replaced successfully
+        readStream.Close();
+
+        var readBack = await store.ReadAsync(path);
+        Assert.NotNull(readBack);
+        Assert.Equal("Updated", readBack!.Message);
+    }
+
     private sealed class TempWorkspace : IDisposable
     {
         public TempWorkspace()

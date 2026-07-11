@@ -26,7 +26,7 @@ public sealed class AgentHealthStateStore
             await JsonSerializer.SerializeAsync(stream, state, JsonSerializationOptions.Default, cancellationToken);
         }
 
-        File.Move(tempPath, path, overwrite: true);
+        await MoveWithRetryAsync(tempPath, path);
     }
 
     public async Task<AgentHealthState?> ReadAsync(
@@ -40,10 +40,46 @@ public sealed class AgentHealthStateStore
             return null;
         }
 
-        await using var stream = File.OpenRead(path);
+        await using var stream = new FileStream(
+            path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
         return await JsonSerializer.DeserializeAsync<AgentHealthState>(
             stream,
             JsonSerializationOptions.Default,
             cancellationToken);
+    }
+
+    private static async Task MoveWithRetryAsync(string tempPath, string targetPath)
+    {
+        const int maxRetries = 3;
+        const int delayMs = 50;
+
+        for (var attempt = 0; attempt < maxRetries; attempt++)
+        {
+            try
+            {
+                // Use Delete + Move instead of Move(overwrite: true).
+                // MoveFileEx with MOVEFILE_REPLACE_EXISTING can fail even when
+                // open read handles grant FileShare.Delete. File.Delete + Move
+                // handles this correctly because DeleteFileW removes the
+                // directory entry while the open handle keeps the old file data
+                // alive, allowing a new file to be created at the same path.
+                File.Delete(targetPath);
+                File.Move(tempPath, targetPath);
+                return;
+            }
+            catch (IOException) when (attempt < maxRetries - 1)
+            {
+                await Task.Delay(delayMs);
+            }
+            catch (UnauthorizedAccessException) when (attempt < maxRetries - 1)
+            {
+                await Task.Delay(delayMs);
+            }
+        }
+
+        // Last attempt — let it throw if it still fails
+        File.Delete(targetPath);
+        File.Move(tempPath, targetPath);
     }
 }

@@ -1395,8 +1395,23 @@ public sealed class AgentStateMachine
         var runtimeState = CreateRuntimeSnapshot();
         var healthState = CreateHealthSnapshot(DiagnosticMessageSanitizer.CreateSafeText(message, 240), errorCode);
 
-        await _runtimeStateStore.WriteAsync(_paths.RuntimeStatePath, runtimeState, cancellationToken);
-        await _healthStateStore.WriteAsync(_paths.HealthStatePath, healthState, cancellationToken);
+        try
+        {
+            await _runtimeStateStore.WriteAsync(_paths.RuntimeStatePath, runtimeState, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "写入 runtime_state.json 失败：{Path}", _paths.RuntimeStatePath);
+        }
+
+        try
+        {
+            await _healthStateStore.WriteAsync(_paths.HealthStatePath, healthState, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "写入 health_state.json 失败：{Path}", _paths.HealthStatePath);
+        }
 
         LogPersistedState(message, errorCode);
     }

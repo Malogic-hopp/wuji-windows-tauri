@@ -30,12 +30,19 @@ public sealed class Worker : BackgroundService
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            var keepRunning = await _stateMachine.TickAsync(stoppingToken);
-            if (!keepRunning)
+            try
             {
-                _logger.LogInformation("Agent state machine stopped; shutting down host process.");
-                _lifetime.StopApplication();
-                return;
+                var keepRunning = await _stateMachine.TickAsync(stoppingToken);
+                if (!keepRunning)
+                {
+                    _logger.LogInformation("Agent state machine stopped; shutting down host process.");
+                    _lifetime.StopApplication();
+                    return;
+                }
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "TickAsync 未处理异常，Agent 跳过本次 tick 继续运行");
             }
         }
     }
