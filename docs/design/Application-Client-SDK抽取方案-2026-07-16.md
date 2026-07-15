@@ -1,7 +1,7 @@
 # WUJI Application / Client SDK 抽取方案
 
 日期：2026-07-16  
-状态：阶段 0～4 已完成，阶段 5～8 待实施
+状态：阶段 0～5 已完成，阶段 6～8 待实施
 适用范围：`QuantifiedSelf.Windows.Core`、`Infrastructure`、`Agent`、`App`
 
 ## 1. 结论与目标
@@ -503,6 +503,8 @@ startup.unregister
 退出条件：IPC 正常、connect timeout、request timeout、Agent 未运行、断连 fallback、重复请求、stop 后退出均通过回归测试。
 
 ### 阶段 5：抽取设置和登录自启
+
+实施状态：已完成（2026-07-16），详见 `docs/devlog/Application-Client-SDK抽取阶段5完成说明-2026-07-16.md`。
 
 任务：
 
