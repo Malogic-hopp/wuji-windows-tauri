@@ -1,4 +1,4 @@
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.Client.Startup;
 
 /// <summary>
 /// Abstraction over the Windows Run key for testability.

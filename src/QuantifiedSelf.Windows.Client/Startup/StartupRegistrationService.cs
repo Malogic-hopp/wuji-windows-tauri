@@ -1,4 +1,4 @@
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.Client.Startup;
 
 /// <summary>
 /// Manages WUJI startup registration through the HKCU Run Key.

@@ -1,6 +1,6 @@
 using Microsoft.Win32;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.Client.Startup;
 
 /// <summary>
 /// Production IStartupRegistry implementation that reads/writes the current user's Run key.

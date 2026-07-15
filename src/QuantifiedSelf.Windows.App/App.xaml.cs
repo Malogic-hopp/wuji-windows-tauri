@@ -6,9 +6,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
+using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Client.Agent;
+using QuantifiedSelf.Windows.Client.Settings;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -42,11 +45,14 @@ public partial class App : Application
         var controlFileStore = new AgentControlFileStore();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
+        var settingsStore = new WindowsSettingsStoreAdapter(
+            paths, appSettingsStore, agentOptionsStore);
+        var settingsService = new SettingsService(settingsStore, settingsStore);
 
         AppSettings appSettings;
         try
         {
-            appSettings = await appSettingsStore.ReadAsync(System.IO.Path.Combine(paths.ConfigDir, "app-settings.json")) ?? new AppSettings();
+            appSettings = await settingsService.ReadAppSettingsAsync();
         }
         catch
         {
@@ -75,7 +81,6 @@ public partial class App : Application
             ipcStatusService.RecordIpcFallback("IPC unavailable; using file fallback.");
         }
 
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
         var agentState = new FileAgentStateAdapter(
             paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore);
         var processController = new WindowsAgentProcessController(

@@ -1,4 +1,5 @@
 using QuantifiedSelf.Windows.Core.Events;
+using QuantifiedSelf.Windows.Client.Startup;
 
 namespace QuantifiedSelf.Windows.App.Services;
 

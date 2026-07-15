@@ -1,3 +1,5 @@
+using QuantifiedSelf.Windows.Client.Startup;
+
 namespace QuantifiedSelf.Windows.App.Services;
 
 /// <summary>

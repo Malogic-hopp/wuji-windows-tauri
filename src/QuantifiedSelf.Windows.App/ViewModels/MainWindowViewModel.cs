@@ -7,7 +7,9 @@ using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
@@ -42,7 +44,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SessionsViewModel _sessionsViewModel;
     private readonly AppsViewModel _appsViewModel;
     private readonly SettingsViewModel _settingsViewModel;
-    private readonly SettingsService _settingsService;
+    private readonly ISettingsService _settingsService;
     private readonly DashboardViewModel _dashboardViewModel;
     private readonly InsightsViewModel _insightsViewModel;
     private readonly TodayPageViewModel _todayPageViewModel;
@@ -111,7 +113,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SessionsViewModel sessionsViewModel,
         AppsViewModel appsViewModel,
         SettingsViewModel settingsViewModel,
-        SettingsService settingsService,
+        ISettingsService settingsService,
         DashboardViewModel dashboardViewModel,
         InsightsViewModel insightsViewModel,
         IAgentTransportHealthService? ipcStatusService = null,

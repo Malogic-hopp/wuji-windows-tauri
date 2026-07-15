@@ -1,6 +1,6 @@
 using QuantifiedSelf.Windows.Core.Runtime;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.Client.Startup;
 
 public enum LaunchMode
 {

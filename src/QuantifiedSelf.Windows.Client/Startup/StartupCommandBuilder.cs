@@ -1,7 +1,7 @@
 using System.IO;
 using QuantifiedSelf.Windows.Core.Runtime;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.Client.Startup;
 
 /// <summary>
 /// Builds and parses HKCU Run Key commands for WUJI startup registration.

@@ -8,7 +8,9 @@ using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Options;
@@ -101,7 +103,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _excludedTitlePatternsText = "(none)";
     private string _useMockCaptureText = "Disabled";
 
-    public SettingsViewModel(SettingsService settingsService, WindowsAgentPaths paths)
+    public SettingsViewModel(ISettingsService settingsService, WindowsAgentPaths paths)
         : this(
             settingsService.ReadAppSettingsAsync,
             settingsService.SaveAppSettingsAsync,
@@ -119,7 +121,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     public SettingsViewModel(
-        SettingsService settingsService,
+        ISettingsService settingsService,
         IAgentStatusService statusService,
         IAgentControlService controlService,
         IDiagnosticsDataService diagnosticsDataService,
