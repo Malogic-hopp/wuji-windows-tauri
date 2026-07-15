@@ -6,6 +6,10 @@
     <ProjectReference Include="..\QuantifiedSelf.Windows.Infrastructure\QuantifiedSelf.Windows.Infrastructure.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuantifiedSelf.Windows.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0-windows10.0.19041</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

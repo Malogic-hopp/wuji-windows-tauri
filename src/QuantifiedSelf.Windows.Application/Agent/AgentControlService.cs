@@ -1,32 +1,30 @@
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Ipc;
-using QuantifiedSelf.Windows.Core.Paths;
-using QuantifiedSelf.Windows.Infrastructure.Control;
-using QuantifiedSelf.Windows.Infrastructure.Ipc;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Agent;
 
-public sealed class AgentControlService
+public sealed class AgentControlService : IAgentControlService
 {
-    private readonly WindowsAgentPaths _paths;
-    private readonly AgentControlFileStore _controlFileStore;
-    private readonly AgentStatusService _statusService;
-    private readonly IAgentIpcClient? _ipcClient;
-    private readonly AgentIpcStatusService? _ipcStatusService;
+    private readonly IAgentControlFallback _controlFallback;
+    private readonly IAgentStatusService _statusService;
+    private readonly IAgentTransport? _transport;
+    private readonly AgentTransportHealthService? _transportHealth;
+    private readonly TimeProvider _timeProvider;
 
     public AgentControlService(
-        WindowsAgentPaths paths,
-        AgentControlFileStore controlFileStore,
-        AgentStatusService statusService,
-        IAgentIpcClient? ipcClient = null,
-        AgentIpcStatusService? ipcStatusService = null)
+        IAgentControlFallback controlFallback,
+        IAgentStatusService statusService,
+        IAgentTransport? transport = null,
+        AgentTransportHealthService? transportHealth = null,
+        TimeProvider? timeProvider = null)
     {
-        _paths = paths;
-        _controlFileStore = controlFileStore;
-        _statusService = statusService;
-        _ipcClient = ipcClient;
-        _ipcStatusService = ipcStatusService;
+        _controlFallback = controlFallback ?? throw new ArgumentNullException(nameof(controlFallback));
+        _statusService = statusService ?? throw new ArgumentNullException(nameof(statusService));
+        _transport = transport;
+        _transportHealth = transportHealth;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public Task<AgentCommandResult> RequestPauseAsync(CancellationToken cancellationToken = default)
@@ -58,7 +56,7 @@ public sealed class AgentControlService
 
     public async Task<AgentControlFileReadResult> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
     {
-        return await _controlFileStore.PeekAsync(_paths.AgentControlPath, cancellationToken);
+        return await _controlFallback.ReadCurrentCommandAsync(cancellationToken);
     }
 
     private async Task<AgentCommandResult> IssueCommandWithIpcAsync(
@@ -68,19 +66,19 @@ public sealed class AgentControlService
         CancellationToken cancellationToken)
     {
         // Try IPC first
-        if (_ipcClient is not null)
+        if (_transport is not null)
         {
             var requestId = $"ipc-{Guid.NewGuid():N}";
             var isMaintenance = commandType is AgentCommandType.PruneData or AgentCommandType.ClearHistory;
 
             try
             {
-                var ipcResult = await _ipcClient.SendAsync(new AgentIpcRequest
+                var ipcResult = await _transport.SendAsync(new AgentIpcRequest
                 {
                     Command = ipcCommand,
                     RequestId = requestId,
                     RequestedBy = "QuantifiedSelf.Windows.App",
-                    RequestedAtUtc = DateTime.UtcNow,
+                    RequestedAtUtc = _timeProvider.GetUtcNow().UtcDateTime,
                     DesiredState = desiredState,
                     WaitForCompletion = true,
                     TimeoutMilliseconds = isMaintenance ? 30000 : 5000
@@ -88,7 +86,7 @@ public sealed class AgentControlService
 
                 // IPC responded — map result directly, regardless of Completed
                 // (Completed=false means Agent processed but rejected, e.g. AlreadyInMaintenance)
-                _ipcStatusService?.RecordIpcSuccess();
+                _transportHealth?.RecordIpcSuccess();
                 return new AgentCommandResult
                 {
                     RequestId = ipcResult.RequestId,
@@ -102,7 +100,7 @@ public sealed class AgentControlService
             catch (TimeoutException)
             {
                 // Don't fallback with a different command — agent may have already acted
-                _ipcStatusService?.RecordIpcFallback("IPC request timed out.");
+                _transportHealth?.RecordIpcFallback("IPC request timed out.");
                 return new AgentCommandResult
                 {
                     RequestId = requestId,
@@ -127,7 +125,7 @@ public sealed class AgentControlService
             catch
             {
                 // IPC unavailable — fallback with same requestId for dedup
-                _ipcStatusService?.RecordIpcFallback("IPC unavailable; using file fallback.");
+                _transportHealth?.RecordIpcFallback("IPC unavailable; using file fallback.");
                 return await IssueCommandAsync(commandType, desiredState, cancellationToken, requestId);
             }
         }
@@ -171,7 +169,7 @@ public sealed class AgentControlService
             Reason = $"UI requested {commandType}"
         };
 
-        await _controlFileStore.WriteAsync(_paths.AgentControlPath, command, cancellationToken);
+        await _controlFallback.WriteControlCommandAsync(command, cancellationToken);
 
         var status = await _statusService.GetStatusAsync(cancellationToken);
         return new AgentCommandResult

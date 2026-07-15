@@ -4,6 +4,7 @@ using System.Threading;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
@@ -29,13 +30,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         "Diagnostics"
     ];
 
-    private readonly AgentProcessService _processService;
-    private readonly AgentControlService _controlService;
-    private readonly AgentStatusService _statusService;
+    private readonly IAgentProcessService _processService;
+    private readonly IAgentControlService _controlService;
+    private readonly IAgentStatusService _statusService;
     private readonly RefreshService? _refreshService;
     private readonly IOverviewDataService _overviewDataService;
     private readonly IDiagnosticsDataService _diagnosticsDataService;
-    private readonly AgentIpcStatusService? _ipcStatusService;
+    private readonly IAgentTransportHealthService? _ipcStatusService;
     private ITrayStateSink? _trayStateSink;
     private readonly SamplesViewModel _samplesViewModel;
     private readonly SessionsViewModel _sessionsViewModel;
@@ -101,9 +102,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private StartupLaunchOptions _startupLaunchOptions = StartupLaunchOptions.Parse([]);
 
     public MainWindowViewModel(
-        AgentProcessService processService,
-        AgentControlService controlService,
-        AgentStatusService statusService,
+        IAgentProcessService processService,
+        IAgentControlService controlService,
+        IAgentStatusService statusService,
         IOverviewDataService overviewDataService,
         IDiagnosticsDataService diagnosticsDataService,
         SamplesViewModel samplesViewModel,
@@ -113,7 +114,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SettingsService settingsService,
         DashboardViewModel dashboardViewModel,
         InsightsViewModel insightsViewModel,
-        AgentIpcStatusService? ipcStatusService = null,
+        IAgentTransportHealthService? ipcStatusService = null,
         RefreshService? refreshService = null,
         ITrayStateSink? trayStateSink = null,
         IRefreshScheduler? refreshScheduler = null,
@@ -857,14 +858,15 @@ public sealed partial class MainWindowViewModel : ObservableObject
         // IPC status — safe display, no FullPipeName/SID/paths/raw exceptions
         if (_ipcStatusService is not null)
         {
+            var transportHealth = _ipcStatusService.GetSnapshot();
             var statusText = _ipcStatusService.GetDisplayStatusText();
-            var pipe = _ipcStatusService.DisplayPipeName ?? "Current user pipe";
-            var success = _ipcStatusService.LastIpcSuccessUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
-            var error = _ipcStatusService.LastIpcError is not null
-                ? DiagnosticMessageSanitizer.CreateSafeText(_ipcStatusService.LastIpcError, 120)
+            var pipe = transportHealth.DisplayEndpointName ?? "Current user pipe";
+            var success = transportHealth.LastTransportSuccessUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+            var error = transportHealth.SafeError is not null
+                ? DiagnosticMessageSanitizer.CreateSafeText(transportHealth.SafeError, 120)
                 : "None";
-            var fallback = _ipcStatusService.LastFallbackUsedUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
-            var source = _ipcStatusService.LastCommandSource;
+            var fallback = transportHealth.LastFallbackUsedUtc?.ToString("yyyy-MM-dd HH:mm:ss") ?? "-";
+            var source = transportHealth.LastCommandSource.ToString();
 
             IpcStatusText = $"IPC: {statusText}  |  Pipe: {pipe}  |  Source: {source}  |  Last success: {success}  |  Last error: {error}  |  Last fallback: {fallback}";
         }
@@ -953,7 +955,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         if (_trayStateSink is not null)
         {
             var trayState = TrayMenuState.From(status, _commandAvailability,
-                _ipcStatusService?.LastCommandSource);
+                _ipcStatusService?.GetSnapshot().LastCommandSource.ToString());
             _trayStateSink.UpdateState(trayState);
         }
 

@@ -1,9 +1,10 @@
 using System.IO.Pipes;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
 using QuantifiedSelf.Windows.Core.Ipc;
 
 namespace QuantifiedSelf.Windows.Infrastructure.Ipc;
 
-public sealed class NamedPipeAgentControlClient : IAgentIpcClient
+public sealed class NamedPipeAgentControlClient : IAgentTransport
 {
     private readonly AgentPipeName _pipeName;
     private readonly AgentIpcClientOptions _options;

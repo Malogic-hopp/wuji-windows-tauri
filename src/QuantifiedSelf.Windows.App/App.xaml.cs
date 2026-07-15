@@ -3,9 +3,12 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
+using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -57,8 +60,8 @@ public partial class App : Application
 
         // IPC setup
         var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
-        IAgentIpcClient? ipcClient = null;
-        var ipcStatusService = new AgentIpcStatusService();
+        IAgentTransport? ipcClient = null;
+        var ipcStatusService = new AgentTransportHealthService();
 
         try
         {
@@ -73,18 +76,21 @@ public partial class App : Application
         }
 
         var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
-        var statusService = new AgentStatusService(
-            paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore,
-            ipcClient, ipcStatusService);
-        var processService = new AgentProcessService(
+        var agentState = new FileAgentStateAdapter(
+            paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore);
+        var processController = new WindowsAgentProcessController(
             paths,
             runtimeStateStore,
-            controlFileStore,
-            NullLogger<AgentProcessService>.Instance,
-            ipcClient,
+            NullLogger<WindowsAgentProcessController>.Instance,
             showAgentConsole: _startupLaunchOptions.ShowAgentConsole,
             channelName: runtimeChannel.Name);
-        var controlService = new AgentControlService(paths, controlFileStore, statusService, ipcClient, ipcStatusService);
+        var statusService = new AgentStatusService(
+            agentState, agentState, agentState, agentState, processController,
+            ipcClient, ipcStatusService);
+        var processService = new AgentProcessService(
+            processController, agentState, agentState, ipcClient);
+        var controlService = new AgentControlService(
+            agentState, statusService, ipcClient, ipcStatusService);
         var activityQueries = new SqliteActivityQueryAdapter(paths);
         var overviewDataService = new OverviewDataService(activityQueries, activityQueries);
         var diagnosticsDataService = new DiagnosticsDataService(activityQueries);

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\QuantifiedSelf.Windows.Application\QuantifiedSelf.Windows.Application.csproj" />
+    <ProjectReference Include="..\QuantifiedSelf.Windows.Client\QuantifiedSelf.Windows.Client.csproj" />
     <ProjectReference Include="..\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
     <ProjectReference Include="..\QuantifiedSelf.Windows.Infrastructure\QuantifiedSelf.Windows.Infrastructure.csproj" />
     <ProjectReference Include="..\QuantifiedSelf.Windows.Agent\QuantifiedSelf.Windows.Agent.csproj" ReferenceOutputAssembly="false" />

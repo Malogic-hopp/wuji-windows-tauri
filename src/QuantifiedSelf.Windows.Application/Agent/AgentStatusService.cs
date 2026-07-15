@@ -1,74 +1,57 @@
-using System.Diagnostics;
 using System.Text.Json;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Ipc;
-using QuantifiedSelf.Windows.Core.Options;
-using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Core.Serialization;
-using QuantifiedSelf.Windows.Infrastructure.Control;
-using QuantifiedSelf.Windows.Infrastructure.Ipc;
-using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
-using QuantifiedSelf.Windows.Infrastructure.Settings;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Agent;
 
-public class AgentStatusService
+public class AgentStatusService : IAgentStatusService
 {
-    private readonly WindowsAgentPaths _paths;
-    private readonly RuntimeStateStore _runtimeStateStore;
-    private readonly AgentHealthStateStore _healthStateStore;
-    private readonly AgentControlFileStore _controlFileStore;
-    private readonly WindowsAgentOptionsStore _optionsStore;
-    private readonly IAgentIpcClient? _ipcClient;
-    private readonly AgentIpcStatusService? _ipcStatusService;
+    private readonly IAgentRuntimeStateReader _runtimeStateReader;
+    private readonly IAgentHealthStateReader _healthStateReader;
+    private readonly IAgentControlFallback _controlFallback;
+    private readonly IAgentOptionsReader _optionsReader;
+    private readonly IAgentProcessController _processController;
+    private readonly IAgentTransport? _transport;
+    private readonly AgentTransportHealthService? _transportHealth;
+    private readonly TimeProvider _timeProvider;
 
     public AgentStatusService(
-        WindowsAgentPaths paths,
-        RuntimeStateStore runtimeStateStore,
-        AgentHealthStateStore healthStateStore,
-        AgentControlFileStore controlFileStore,
-        WindowsAgentOptionsStore optionsStore,
-        IAgentIpcClient? ipcClient = null,
-        AgentIpcStatusService? ipcStatusService = null)
+        IAgentRuntimeStateReader runtimeStateReader,
+        IAgentHealthStateReader healthStateReader,
+        IAgentControlFallback controlFallback,
+        IAgentOptionsReader optionsReader,
+        IAgentProcessController processController,
+        IAgentTransport? transport = null,
+        AgentTransportHealthService? transportHealth = null,
+        TimeProvider? timeProvider = null)
     {
-        _paths = paths;
-        _runtimeStateStore = runtimeStateStore;
-        _healthStateStore = healthStateStore;
-        _controlFileStore = controlFileStore;
-        _optionsStore = optionsStore;
-        _ipcClient = ipcClient;
-        _ipcStatusService = ipcStatusService;
+        _runtimeStateReader = runtimeStateReader ?? throw new ArgumentNullException(nameof(runtimeStateReader));
+        _healthStateReader = healthStateReader ?? throw new ArgumentNullException(nameof(healthStateReader));
+        _controlFallback = controlFallback ?? throw new ArgumentNullException(nameof(controlFallback));
+        _optionsReader = optionsReader ?? throw new ArgumentNullException(nameof(optionsReader));
+        _processController = processController ?? throw new ArgumentNullException(nameof(processController));
+        _transport = transport;
+        _transportHealth = transportHealth;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public async Task<RuntimeState?> ReadRuntimeStateAsync(CancellationToken cancellationToken = default)
     {
-        return await _runtimeStateStore.ReadAsync(_paths.RuntimeStatePath, cancellationToken);
+        return await _runtimeStateReader.ReadRuntimeStateAsync(cancellationToken);
     }
 
     public async Task<AgentHealthState?> ReadHealthStateAsync(CancellationToken cancellationToken = default)
     {
-        return await _healthStateStore.ReadAsync(_paths.HealthStatePath, cancellationToken);
+        return await _healthStateReader.ReadHealthStateAsync(cancellationToken);
     }
 
     public async Task<bool> CheckProcessAsync(CancellationToken cancellationToken = default)
     {
-        var runtimeState = await ReadRuntimeStateAsync(cancellationToken);
-        if (runtimeState is null || runtimeState.ProcessId <= 0)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var process = Process.GetProcessById(runtimeState.ProcessId);
-            return !process.HasExited;
-        }
-        catch
-        {
-            return false;
-        }
+        return await _processController.IsAgentProcessRunningAsync(cancellationToken);
     }
 
     public async Task<bool> CheckHeartbeatFreshnessAsync(CancellationToken cancellationToken = default)
@@ -79,20 +62,20 @@ public class AgentStatusService
             return false;
         }
 
-        var options = await _optionsStore.ReadAsync(_paths.AgentOptionsPath, cancellationToken) ?? new WindowsAgentOptions();
+        var options = await _optionsReader.ReadAgentOptionsAsync(cancellationToken);
         var staleThreshold = TimeSpan.FromSeconds(Math.Max(1, options.StaleThresholdSeconds));
-        return DateTime.UtcNow - runtimeState.LastHeartbeatUtc <= staleThreshold;
+        return _timeProvider.GetUtcNow().UtcDateTime - runtimeState.LastHeartbeatUtc <= staleThreshold;
     }
 
     public async Task<AgentControlFileReadResult> ReadCurrentCommandAsync(CancellationToken cancellationToken = default)
     {
-        return await _controlFileStore.PeekAsync(_paths.AgentControlPath, cancellationToken);
+        return await _controlFallback.ReadCurrentCommandAsync(cancellationToken);
     }
 
     public virtual async Task<AgentStatusSnapshot> GetStatusAsync(CancellationToken cancellationToken = default)
     {
         // Try IPC first
-        if (_ipcClient is not null)
+        if (_transport is not null)
         {
             try
             {
@@ -102,11 +85,11 @@ public class AgentStatusService
                     RequestId = $"ipc-status-{Guid.NewGuid():N}"
                 };
 
-                var ipcResponse = await _ipcClient.SendAsync(ipcRequest, cancellationToken);
+                var ipcResponse = await _transport.SendAsync(ipcRequest, cancellationToken);
 
                 if (ipcResponse is { Accepted: true, Completed: true, Status: not null } && ipcResponse.ErrorCode is null)
                 {
-                    _ipcStatusService?.RecordIpcSuccess();
+                    _transportHealth?.RecordIpcSuccess();
 
                     var status = ipcResponse.Status;
                     return new AgentStatusSnapshot
@@ -132,15 +115,15 @@ public class AgentStatusService
                 }
 
                 // IPC responded but status is invalid — fallback
-                _ipcStatusService?.RecordIpcFallback("IPC protocol error; using file fallback.");
+                _transportHealth?.RecordIpcFallback("IPC protocol error; using file fallback.");
             }
             catch (TimeoutException)
             {
-                _ipcStatusService?.RecordIpcFallback("IPC request timed out; using file fallback.");
+                _transportHealth?.RecordIpcFallback("IPC request timed out; using file fallback.");
             }
             catch (Exception)
             {
-                _ipcStatusService?.RecordIpcFallback("IPC unavailable; using file fallback.");
+                _transportHealth?.RecordIpcFallback("IPC unavailable; using file fallback.");
             }
         }
 

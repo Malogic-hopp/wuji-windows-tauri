@@ -1,3 +1,4 @@
+using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Core.Events;
 
@@ -5,8 +6,8 @@ namespace QuantifiedSelf.Windows.App.Services;
 
 public sealed class RefreshService
 {
-    private readonly AgentStatusService _statusService;
-    private readonly AgentProcessService _processService;
+    private readonly IAgentStatusService _statusService;
+    private readonly IAgentProcessService _processService;
     private readonly RefreshOptions _options;
     private readonly RefreshHealthSnapshot _health = new();
     private readonly SemaphoreSlim _refreshGate = new(1, 1);
@@ -14,8 +15,8 @@ public sealed class RefreshService
     private long _refreshSequence;
 
     public RefreshService(
-        AgentStatusService statusService,
-        AgentProcessService processService,
+        IAgentStatusService statusService,
+        IAgentProcessService processService,
         RefreshOptions? options = null)
     {
         _statusService = statusService;
