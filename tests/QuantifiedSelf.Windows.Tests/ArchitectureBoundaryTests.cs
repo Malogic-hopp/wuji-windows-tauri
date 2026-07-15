@@ -13,6 +13,7 @@ using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Client.Settings;
 using QuantifiedSelf.Windows.Client.Startup;
@@ -86,13 +87,19 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
-    public void App_ProjectReferencesClientCompositionLayer()
+    public void App_ProjectReferencesOnlyPresentationContracts()
     {
         var projectPath = GetProjectPath(
             "QuantifiedSelf.Windows.App",
             "QuantifiedSelf.Windows.App.csproj");
 
-        Assert.Contains("QuantifiedSelf.Windows.Client", GetProjectReferences(projectPath));
+        Assert.Equal(
+            [
+                "QuantifiedSelf.Windows.Application",
+                "QuantifiedSelf.Windows.Client",
+                "QuantifiedSelf.Windows.Core"
+            ],
+            GetProjectReferences(projectPath));
     }
 
     [Fact]
@@ -244,6 +251,22 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void ClientFacadeAndFeatureInterfaces_AreOwnedByClientAssembly()
+    {
+        var clientAssembly = typeof(WujiClientFactory).Assembly;
+
+        Assert.Same(clientAssembly, typeof(IWujiClient).Assembly);
+        Assert.Same(clientAssembly, typeof(IAgentClient).Assembly);
+        Assert.Same(clientAssembly, typeof(IActivityClient).Assembly);
+        Assert.Same(clientAssembly, typeof(IDiagnosticsClient).Assembly);
+        Assert.Same(clientAssembly, typeof(ISettingsClient).Assembly);
+        Assert.Same(clientAssembly, typeof(IStartupClient).Assembly);
+        Assert.Same(clientAssembly, typeof(WujiClientOptions).Assembly);
+        Assert.Same(clientAssembly, typeof(WujiClientContext).Assembly);
+        Assert.Same(clientAssembly, typeof(WujiClientPaths).Assembly);
+    }
+
+    [Fact]
     public void InfrastructureAgentAdapters_ImplementApplicationPorts()
     {
         Assert.True(typeof(IAgentTransport).IsAssignableFrom(typeof(NamedPipeAgentControlClient)));
@@ -390,6 +413,41 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void AppSource_ContainsNoInfrastructureAgentOrCompositionImplementationReferences()
+    {
+        string[] forbiddenMarkers =
+        [
+            "QuantifiedSelf.Windows.Infrastructure",
+            "QuantifiedSelf.Windows.Agent",
+            "RuntimeStateStore",
+            "AgentHealthStateStore",
+            "AgentControlFileStore",
+            "NamedPipeAgentControlClient",
+            "SqliteActivityQueryAdapter",
+            "WindowsAgentProcessController",
+            "RegistryStartupRegistry",
+            "WindowsSettingsStoreAdapter"
+        ];
+
+        var appDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App");
+        var sourceFiles = Directory
+            .EnumerateFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path));
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            var source = File.ReadAllText(sourceFile);
+            foreach (var marker in forbiddenMarkers)
+            {
+                Assert.DoesNotContain(marker, source, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
     public void WpfActivityViewModels_AcceptApplicationUseCaseInterfaces()
     {
         AssertConstructorAccepts<AppsViewModel, IAppsDataService>();
@@ -427,6 +485,26 @@ public sealed class ArchitectureBoundaryTests
             "StartupRegistrationService");
         AssertPropertyHasType<SettingsViewModel, IStartupRegistrationService>(
             "StartupRegistrationService");
+    }
+
+    [Fact]
+    public void WpfCompositionAcceptsClientFeatureInterfaces()
+    {
+        AssertConstructorAccepts<SamplesViewModel, IActivityClient>();
+        AssertConstructorAccepts<SessionsViewModel, IActivityClient>();
+        AssertConstructorAccepts<AppsViewModel, IActivityClient>();
+        AssertConstructorAccepts<DashboardViewModel, IActivityClient>();
+        AssertConstructorAccepts<InsightsViewModel, IActivityClient>();
+        AssertConstructorAccepts<SettingsViewModel, ISettingsClient>();
+        AssertConstructorAccepts<SettingsViewModel, IAgentClient>();
+        AssertConstructorAccepts<SettingsViewModel, IDiagnosticsClient>();
+        AssertConstructorAccepts<SettingsViewModel, IStartupClient>();
+        AssertConstructorAccepts<MainWindowViewModel, IAgentClient>();
+        AssertConstructorAccepts<MainWindowViewModel, IActivityClient>();
+        AssertConstructorAccepts<MainWindowViewModel, IDiagnosticsClient>();
+        AssertConstructorAccepts<MainWindowViewModel, ISettingsClient>();
+        AssertConstructorAccepts<MainWindowViewModel, IStartupClient>();
+        AssertConstructorAccepts<RefreshService, IAgentClient>();
     }
 
     private static void AssertConstructorAccepts<TConsumer, TDependency>()
