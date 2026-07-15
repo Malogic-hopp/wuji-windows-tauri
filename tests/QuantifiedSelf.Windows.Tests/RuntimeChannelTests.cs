@@ -1,6 +1,8 @@
 using System.IO;
 using Microsoft.Extensions.Logging.Abstractions;
 using QuantifiedSelf.Windows.Client.Agent;
+using QuantifiedSelf.Windows.Client.Settings;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -35,9 +37,17 @@ public sealed class RuntimeChannelTests
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_ROOT", null);
 
             var paths = new WindowsAgentPaths(channelName: "dev");
+            var prodPaths = new WindowsAgentPaths(channelName: "prod");
+            var devSettings = new WindowsSettingsStoreAdapter(paths);
+            var prodSettings = new WindowsSettingsStoreAdapter(prodPaths);
 
             Assert.Equal("dev", paths.ChannelName);
             Assert.Contains($"{Path.DirectorySeparatorChar}WUJI-Dev{Path.DirectorySeparatorChar}WindowsAgent", paths.Root);
+            Assert.Contains($"{Path.DirectorySeparatorChar}WUJI{Path.DirectorySeparatorChar}WindowsAgent", prodPaths.Root);
+            Assert.Equal(Path.Combine(paths.ConfigDir, "app-settings.json"), devSettings.AppSettingsPath);
+            Assert.Equal(paths.AgentOptionsPath, devSettings.AgentOptionsPath);
+            Assert.Equal(Path.Combine(prodPaths.ConfigDir, "app-settings.json"), prodSettings.AppSettingsPath);
+            Assert.NotEqual(prodSettings.AppSettingsPath, devSettings.AppSettingsPath);
         }
         finally
         {
@@ -88,6 +98,28 @@ public sealed class RuntimeChannelTests
     }
 
     [Fact]
+    public async Task StartupRegistrationService_DevUsesSeparateValueAndChannelCommand()
+    {
+        var registry = new InMemoryStartupRegistry();
+        var channel = RuntimeChannel.Development;
+        var builder = new StartupCommandBuilder(
+            () => @"C:\WUJI\QuantifiedSelf.Windows.App.exe",
+            channel.Name);
+        var service = new StartupRegistrationService(
+            registry,
+            builder,
+            channel.StartupRegistryValueName);
+
+        var status = await service.RegisterAsync();
+
+        Assert.Equal(StartupRegistrationState.Enabled, status.State);
+        Assert.Null(registry.ReadValue(RuntimeChannel.Default.StartupRegistryValueName));
+        Assert.Equal(
+            @"""C:\WUJI\QuantifiedSelf.Windows.App.exe"" --from-autostart --start-hidden --channel dev",
+            registry.ReadValue(channel.StartupRegistryValueName));
+    }
+
+    [Fact]
     public void WindowsAgentProcessController_DevStartInfoPassesChannelToAgent()
     {
         using var workspace = new TempWorkspace("wuji-runtime-channel-tests");
@@ -105,5 +137,19 @@ public sealed class RuntimeChannelTests
 
         Assert.Equal("--channel dev", startInfo.Arguments);
         Assert.Equal("dev", startInfo.Environment["WUJI_RUNTIME_CHANNEL"]);
+    }
+
+    private sealed class InMemoryStartupRegistry : IStartupRegistry
+    {
+        private readonly Dictionary<string, string> _values = new();
+
+        public string? ReadValue(string name) =>
+            _values.TryGetValue(name, out var value) ? value : null;
+
+        public void SetValue(string name, string command) =>
+            _values[name] = command;
+
+        public void DeleteValue(string name) =>
+            _values.Remove(name);
     }
 }

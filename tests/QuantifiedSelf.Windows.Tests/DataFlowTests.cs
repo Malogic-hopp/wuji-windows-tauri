@@ -12,9 +12,12 @@ using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Client.Agent;
+using QuantifiedSelf.Windows.Client.Settings;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Agent.Events;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
@@ -1927,10 +1930,10 @@ public sealed class DataFlowTests
         var controlFileStore = new AgentControlFileStore();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
 
         await appSettingsStore.WriteAsync(
-            settingsService.AppSettingsPath,
+            Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings
             {
                 RefreshIntervalSeconds = 15,
@@ -1994,7 +1997,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
         await appSettingsStore.WriteAsync(
             Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings
@@ -2026,7 +2029,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
         await agentOptionsStore.WriteAsync(
             paths.AgentOptionsPath,
             new WindowsAgentOptions
@@ -2073,7 +2076,7 @@ public sealed class DataFlowTests
     {
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
 
         await viewModel.LoadAsync();
@@ -2099,7 +2102,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
         await agentOptionsStore.WriteAsync(
             paths.AgentOptionsPath,
             new WindowsAgentOptions
@@ -2170,10 +2173,10 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
 
         await appSettingsStore.WriteAsync(
-            settingsService.AppSettingsPath,
+            Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings
             {
                 RefreshIntervalSeconds = 15,
@@ -2211,10 +2214,10 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
 
         await appSettingsStore.WriteAsync(
-            settingsService.AppSettingsPath,
+            Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings
             {
                 RefreshIntervalSeconds = 15,
@@ -2250,10 +2253,10 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
 
         await appSettingsStore.WriteAsync(
-            settingsService.AppSettingsPath,
+            Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings
             {
                 RefreshIntervalSeconds = 15,
@@ -2637,7 +2640,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
 
         await viewModel.LoadAsync();
@@ -2670,7 +2673,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
 
         await agentOptionsStore.WriteAsync(
             paths.AgentOptionsPath,
@@ -2734,10 +2737,10 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
 
         await appSettingsStore.WriteAsync(
-            settingsService.AppSettingsPath,
+            Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings
             {
                 RefreshIntervalSeconds = 15,
@@ -2792,7 +2795,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var store = new WindowsAgentOptionsStore();
 
         await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
@@ -2852,7 +2855,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
 
         await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
         {
@@ -2886,7 +2889,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
 
         await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
         {
@@ -2928,7 +2931,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
 
         await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
         {
@@ -2961,7 +2964,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var store = new WindowsAgentOptionsStore();
 
         await store.WriteAsync(
@@ -3006,7 +3009,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
 
         await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions { SamplingIntervalSeconds = 3 });
 
@@ -3031,7 +3034,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
 
         await settingsService.SaveAgentOptionsAsync(new WindowsAgentOptions
         {
@@ -3065,7 +3068,7 @@ public sealed class DataFlowTests
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
 
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
@@ -8559,7 +8562,7 @@ public sealed class DataFlowTests
         await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var settingsViewModel = new SettingsViewModel(settingsService, paths);
         await settingsViewModel.LoadAsync();
         settingsViewModel.ExcludedProcessesText = "notepad.exe";
@@ -8606,7 +8609,7 @@ public sealed class DataFlowTests
         var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
-        var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var settingsViewModel = new SettingsViewModel(settingsService, paths);
 
         var viewModel = new MainWindowViewModel(
@@ -9249,7 +9252,7 @@ public sealed class DataFlowTests
         var controlFileStore = new AgentControlFileStore();
         var appSettingsStore = new AppSettingsStore();
         var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, agentOptionsStore);
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, agentOptionsStore);
         var settingsViewModel = settingsLoader is null
             ? new SettingsViewModel(settingsService, paths)
             : new SettingsViewModel(settingsLoader, (_, _) => Task.CompletedTask, _ => Task.FromResult(new WindowsAgentOptions()), paths);
@@ -9508,7 +9511,7 @@ public sealed class DataFlowTests
             AutoStartAgentWhenAppStarts = false
         });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
@@ -9531,7 +9534,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
@@ -9997,7 +10000,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10025,7 +10028,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { StartAppOnWindowsLogin = true });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
         Assert.True(viewModel.StartAppOnWindowsLogin);
@@ -10050,7 +10053,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10077,7 +10080,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10100,7 +10103,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
         viewModel.StartAppOnWindowsLogin = true;
@@ -10129,7 +10132,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10157,7 +10160,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { StartAppOnWindowsLogin = true });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10182,7 +10185,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10212,7 +10215,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { StartAppOnWindowsLogin = true });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10243,7 +10246,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { StartAppOnWindowsLogin = true });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
 
@@ -10267,7 +10270,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var viewModel = new SettingsViewModel(settingsService, paths);
         await viewModel.LoadAsync();
         Assert.False(viewModel.IsDirty);
@@ -10293,7 +10296,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var store = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
@@ -10328,7 +10331,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { AutoStartAgentWhenAppStarts = true });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
@@ -10364,7 +10367,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { AutoStartAgentWhenAppStarts = false });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
@@ -10401,7 +10404,7 @@ public sealed class DataFlowTests
         await store.WriteAsync(Path.Combine(paths.ConfigDir, "app-settings.json"),
             new AppSettings { AutoStartAgentWhenAppStarts = true });
 
-        var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, store, new WindowsAgentOptionsStore());
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
@@ -11292,7 +11295,7 @@ public sealed class DataFlowTests
         paths.EnsureDirectories();
 
         var appSettingsStore = new AppSettingsStore();
-        var settingsService = new SettingsService(paths, appSettingsStore, new WindowsAgentOptionsStore());
+        var settingsService = SettingsTestServices.Create(paths, appSettingsStore, new WindowsAgentOptionsStore());
         var settingsViewModel = new SettingsViewModel(settingsService, paths);
         await settingsViewModel.LoadAsync();
 

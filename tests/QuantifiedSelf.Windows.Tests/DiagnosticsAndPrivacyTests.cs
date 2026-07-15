@@ -1,6 +1,7 @@
 using System.IO;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Core.Capture;
 using QuantifiedSelf.Windows.Core.Control;

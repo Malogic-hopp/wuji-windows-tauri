@@ -2,6 +2,7 @@ using System.IO;
 using System.Reflection;
 using System.Xml.Linq;
 using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Settings;
 using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Data;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
@@ -9,9 +10,12 @@ using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.ApplicationLayer.Contracts.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Contracts.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Client.Agent;
+using QuantifiedSelf.Windows.Client.Settings;
+using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 using QuantifiedSelf.Windows.Infrastructure.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
@@ -196,12 +200,47 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void SettingsPortsAndUseCase_AreOwnedByApplicationAssembly()
+    {
+        var applicationAssembly = typeof(AgentStatusSnapshot).Assembly;
+
+        Assert.Same(applicationAssembly, typeof(IAppSettingsStore).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentOptionsStore).Assembly);
+        Assert.Same(applicationAssembly, typeof(ISettingsService).Assembly);
+        Assert.Same(applicationAssembly, typeof(SettingsService).Assembly);
+    }
+
+    [Fact]
     public void WindowsAgentProcessController_IsOwnedByClientAndImplementsApplicationPort()
     {
         var controllerType = typeof(WindowsAgentProcessController);
 
         Assert.Equal("QuantifiedSelf.Windows.Client", controllerType.Assembly.GetName().Name);
         Assert.True(typeof(IAgentProcessController).IsAssignableFrom(controllerType));
+    }
+
+    [Fact]
+    public void WindowsSettingsStoreAdapter_IsOwnedByClientAndImplementsApplicationPorts()
+    {
+        var adapterType = typeof(WindowsSettingsStoreAdapter);
+
+        Assert.Equal("QuantifiedSelf.Windows.Client", adapterType.Assembly.GetName().Name);
+        Assert.True(typeof(IAppSettingsStore).IsAssignableFrom(adapterType));
+        Assert.True(typeof(IAgentOptionsStore).IsAssignableFrom(adapterType));
+    }
+
+    [Fact]
+    public void StartupSdkTypes_AreOwnedByClientAssembly()
+    {
+        var clientAssembly = typeof(WindowsAgentProcessController).Assembly;
+
+        Assert.Same(clientAssembly, typeof(IStartupRegistry).Assembly);
+        Assert.Same(clientAssembly, typeof(RegistryStartupRegistry).Assembly);
+        Assert.Same(clientAssembly, typeof(IStartupRegistrationService).Assembly);
+        Assert.Same(clientAssembly, typeof(StartupRegistrationService).Assembly);
+        Assert.Same(clientAssembly, typeof(StartupRegistrationStatus).Assembly);
+        Assert.Same(clientAssembly, typeof(StartupCommandBuilder).Assembly);
+        Assert.Same(clientAssembly, typeof(StartupLaunchOptions).Assembly);
     }
 
     [Fact]
@@ -294,6 +333,42 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void AppServicesDirectory_ContainsNoMigratedSettingsOrStartupServices()
+    {
+        string[] migratedServices =
+        [
+            "SettingsService.cs",
+            "IStartupRegistry.cs",
+            "RegistryStartupRegistry.cs",
+            "IStartupRegistrationService.cs",
+            "StartupRegistrationService.cs",
+            "StartupRegistrationStatus.cs",
+            "StartupCommandBuilder.cs",
+            "StartupLaunchOptions.cs"
+        ];
+
+        var servicesDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "Services");
+
+        foreach (var serviceFile in migratedServices)
+        {
+            Assert.False(
+                File.Exists(Path.Combine(servicesDirectory, serviceFile)),
+                $"Migrated settings/startup service must not remain in App: {serviceFile}");
+        }
+
+        Assert.Equal(
+            "QuantifiedSelf.Windows.App",
+            typeof(StartupRegistrationDisplayModel).Assembly.GetName().Name);
+        Assert.Equal(
+            "QuantifiedSelf.Windows.App",
+            typeof(WindowStartupPolicy).Assembly.GetName().Name);
+    }
+
+    [Fact]
     public void AppSource_ContainsNoLegacyAgentIpcClientReference()
     {
         var appDirectory = Path.Combine(
@@ -342,6 +417,18 @@ public sealed class ArchitectureBoundaryTests
         AssertConstructorAccepts<RefreshService, IAgentProcessService>();
     }
 
+    [Fact]
+    public void WpfSettingsConsumers_UseApplicationAndClientInterfaces()
+    {
+        AssertConstructorAccepts<MainWindowViewModel, ISettingsService>();
+        AssertConstructorAccepts<SettingsViewModel, ISettingsService>();
+
+        AssertPropertyHasType<MainWindowViewModel, IStartupRegistrationService>(
+            "StartupRegistrationService");
+        AssertPropertyHasType<SettingsViewModel, IStartupRegistrationService>(
+            "StartupRegistrationService");
+    }
+
     private static void AssertConstructorAccepts<TConsumer, TDependency>()
     {
         var parameterTypes = typeof(TConsumer)
@@ -350,6 +437,16 @@ public sealed class ArchitectureBoundaryTests
             .Select(parameter => parameter.ParameterType);
 
         Assert.Contains(typeof(TDependency), parameterTypes);
+    }
+
+    private static void AssertPropertyHasType<TConsumer, TDependency>(string propertyName)
+    {
+        var property = typeof(TConsumer).GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+        Assert.NotNull(property);
+        Assert.Equal(typeof(TDependency), property!.PropertyType);
     }
 
     private static string GetProjectPath(string projectDirectory, string projectFileName)
