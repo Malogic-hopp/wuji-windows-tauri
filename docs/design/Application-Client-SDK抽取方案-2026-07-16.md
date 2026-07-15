@@ -1,7 +1,7 @@
 # WUJI Application / Client SDK 抽取方案
 
 日期：2026-07-16  
-状态：阶段 0～3 已完成，阶段 4～8 待实施
+状态：阶段 0～4 已完成，阶段 5～8 待实施
 适用范围：`QuantifiedSelf.Windows.Core`、`Infrastructure`、`Agent`、`App`
 
 ## 1. 结论与目标
@@ -488,6 +488,8 @@ startup.unregister
 退出条件：所有数据页与抽取前结果一致；Application 不直接引用 SQLite 或 Infrastructure。
 
 ### 阶段 4：抽取 Agent 控制、状态和进程端口
+
+实施状态：已完成（2026-07-16），详见 `docs/devlog/Application-Client-SDK抽取阶段4完成说明-2026-07-16.md`。
 
 任务：
 
