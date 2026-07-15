@@ -1,11 +1,11 @@
 # WUJI（吾迹）系统架构说明
 
-> 版本：2026-07-11
+> 版本：2026-07-15
 > 项目：QuantifiedSelf Windows 端
 
 ## 概述
 
-WUJI（吾迹）是一款 Windows 桌面端自动活动追踪应用。它在后台持续记录用户的前台窗口活动（正在使用什么软件、浏览器里访问什么网站），自动聚合成工作时段（Session），并提供 Dashboard、Samples、Sessions、Apps、Insights、Diagnostics、Settings 等页面的历史浏览和趋势分析。
+WUJI（吾迹）是一款 Windows 桌面端自动活动追踪应用。它在后台持续记录用户的前台窗口活动（正在使用什么软件、浏览器里访问什么网站），自动聚合成工作时段（Session），并提供 Today（今日总览）、Timeline（时间线回放）、Insights（专注洞察）、Trends（趋势与热力图）、Privacy（数据与隐私）、Settings（设置）、Diagnostics（诊断）等页面的历史浏览和趋势分析。
 
 系统由两个独立进程组成：**WPF App**（用户界面 + 系统托盘）和 **Agent**（后台采样服务），通过 Named Pipe（IPC）通信，文件系统作为 fallback 状态通道。
 
@@ -296,7 +296,39 @@ Agent 写状态文件和 App 读状态文件存在并发。当前保护机制：
 
 ## UI 结构
 
-### 主窗口（MainWindow.xaml）
+### 双 Shell 架构
+
+App 支持两套主窗口 Shell，通过 `--ui-preview` 命令行标志切换：
+
+- **Legacy Shell**（`LegacyMainWindow`）：默认启动，顶部工具栏 + Tab 标签页切换，功能完整、稳定。沿用历史布局。
+- **新 Shell**（`MainWindow`）：`--ui-preview` 启动时选中。左侧固定宽度 Sidebar（展开 184px / 紧凑 52px）导航，顶部状态栏集成 Agent 控制，内容区通过 `DataTemplate` 按 ViewModel 类型自动解析页面。支持浅色/深色/高对比度三套主题（`ThemeService`）。
+
+### 新 Shell 布局（MainWindow.xaml，--ui-preview）
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ Top Bar: 日期 / 页面标题 + 副标题              [Agent Status Pill] │
+├──────────┬───────────────────────────────────────────────────────┤
+│ Sidebar  │                                                       │
+│          │                                                       │
+│  Today   │                                                       │
+│  时间线  │              Page Content Area                         │
+│  洞察    │              (DataTemplate 解析)                       │
+│  趋势    │                                                       │
+│ ─────── │                                                       │
+│  隐私    │                                                       │
+│  设置    │                                                       │
+│          │                                                       │
+│ [Footer] │                                                       │
+└──────────┴───────────────────────────────────────────────────────┘
+```
+
+Sidebar 导航项分为两组：
+- **主要**：Today（今天）、Timeline（时间线）、Insights（洞察）、Trends（趋势）
+- **次要**：Privacy（数据与隐私）、Settings（设置）
+- 底部固定：Diagnostics（诊断）——通过状态栏 Agent 状态指示器进入
+
+### Legacy Shell 布局（LegacyMainWindow.xaml，默认）
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -313,15 +345,35 @@ Agent 写状态文件和 App 读状态文件存在并发。当前保护机制：
 
 ### 各页面
 
-| 页面 | 功能 | ViewModel |
-|------|------|-----------|
-| Dashboard | 概览卡片、小时热力图、今日洞察、趋势图 | `DashboardViewModel` |
-| Apps | App 使用统计排行 | `AppsViewModel` |
-| Sessions | 聚合后的工作时段列表 | `SessionsViewModel` |
-| Samples | 原始采样记录列表 | `SamplesViewModel` |
-| Diagnostics | Agent 状态、Tick 诊断、IPC 状态、事件日志、启动注册 | `MainWindowViewModel` (内联) |
-| Insights | 专注度洞察与趋势分析 | `InsightsViewModel` |
-| Settings | Agent 参数编辑、页面刷新间隔、数据清理 | `SettingsViewModel` |
+| 页面 | 功能 | ViewModel | Shell |
+|------|------|-----------|-------|
+| Today | 今日总览：摘要卡片、小时热力图、24h 时间线、Top Apps/Windows、洞察建议 | `DashboardViewModel` → `TodayPageViewModel` | 新旧 |
+| Timeline | 应用/会话/原始记录三视图回放，可筛选和分时段浏览 | `TimelinePageViewModel` | 新 |
+| Insights | 按日查询的专注度分析、工作块检测、中断来源、上下文切换方向 | `InsightsViewModel` | 新旧 |
+| Trends | 7 天有效使用趋势图、活动热力图（可聚焦逐格控件）、五级图例 | `TrendsPageViewModel` | 新 |
+| Apps | App 使用统计排行（Legacy Shell） | `AppsViewModel` | 旧 |
+| Sessions | 聚合后的工作时段列表（Legacy Shell） | `SessionsViewModel` | 旧 |
+| Samples | 原始采样记录列表（Legacy Shell） | `SamplesViewModel` | 旧 |
+| Privacy | 排除列表管理、保留周期、路径脱敏、导出确认、清空确认 | `PrivacyPageViewModel` | 新 |
+| Diagnostics | Agent 状态、Tick 诊断、IPC 状态、事件日志、启动注册（技术信息默认折叠） | `MainWindowViewModel`（内联） | 新旧 |
+| Settings | 常规/记录/通知/外观/高级五区设置、主题切换（浅色/深色/高对比度） | `SettingsViewModel` + `SettingsSections` 子 VM | 新旧 |
+
+### 主题与自适应
+
+- **`ThemeService`**：管理三套语义画刷字典（`Brushes.xaml` 浅色 / `Brushes.Dark.xaml` 深色 / 高对比度映射 `SystemColors`）。通过 Settings → Appearance 切换，`ApplyTheme()` 替换 `Application.Current.Resources.MergedDictionaries` 中的主题字典。
+- **紧凑布局**：`AdaptiveLayout.IsEnabled="True"` 在 MainWindow 上启用；各页面 XAML 通过 `AdaptiveLayout.Mode` 消费 Compact 模式（指标区 2×2/堆叠、多列模块折叠），适配 960×640 最小窗口。
+- **`AccessibleHeatmap`**：热力图逐格可聚焦控件，支持方向键导航、`AutomationProperties.Name` 和 Enter/Space 跳转时间线。
+
+### 统一页面状态
+
+数据页面（Today、Timeline、Insights、Trends 等）共用 `PageState` 枚举：
+
+| 状态 | 说明 |
+|------|------|
+| `Loading` | 数据加载中 |
+| `Empty` | 无数据显示空状态 |
+| `Ready` | 数据就绪，正常展示 |
+| `Error` | 加载出错，显示错误信息 |
 
 ---
 
@@ -362,11 +414,43 @@ Agent 写状态文件和 App 读状态文件存在并发。当前保护机制：
 # 构建
 dotnet build QuantifiedSelf.Windows.sln
 
-# 运行测试（468 个 xUnit 测试，含 Agent 状态机、数据流、并发 I/O）
+# 运行全部测试（504 个 xUnit 测试）
 dotnet test
+
+# 仅运行快速测试（纯逻辑、ViewModel、布局等，不依赖文件系统/SQLite）
+dotnet test --filter "Category=Fast"
+
+# 仅运行集成测试（涉及 SQLite、文件 I/O、Agent 生命周期等）
+dotnet test --filter "Category=Integration"
 
 # 发布（self-contained win-x64 文件夹发布，含 Agent 嵌入与产物校验）
 .\publish\scripts\publish.ps1
 ```
+
+### 测试结构
+
+测试通过 `[Trait("Category", "Fast")]` 和 `[Trait("Category", "Integration")]` 分为两类：
+
+| 分类 | 说明 | 数量 |
+|------|------|------|
+| **Fast** | 纯逻辑、ViewModel、布局断点，不涉及文件系统或 SQLite | 91 |
+| **Integration** | 涉及 TempWorkspace 文件 I/O、SQLite 数据库、IPC、Agent 状态机完整 Tick | 413 |
+
+测试文件按功能拆分：
+
+| 文件 | 覆盖范围 |
+|------|----------|
+| `DataFlowTests.cs` | Agent 状态机、数据流、ViewModel、IPC、服务层集成测试 |
+| `DiagnosticsAndPrivacyTests.cs` | 诊断消敏、隐私过滤、启动命令构建、窗口策略 |
+| `TodayPageTests.cs` | DashboardViewModel 今日页面逻辑 |
+| `InsightsTests.cs` | 专注度洞察、上下文分类、工作块检测 |
+| `RuntimeChannelTests.cs` | Dev/Prod 通道隔离、路径分离、管道名 |
+| `AgentExeLocatorTests.cs` | Agent 可执行文件路径解析 |
+| `AdaptiveLayoutTests.cs` | 自适应布局断点、Sidebar 宽度 Token |
+| `VersionTests.cs` | 各程序集版本号验证 |
+
+共享测试辅助类位于 `tests/QuantifiedSelf.Windows.Tests/TestHelpers/`：
+- `TempWorkspace.cs` — 所有文件 I/O 测试共用的临时目录
+- `FakeRefreshScheduler.cs` — `IRefreshScheduler` 的可手动触发的测试替身
 
 发布脚本将 App 输出到 `publish/release/App/`，Agent 输出到 `publish/release/Agent/`，然后把 Agent 产物整体复制到 `publish/release/App/Agent/` 子目录，保证两个 self-contained 可执行文件的依赖集隔离。最后校验入口可执行文件是否存在，并确认 Agent 可执行文件未被错误放在 App 根目录。

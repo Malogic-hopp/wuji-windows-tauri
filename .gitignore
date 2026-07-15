@@ -18,3 +18,4 @@ publish/release/
 .codex/
 ref/
 scripts/*.png
+.agents/

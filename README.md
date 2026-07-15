@@ -26,11 +26,13 @@ WUJI 在后台静默记录前台窗口活动（正在用什么软件、浏览器
 |------|--------|
 | **自动采样** | 后台 Agent 每 3 秒采集当前前台窗口标题（包括浏览器当前页面标题），支持隐私过滤与标题脱敏 |
 | **会话聚合** | 把连续的同一窗口活动自动合并成工作 Session，记录起止时间及各状态时长 |
-| **Dashboard** | 今日总览卡片、活动热力图、24 小时时间线、7 日趋势、Top Apps / Windows，以及基于统计规则的每日洞察建议 |
-| **Apps / Sessions / Samples** | 按应用排行、按时间段浏览 Session、原始采样记录逐条可查 |
-| **Insights** | 专注度分析、任务切换频率、趋势对比、中断检测 |
-| **Diagnostics** | Agent 进程状态、Tick 耗时诊断、IPC 通道状态、最新事件与告警 |
-| **Settings** | 采样间隔、隐私规则、数据保留天数、页面刷新频率等全部可调节 |
+| **Today** | 今日总览：摘要卡片、活动热力图（可聚焦逐格控件）、24h 时间线、Top Apps / Windows、洞察建议 |
+| **Timeline** | 应用/会话/原始记录三视图回放，支持按天筛选和活动状态过滤 |
+| **Insights** | 专注度分析、工作块检测、任务切换频率、中断来源与上下文切换方向 |
+| **Trends** | 7 天活跃趋势图、活动热力图（五级图例），仅展示真实可用数据 |
+| **Privacy** | 排除列表管理、保留周期、路径脱敏、导出确认、清空确认（独立 ViewModel） |
+| **Diagnostics** | Agent 进程状态、Tick 耗时诊断、IPC 通道状态、事件与告警（技术信息默认折叠） |
+| **Settings** | 常规 / 记录 / 通知 / 外观 / 高级五区设置；支持浅色、深色、高对比度三套主题 |
 | **系统托盘** | 最小化到托盘、后台常驻、开机自启（可选） |
 
 ## 快速开始
@@ -53,7 +55,55 @@ dotnet test
 dotnet run --project src/QuantifiedSelf.Windows.App/
 ```
 
+### 开发时的测试命令
+
+日常迭代优先运行不依赖真实 I/O 和真实时间等待的快速测试；提交行为修改前仍须运行全量测试。
+
+```powershell
+# 快速反馈：纯逻辑、ViewModel 与布局测试
+dotnet test .\tests\QuantifiedSelf.Windows.Tests\QuantifiedSelf.Windows.Tests.csproj --no-build --filter "Category=Fast"
+
+# 按当前改动范围执行，例如 Today 与自适应布局
+dotnet test .\tests\QuantifiedSelf.Windows.Tests\QuantifiedSelf.Windows.Tests.csproj --no-build --filter "FullyQualifiedName~TodayPageTests|FullyQualifiedName~AdaptiveLayoutTests"
+
+# 集成与 WPF 相关回归可以按需单独筛选
+dotnet test .\tests\QuantifiedSelf.Windows.Tests\QuantifiedSelf.Windows.Tests.csproj --no-build --filter "Category=Integration|Category=Wpf"
+
+# 合并前：完整回归（包含 SQLite、IPC 与 Agent 生命周期）
+dotnet test .\QuantifiedSelf.Windows.sln
+```
+
 > 运行 App 后，点击 **Start Agent** 开始采样（如需自动启动，可在 Settings 中启用 `AutoStartAgentWhenAppStarts`）。Agent 运行时可在系统托盘找到图标，右键管理 Agent 状态。
+
+### UI 开发版
+
+App 通过双 Shell 架构同时维护稳定版和新 UI：
+
+- **默认启动**（不含 `--ui-preview`）：创建 `LegacyMainWindow`（传统工具栏 + Tab 标签页布局，功能完整稳定）。
+- **`--ui-preview`**：创建 `MainWindow`（Sidebar 导航 + DataTemplate 页面解析 + 浅色/深色/高对比度主题）。
+
+开发版通过 `--channel dev` 与稳定版数据完全隔离：
+
+```bash
+# 创建 UI 开发 worktree
+git worktree add ../Win-ui -b feature/ui-redesign
+
+# 启动开发版新 Shell（独立数据目录、Pipe、注册表项）
+cd ../Win-ui
+dotnet run --project src/QuantifiedSelf.Windows.App -- --channel dev --ui-preview
+
+# 启动开发版 Legacy Shell
+dotnet run --project src/QuantifiedSelf.Windows.App -- --channel dev
+```
+
+| 资源 | 稳定版 | 开发版 |
+|------|--------|--------|
+| 数据目录 | `%LOCALAPPDATA%\WUJI\WindowsAgent` | `%LOCALAPPDATA%\WUJI-Dev\WindowsAgent` |
+| 窗口标题 | `WUJI 吾迹` | `WUJI Dev - WUJI 吾迹` |
+| Shell（默认） | `LegacyMainWindow` | `LegacyMainWindow` |
+| Shell（`--ui-preview`） | `MainWindow` | `MainWindow` |
+
+详见 [UI重构开发基座说明](docs/design/UI重构开发基座-2026-07-12.md)。
 
 ## 发布
 

@@ -22,6 +22,7 @@
 | 文件 | 简介 |
 |------|------|
 | `QuantifiedSelf Windows 端完整重构方案.md` | 项目整体重构设计方案（完整版，50KB） |
+| `Application-Client-SDK抽取方案-2026-07-16.md` | 抽取框架无关 Application 与 Windows Client SDK，使 WPF App 收敛为纯 UI，并为 WinUI/Avalonia/Tauri/Electron 提供统一接入边界 |
 | `Dashboard补充图表开发规格-2026-07-07.md` | Dashboard 图表的开发规格说明 |
 | `专注中断洞察独立页面方案-2026-07-07.md` | Insights 专注中断分析功能设计方案 |
 | `调研-WorkReview与Hindsight借鉴-2026-07-06.md` | 竞品调研：WorkReview 与 Hindsight 的借鉴分析 |
