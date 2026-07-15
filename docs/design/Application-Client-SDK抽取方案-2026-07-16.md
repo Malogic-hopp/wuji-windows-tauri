@@ -1,12 +1,12 @@
 # WUJI Application / Client SDK 抽取方案
 
 日期：2026-07-16  
-状态：阶段 0～5 已完成，阶段 6～8 待实施
+状态：阶段 0～6 已完成，阶段 7～8 待实施
 适用范围：`QuantifiedSelf.Windows.Core`、`Infrastructure`、`Agent`、`App`
 
 ## 1. 结论与目标
 
-当前 `Core + Infrastructure + Agent` 已经可以作为无 WPF 的 Windows 无头基础层，但 `QuantifiedSelf.Windows.App` 仍同时承担：
+阶段 6 完成后，`Core + Application + Infrastructure + Client + Agent` 已形成无 WPF 的 Windows 无头基础层，`QuantifiedSelf.Windows.App` 的底层组合职责已收口到 Client facade。阶段 6 之前，App 还同时承担：
 
 - WPF View、主题、窗口、托盘和 Dispatcher；
 - Agent 启停、状态查询、IPC 与文件 fallback；
@@ -66,6 +66,7 @@ flowchart LR
     Agent --> Infrastructure
     Wpf --> Application
     Wpf --> Client
+    Wpf -. "过渡：Core 稳定领域合同" .-> Core
     OtherDotNetUi --> Application
     OtherDotNetUi --> Client
     Bridge --> Application
@@ -82,7 +83,7 @@ flowchart LR
 - `Infrastructure` 可以引用 `Core + Application`，实现 Application 定义的端口；
 - `Client` 引用 `Core + Application + Infrastructure`，但不引用任何 UI 框架；
 - `Agent` 不引用 `App`、`Client` 或 UI 框架；
-- `App` 只引用 `Application + Client`，不直接引用 `Infrastructure` 或 `Agent`；
+- `App` 最终只引用 `Application + Client`，不直接引用 `Infrastructure` 或 `Agent`；阶段 6 已移除 Infrastructure/Agent，Core 作为 Application 公开签名使用的无 UI 领域合同暂时保留，待阶段 7 完成 DTO 投影后移除；
 - 最终应移除 App 对 Agent 的 `ReferenceOutputAssembly="false"` 引用，App/Agent 的发布顺序由 solution 和 `publish.ps1` 负责；
 - `Application` 和 `Client` 的公开 API 中禁止出现 `System.Windows.*`、`System.Windows.Forms.*`、LiveCharts、Skia、`Dispatcher`、`Brush`、`Visibility`、`IValueConverter`、ViewModel 类型。
 
@@ -518,17 +519,19 @@ startup.unregister
 
 ### 阶段 6：建立 IWujiClient 并切换 WPF composition root
 
+实施状态：已完成（2026-07-16），详见 `docs/devlog/Application-Client-SDK抽取阶段6完成说明-2026-07-16.md`。
+
 任务：
 
-- 实现 `WujiClientFactory`/`AddWujiClient`；
+- 实现 `WujiClientFactory`；`AddWujiClient` 留给未来采用 DI 容器的宿主按需提供；
 - WPF ViewModel 改为依赖 SDK feature interfaces；
 - 把 App.xaml.cs 的底层对象创建移入 Client composition；
 - App.xaml.cs 只保留 UI host、window/tray/theme/Dispatcher wiring；
-- App.csproj 移除 Core、Infrastructure、Agent ProjectReference；
+- App.csproj 移除 Infrastructure、Agent ProjectReference；Core 因 Application 现有公开签名仍暴露领域模型而暂时保留；
 - 发布脚本继续独立发布 Agent 并复制到 `App/Agent/`；
 - 保留 Legacy/Preview 双 shell。
 
-退出条件：App 源码不再出现 `using QuantifiedSelf.Windows.Infrastructure.*` 或 `using QuantifiedSelf.Windows.Agent.*`；直接 Core 引用也被 Application DTO 取代。
+本阶段退出结果：App 源码不再出现 `using QuantifiedSelf.Windows.Infrastructure.*`、`using QuantifiedSelf.Windows.Agent.*` 或底层 composition 类型；Client facade、生命周期、prod/dev channel 和 WPF feature-client 接线均有回归测试。直接 Core 引用尚未完全被 Application DTO 取代，这是阶段 7 的显式残留项；Core 本身为 `net8.0`、无 UI 框架依赖，不破坏当前无头边界或替代 UI 的可行性。
 
 ### 阶段 7：测试拆分与架构收口
 
