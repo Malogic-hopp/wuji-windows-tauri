@@ -10,11 +10,11 @@ using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Options;
-using QuantifiedSelf.Windows.Core.Paths;
 
 namespace QuantifiedSelf.Windows.App.ViewModels;
 
@@ -41,7 +41,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private readonly Func<CancellationToken, Task<AgentCommandResult>>? _requestClearHistoryAsync;
     private readonly Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? _getRecentAgentEventsAsync;
     private readonly AgentOptionsValidator _agentOptionsValidator;
-    private readonly WindowsAgentPaths _paths;
+    private readonly WujiClientPaths _paths;
 
     internal int ReloadConfigPollMaxAttempts { get; set; } = 30;
     internal TimeSpan ReloadConfigPollDelay { get; set; } = TimeSpan.FromMilliseconds(500);
@@ -103,7 +103,7 @@ public sealed partial class SettingsViewModel : ObservableObject
     private string _excludedTitlePatternsText = "(none)";
     private string _useMockCaptureText = "Disabled";
 
-    public SettingsViewModel(ISettingsService settingsService, WindowsAgentPaths paths)
+    public SettingsViewModel(ISettingsService settingsService, WujiClientPaths paths)
         : this(
             settingsService.ReadAppSettingsAsync,
             settingsService.SaveAppSettingsAsync,
@@ -125,7 +125,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         IAgentStatusService statusService,
         IAgentControlService controlService,
         IDiagnosticsDataService diagnosticsDataService,
-        WindowsAgentPaths paths)
+        WujiClientPaths paths)
         : this(
             settingsService.ReadAppSettingsAsync,
             settingsService.SaveAppSettingsAsync,
@@ -143,10 +143,26 @@ public sealed partial class SettingsViewModel : ObservableObject
     }
 
     public SettingsViewModel(
+        ISettingsClient settingsClient,
+        IAgentClient agentClient,
+        IDiagnosticsClient diagnosticsClient,
+        WujiClientPaths paths,
+        IStartupClient startupClient)
+        : this(
+            settingsClient,
+            agentClient.Status,
+            agentClient.Control,
+            diagnosticsClient,
+            paths)
+    {
+        StartupRegistrationService = startupClient;
+    }
+
+    public SettingsViewModel(
         Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
         Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
         Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
-        WindowsAgentPaths paths)
+        WujiClientPaths paths)
         : this(readAppSettingsAsync, saveAppSettingsAsync, readAgentOptionsAsync, new AgentOptionsValidator(), paths)
     {
     }
@@ -156,7 +172,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
         Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
         AgentOptionsValidator agentOptionsValidator,
-        WindowsAgentPaths paths)
+        WujiClientPaths paths)
         : this(
             readAppSettingsAsync,
             saveAppSettingsAsync,
@@ -179,7 +195,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
         Func<WindowsAgentOptions, CancellationToken, Task> saveAgentOptionsAsync,
         Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
-        WindowsAgentPaths paths)
+        WujiClientPaths paths)
         : this(readAppSettingsAsync, saveAppSettingsAsync, readAgentOptionsAsync, saveAgentOptionsAsync, restoreAgentOptionsBackupAsync, null, null, null, null, null, new AgentOptionsValidator(), paths)
     {
     }
@@ -196,7 +212,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         Func<CancellationToken, Task<AgentCommandResult>>? requestClearHistoryAsync,
         Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? getRecentAgentEventsAsync,
         AgentOptionsValidator agentOptionsValidator,
-        WindowsAgentPaths paths)
+        WujiClientPaths paths)
     {
         ArgumentNullException.ThrowIfNull(readAppSettingsAsync);
         ArgumentNullException.ThrowIfNull(saveAppSettingsAsync);
@@ -225,13 +241,13 @@ public sealed partial class SettingsViewModel : ObservableObject
         Appearance = new AppearanceSettingsViewModel(this);
         Advanced = new AdvancedSettingsViewModel(this);
 
-        AppSettingsPathText = Path.Combine(_paths.ConfigDir, "app-settings.json");
+        AppSettingsPathText = _paths.AppSettingsPath;
         AgentOptionsPathText = _paths.AgentOptionsPath;
         DataRootText = _paths.Root;
-        ConfigDirectoryText = _paths.ConfigDir;
+        ConfigDirectoryText = _paths.ConfigDirectory;
         DatabasePathText = _paths.DatabasePath;
-        LogsDirectoryText = _paths.LogsDir;
-        RuntimeDirectoryText = _paths.RuntimeDir;
+        LogsDirectoryText = _paths.LogsDirectory;
+        RuntimeDirectoryText = _paths.RuntimeDirectory;
 
         RefreshCommand = new AsyncRelayCommand(LoadAsync, () => !IsLoading && !IsSaving);
         SaveAppSettingsCommand = new AsyncRelayCommand(SaveAppSettingsAsync, () => !IsLoading && !IsSaving);
@@ -245,8 +261,8 @@ public sealed partial class SettingsViewModel : ObservableObject
         ConfirmClearHistoryCommand = new AsyncRelayCommand(ConfirmClearHistoryAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup && !string.IsNullOrWhiteSpace(ClearHistoryConfirmationInput));
         PruneDataCommand = new AsyncRelayCommand(PruneDataAsync, () => !IsLoading && !IsSaving && CanExecuteDataCleanup);
         OpenDataFolderCommand = new RelayCommand(() => OpenFolder(_paths.Root));
-        OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(_paths.LogsDir));
-        OpenConfigFolderCommand = new RelayCommand(() => OpenFolder(_paths.ConfigDir));
+        OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(_paths.LogsDirectory));
+        OpenConfigFolderCommand = new RelayCommand(() => OpenFolder(_paths.ConfigDirectory));
     }
 
     public AppSettings AppSettings

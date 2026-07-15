@@ -1,5 +1,6 @@
 using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Core.Events;
 
 namespace QuantifiedSelf.Windows.App.Services;
@@ -22,6 +23,11 @@ public sealed class RefreshService
         _statusService = statusService;
         _processService = processService;
         _options = options ?? new RefreshOptions();
+    }
+
+    public RefreshService(IAgentClient agentClient, RefreshOptions? options = null)
+        : this(agentClient.Status, agentClient.Process, options)
+    {
     }
 
     public RefreshHealthSnapshot Health => _health;

@@ -1,6 +1,7 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 
@@ -25,6 +26,11 @@ public sealed class InsightsViewModel : ObservableObject
 
     public InsightsViewModel(IFocusInterruptionInsightService insightService)
         : this(insightService.GetInsightAsync)
+    {
+    }
+
+    public InsightsViewModel(IActivityClient activityClient)
+        : this(activityClient.Insights)
     {
     }
 

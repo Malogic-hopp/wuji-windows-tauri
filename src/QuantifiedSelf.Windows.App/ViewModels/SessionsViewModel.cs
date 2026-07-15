@@ -3,6 +3,7 @@ using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 
@@ -29,6 +30,11 @@ public sealed class SessionsViewModel : ObservableObject
             "Last 24 Hours" => sessionsDataService.GetLast24HoursSessionsAsync(limit, cancellationToken),
             _ => sessionsDataService.GetTodaySessionsAsync(limit, cancellationToken)
         })
+    {
+    }
+
+    public SessionsViewModel(IActivityClient activityClient)
+        : this(activityClient.Sessions)
     {
     }
 

@@ -9,6 +9,7 @@ using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
@@ -102,6 +103,45 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private string _startupRegistrationSummary = "Unknown";
     private string _lastStartupRegistrationErrorText = "None";
     private StartupLaunchOptions _startupLaunchOptions = StartupLaunchOptions.Parse([]);
+
+    public MainWindowViewModel(
+        IAgentClient agentClient,
+        IActivityClient activityClient,
+        IDiagnosticsClient diagnosticsClient,
+        SamplesViewModel samplesViewModel,
+        SessionsViewModel sessionsViewModel,
+        AppsViewModel appsViewModel,
+        SettingsViewModel settingsViewModel,
+        ISettingsClient settingsClient,
+        DashboardViewModel dashboardViewModel,
+        InsightsViewModel insightsViewModel,
+        IStartupClient startupClient,
+        RefreshService? refreshService = null,
+        ITrayStateSink? trayStateSink = null,
+        IRefreshScheduler? refreshScheduler = null,
+        IRefreshScheduler? statusPollScheduler = null)
+        : this(
+            agentClient.Process,
+            agentClient.Control,
+            agentClient.Status,
+            activityClient.Overview,
+            diagnosticsClient,
+            samplesViewModel,
+            sessionsViewModel,
+            appsViewModel,
+            settingsViewModel,
+            settingsClient,
+            dashboardViewModel,
+            insightsViewModel,
+            agentClient.TransportHealth,
+            refreshService,
+            trayStateSink,
+            refreshScheduler,
+            statusPollScheduler)
+    {
+        StartupRegistrationService = startupClient;
+        StartupLaunchOptions = startupClient.LaunchOptions;
+    }
 
     public MainWindowViewModel(
         IAgentProcessService processService,

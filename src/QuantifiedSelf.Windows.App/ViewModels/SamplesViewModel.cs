@@ -2,6 +2,7 @@ using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 
@@ -21,6 +22,11 @@ public sealed class SamplesViewModel : ObservableObject
 
     public SamplesViewModel(ISamplesDataService samplesDataService)
         : this(samplesDataService.GetRecentSamplesAsync)
+    {
+    }
+
+    public SamplesViewModel(IActivityClient activityClient)
+        : this(activityClient.Samples)
     {
     }
 

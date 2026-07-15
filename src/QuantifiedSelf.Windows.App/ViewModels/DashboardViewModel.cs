@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
+using QuantifiedSelf.Windows.Client;
 using LiveChartsCore;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
@@ -63,6 +64,14 @@ public sealed class DashboardViewModel : ObservableObject
         IHourActivityHeatmapService? heatmapService = null)
         : this((topApps, topWindows, ct) => dailyStatsService.GetTodaySummaryAsync(topApps, topWindows, ct),
                weeklyTrendService, heatmapService)
+    {
+    }
+
+    public DashboardViewModel(IActivityClient activityClient)
+        : this(
+            activityClient.DailyStats,
+            activityClient.WeeklyTrend,
+            activityClient.Heatmap)
     {
     }
 

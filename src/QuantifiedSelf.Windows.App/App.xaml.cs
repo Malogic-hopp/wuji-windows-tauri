@@ -1,26 +1,10 @@
-using System.Security.Principal;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
-using Microsoft.Extensions.Logging.Abstractions;
-using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
-using QuantifiedSelf.Windows.ApplicationLayer.Agent;
-using QuantifiedSelf.Windows.ApplicationLayer.Activity;
-using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
-using QuantifiedSelf.Windows.Client.Agent;
-using QuantifiedSelf.Windows.Client.Settings;
+using QuantifiedSelf.Windows.Client;
 using QuantifiedSelf.Windows.Client.Startup;
-using QuantifiedSelf.Windows.Core.Ipc;
-using QuantifiedSelf.Windows.Core.Options;
-using QuantifiedSelf.Windows.Core.Paths;
-using QuantifiedSelf.Windows.Core.Runtime;
-using QuantifiedSelf.Windows.Infrastructure.Control;
-using QuantifiedSelf.Windows.Infrastructure.Database;
-using QuantifiedSelf.Windows.Infrastructure.Ipc;
-using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
-using QuantifiedSelf.Windows.Infrastructure.Settings;
 
 namespace QuantifiedSelf.Windows.App;
 
@@ -36,121 +20,54 @@ public partial class App : Application
         base.OnStartup(e);
 
         _startupLaunchOptions = StartupLaunchOptions.Parse(e.Args);
-        var runtimeChannel = RuntimeChannel.Parse(_startupLaunchOptions.ChannelName);
+        var client = WujiClientFactory.Create(
+            WujiClientOptions.FromLaunchOptions(_startupLaunchOptions));
+        await client.InitializeAsync();
 
-        var paths = new WindowsAgentPaths(channelName: runtimeChannel.Name);
-        paths.EnsureDirectories();
-        var runtimeStateStore = new RuntimeStateStore();
-        var healthStateStore = new AgentHealthStateStore();
-        var controlFileStore = new AgentControlFileStore();
-        var appSettingsStore = new AppSettingsStore();
-        var agentOptionsStore = new WindowsAgentOptionsStore();
-        var settingsStore = new WindowsSettingsStoreAdapter(
-            paths, appSettingsStore, agentOptionsStore);
-        var settingsService = new SettingsService(settingsStore, settingsStore);
-
-        AppSettings appSettings;
-        try
-        {
-            appSettings = await settingsService.ReadAppSettingsAsync();
-        }
-        catch
-        {
-            appSettings = new AppSettings();
-        }
+        var appSettings = await client.Settings.ReadAppSettingsOrDefaultAsync();
 
         if (_startupLaunchOptions.UsePreviewUi)
         {
             ThemeService.ApplyTheme(ThemeService.Parse(appSettings.Theme));
         }
 
-        // IPC setup
-        var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
-        IAgentTransport? ipcClient = null;
-        var ipcStatusService = new AgentTransportHealthService();
-
-        try
-        {
-            var pipeName = new AgentPipeName(userSid, runtimeChannel.Name);
-            ipcStatusService.Initialize(pipeName);
-            var ipcOptions = new AgentIpcClientOptions();
-            ipcClient = new NamedPipeAgentControlClient(pipeName, ipcOptions);
-        }
-        catch
-        {
-            ipcStatusService.RecordIpcFallback("IPC unavailable; using file fallback.");
-        }
-
-        var agentState = new FileAgentStateAdapter(
-            paths, runtimeStateStore, healthStateStore, controlFileStore, agentOptionsStore);
-        var processController = new WindowsAgentProcessController(
-            paths,
-            runtimeStateStore,
-            NullLogger<WindowsAgentProcessController>.Instance,
-            showAgentConsole: _startupLaunchOptions.ShowAgentConsole,
-            channelName: runtimeChannel.Name);
-        var statusService = new AgentStatusService(
-            agentState, agentState, agentState, agentState, processController,
-            ipcClient, ipcStatusService);
-        var processService = new AgentProcessService(
-            processController, agentState, agentState, ipcClient);
-        var controlService = new AgentControlService(
-            agentState, statusService, ipcClient, ipcStatusService);
-        var activityQueries = new SqliteActivityQueryAdapter(paths);
-        var overviewDataService = new OverviewDataService(activityQueries, activityQueries);
-        var diagnosticsDataService = new DiagnosticsDataService(activityQueries);
-        var samplesDataService = new SamplesDataService(activityQueries);
-        var sessionsDataService = new SessionsDataService(activityQueries);
-        var appsDataService = new AppsDataService(activityQueries);
-        var dailyStatsService = new DailyStatsService(activityQueries, activityQueries);
-        var weeklyTrendService = new WeeklyTrendService(dailyStatsService);
-        var heatmapService = new HourActivityHeatmapService(activityQueries);
-        var samplesViewModel = new SamplesViewModel(samplesDataService);
-        var sessionsViewModel = new SessionsViewModel(sessionsDataService);
-        var appsViewModel = new AppsViewModel(appsDataService);
-        var dashboardViewModel = new DashboardViewModel(dailyStatsService, weeklyTrendService, heatmapService);
-        var insightService = new FocusInterruptionInsightService(activityQueries);
-        var insightsViewModel = new InsightsViewModel(insightService);
+        var samplesViewModel = new SamplesViewModel(client.Activity);
+        var sessionsViewModel = new SessionsViewModel(client.Activity);
+        var appsViewModel = new AppsViewModel(client.Activity);
+        var dashboardViewModel = new DashboardViewModel(client.Activity);
+        var insightsViewModel = new InsightsViewModel(client.Activity);
         Resources.Add("BooleanToVisibilityConverter", new BooleanToVisibilityConverter());
 
-        var refreshService = new RefreshService(statusService, processService);
-        var startupRegistry = new RegistryStartupRegistry();
-        var startupCommandBuilder = new StartupCommandBuilder(channelName: runtimeChannel.Name);
-        var startupRegistrationService = new StartupRegistrationService(
-            startupRegistry,
-            startupCommandBuilder,
-            runtimeChannel.StartupRegistryValueName);
-        var settingsViewModel = new SettingsViewModel(settingsService, statusService, controlService, diagnosticsDataService, paths);
-        settingsViewModel.StartupRegistrationService = startupRegistrationService;
+        var refreshService = new RefreshService(client.Agent);
+        var settingsViewModel = new SettingsViewModel(
+            client.Settings,
+            client.Agent,
+            client.Diagnostics,
+            client.Paths,
+            client.Startup);
         var viewModel = new MainWindowViewModel(
-            processService,
-            controlService,
-            statusService,
-            overviewDataService,
-            diagnosticsDataService,
+            client.Agent,
+            client.Activity,
+            client.Diagnostics,
             samplesViewModel,
             sessionsViewModel,
             appsViewModel,
             settingsViewModel,
-            settingsService,
+            client.Settings,
             dashboardViewModel,
             insightsViewModel,
-            ipcStatusService,
+            client.Startup,
             refreshService,
             trayStateSink: null,
             refreshScheduler: new DispatcherRefreshScheduler(),
-            statusPollScheduler: new DispatcherRefreshScheduler()); // set via TrayStateSink after tray creation
-
-        // Inject startup registration service and launch options for Diagnostics display
-        viewModel.StartupRegistrationService = startupRegistrationService;
-        viewModel.StartupLaunchOptions = _startupLaunchOptions;
+            statusPollScheduler: new DispatcherRefreshScheduler());
 
         Window window = _startupLaunchOptions.UsePreviewUi
             ? new MainWindow(viewModel)
             : new LegacyMainWindow(viewModel);
-        if (!runtimeChannel.IsDefault)
+        if (!client.Context.IsDefaultChannel)
         {
-            window.Title = $"{runtimeChannel.ProductDisplayName} - {window.Title}";
+            window.Title = $"{client.Context.ProductDisplayName} - {window.Title}";
         }
         MainWindow = window;
 
@@ -223,10 +140,11 @@ public partial class App : Application
             }
         };
 
-        window.Closed += (_, _) =>
+        window.Closed += async (_, _) =>
         {
             viewModel.StopStatusPolling();
             trayService?.Dispose();
+            await client.DisposeAsync();
         };
         viewModel.TrayStateSink = trayService;
 
