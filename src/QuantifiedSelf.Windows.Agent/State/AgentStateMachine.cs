@@ -44,6 +44,7 @@ public sealed class AgentStateMachine
     private readonly AgentOptionsValidator _optionsValidator;
     private readonly DataMaintenanceService? _dataMaintenanceService;
     private readonly ILogger<AgentStateMachine> _logger;
+    private readonly TimeProvider _timeProvider;
 
     private WindowsAgentOptions _options = new();
     private DateTime _lastPersistedHeartbeatUtc = DateTime.MinValue;
@@ -141,7 +142,8 @@ public sealed class AgentStateMachine
         AgentEventWriter? eventWriter,
         AgentOptionsValidator optionsValidator,
         DataMaintenanceService? dataMaintenanceService,
-        ILogger<AgentStateMachine> logger)
+        ILogger<AgentStateMachine> logger,
+        TimeProvider? timeProvider = null)
     {
         _paths = paths;
         _runtimeStateStore = runtimeStateStore;
@@ -157,6 +159,7 @@ public sealed class AgentStateMachine
         _optionsValidator = optionsValidator;
         _dataMaintenanceService = dataMaintenanceService;
         _logger = logger;
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public AgentStateMachine(
@@ -199,6 +202,8 @@ public sealed class AgentStateMachine
 
     public int ProcessId => Environment.ProcessId;
 
+    private DateTime UtcNow => _timeProvider.GetUtcNow().UtcDateTime;
+
     public async Task InitializeAsync(CancellationToken cancellationToken)
     {
         _paths.EnsureDirectories();
@@ -217,7 +222,7 @@ public sealed class AgentStateMachine
             _options = startupValidation.NormalizedOptions;
         }
 
-        StartedAtUtc = DateTime.UtcNow;
+        StartedAtUtc = UtcNow;
         ActualState = AgentActualState.Starting;
         LastHeartbeatUtc = StartedAtUtc;
         LastSampleUtc = null;
@@ -251,7 +256,7 @@ public sealed class AgentStateMachine
 
     public async Task<bool> TickAsync(CancellationToken cancellationToken)
     {
-        var tickStart = DateTime.UtcNow;
+        var tickStart = UtcNow;
 
         _lastTickPhase = "ControlRead";
         var commandRead = await _controlFileStore.ReadForAgentAsync(_paths.AgentControlPath, cancellationToken);
@@ -303,7 +308,7 @@ public sealed class AgentStateMachine
             }
         }
 
-        var now = DateTime.UtcNow;
+        var now = UtcNow;
         var heartbeatDue = now - _lastPersistedHeartbeatUtc >= TimeSpan.FromSeconds(Math.Max(1, _options.HeartbeatIntervalSeconds));
         var sampleDue = now - _lastSampleAtUtc >= TimeSpan.FromSeconds(Math.Max(1, _options.SamplingIntervalSeconds));
 
@@ -863,7 +868,7 @@ public sealed class AgentStateMachine
         await PersistAsync(message, cancellationToken);
 
         ActualState = AgentActualState.Running;
-        _lastSampleAtUtc = DateTime.UtcNow;
+        _lastSampleAtUtc = UtcNow;
         await PersistAsync(message, cancellationToken);
         await WriteLifecycleEventAsync(
             AgentEventType.AgentResumed,
@@ -1097,7 +1102,7 @@ public sealed class AgentStateMachine
     {
         ArgumentNullException.ThrowIfNull(exception);
 
-        var utcNow = DateTime.UtcNow;
+        var utcNow = UtcNow;
         if (!_eventRateLimiter.ShouldAllow($"CaptureFailed:{errorCode}", utcNow))
         {
             return Task.CompletedTask;
@@ -1196,14 +1201,14 @@ public sealed class AgentStateMachine
             return;
         }
 
-        if (rateLimitKey is not null && !_eventRateLimiter.ShouldAllow(rateLimitKey, DateTime.UtcNow))
+        if (rateLimitKey is not null && !_eventRateLimiter.ShouldAllow(rateLimitKey, UtcNow))
         {
             return;
         }
 
         var agentEvent = new AgentEvent
         {
-            EventTimeUtc = DateTime.UtcNow,
+            EventTimeUtc = UtcNow,
             EventType = eventType,
             EventLevel = eventLevel,
             Message = message,
@@ -1389,7 +1394,7 @@ public sealed class AgentStateMachine
 
     private async Task PersistAsync(string message, CancellationToken cancellationToken, string? errorCode = null)
     {
-        LastHeartbeatUtc = DateTime.UtcNow;
+        LastHeartbeatUtc = UtcNow;
         _lastPersistedHeartbeatUtc = LastHeartbeatUtc;
 
         var runtimeState = CreateRuntimeSnapshot();

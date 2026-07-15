@@ -1,0 +1,77 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ============================================================
+         Brushes.xaml — WUJI 语义画刷
+         所有 Brush 引用 Colors.xaml 中的 Color。
+         页面 XAML 只应使用此文件中的 Brush Key。
+         ============================================================ -->
+
+    <!-- ── 页面背景 ── -->
+    <SolidColorBrush x:Key="PageBackgroundBrush" Color="{StaticResource Neutral50Color}" />
+    <SolidColorBrush x:Key="PageBackgroundAltBrush" Color="{StaticResource Neutral100Color}" />
+
+    <!-- ── 表面（卡片 / 容器） ── -->
+    <SolidColorBrush x:Key="SurfaceBrush" Color="{StaticResource Neutral0Color}" />
+    <SolidColorBrush x:Key="SurfaceAltBrush" Color="{StaticResource Neutral100Color}" />
+    <SolidColorBrush x:Key="SurfaceMutedBrush" Color="{StaticResource Neutral200Color}" />
+
+    <!-- ── 边框 ── -->
+    <SolidColorBrush x:Key="BorderBrush" Color="{StaticResource Neutral200Color}" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="{StaticResource Neutral300Color}" />
+
+    <!-- ── 文字 ── -->
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="{StaticResource Neutral900Color}" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="{StaticResource Neutral700Color}" />
+    <SolidColorBrush x:Key="TextMutedBrush" Color="{StaticResource Neutral500Color}" />
+    <SolidColorBrush x:Key="TextPlaceholderBrush" Color="{StaticResource Neutral400Color}" />
+
+    <!-- ── 强调色 ── -->
+    <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource Accent700Color}" />
+    <SolidColorBrush x:Key="AccentDarkBrush" Color="{StaticResource Accent900Color}" />
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="{StaticResource AccentSoftColor}" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource Accent500Color}" />
+
+    <!-- ── 状态色 ── -->
+    <SolidColorBrush x:Key="SuccessBrush" Color="{StaticResource StateStableColor}" />
+    <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource StateWarningColor}" />
+    <SolidColorBrush x:Key="WarningSoftBrush" Color="{StaticResource WarningSoftColor}" />
+    <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource StateDangerColor}" />
+    <SolidColorBrush x:Key="DangerSoftBrush" Color="{StaticResource DangerSoftColor}" />
+    <SolidColorBrush x:Key="IdleBrush" Color="{StaticResource StateIdleColor}" />
+    <SolidColorBrush x:Key="InfoBrush" Color="{StaticResource StateInfoColor}" />
+
+    <!-- ── 侧边栏 ── -->
+    <SolidColorBrush x:Key="ShellBackgroundBrush" Color="{StaticResource ShellBackgroundColor}" />
+    <SolidColorBrush x:Key="ShellSurfaceAltBrush" Color="{StaticResource ShellSurfaceAltColor}" />
+    <SolidColorBrush x:Key="ShellBorderBrush" Color="{StaticResource ShellBorderColor}" />
+    <SolidColorBrush x:Key="ShellNavHoverBrush" Color="{StaticResource ShellNavHoverColor}" />
+    <SolidColorBrush x:Key="ShellNavSelectedBgBrush" Color="{StaticResource ShellNavSelectedBgColor}" />
+    <SolidColorBrush x:Key="ShellNavSelectedBorderBrush" Color="{StaticResource ShellNavSelectedBorderColor}" />
+    <SolidColorBrush x:Key="ShellTextBrush" Color="{StaticResource ShellTextColor}" />
+    <SolidColorBrush x:Key="ShellMutedTextBrush" Color="{StaticResource ShellMutedTextColor}" />
+    <SolidColorBrush x:Key="ShellAccentTextBrush" Color="{StaticResource ShellAccentTextColor}" />
+
+    <!-- ── 上下文分类色 ── -->
+    <SolidColorBrush x:Key="ContextDevelopmentBrush" Color="{StaticResource ContextDevelopmentColor}" />
+    <SolidColorBrush x:Key="ContextResearchBrush" Color="{StaticResource ContextResearchColor}" />
+    <SolidColorBrush x:Key="ContextWritingBrush" Color="{StaticResource ContextWritingColor}" />
+    <SolidColorBrush x:Key="ContextCommunicationBrush" Color="{StaticResource ContextCommunicationColor}" />
+    <SolidColorBrush x:Key="ContextBrowsingBrush" Color="{StaticResource ContextBrowsingColor}" />
+    <SolidColorBrush x:Key="ContextEntertainmentBrush" Color="{StaticResource ContextEntertainmentColor}" />
+    <SolidColorBrush x:Key="ContextProductivityBrush" Color="{StaticResource ContextProductivityColor}" />
+    <SolidColorBrush x:Key="ContextSystemBrush" Color="{StaticResource ContextSystemColor}" />
+    <SolidColorBrush x:Key="ContextOtherBrush" Color="{StaticResource ContextOtherColor}" />
+    <SolidColorBrush x:Key="ContextIdleBrush" Color="{StaticResource ContextIdleColor}" />
+
+    <!-- ── 热力图 ── -->
+    <SolidColorBrush x:Key="Heatmap0Brush" Color="{StaticResource Heatmap0Color}" />
+    <SolidColorBrush x:Key="Heatmap1Brush" Color="{StaticResource Heatmap1Color}" />
+    <SolidColorBrush x:Key="Heatmap2Brush" Color="{StaticResource Heatmap2Color}" />
+    <SolidColorBrush x:Key="Heatmap3Brush" Color="{StaticResource Heatmap3Color}" />
+    <SolidColorBrush x:Key="Heatmap4Brush" Color="{StaticResource Heatmap4Color}" />
+
+    <!-- ── 兼容旧 Key ── -->
+    <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />
+
+</ResourceDictionary>

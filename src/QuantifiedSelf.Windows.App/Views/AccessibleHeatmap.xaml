@@ -1,0 +1,96 @@
+<UserControl x:Class="QuantifiedSelf.Windows.App.Views.AccessibleHeatmap"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             AutomationProperties.HelpText="活动节奏热力图，每格为一小时的有效使用记录">
+    <UserControl.Resources>
+        <Style x:Key="HeatmapCellButtonStyle" TargetType="Button" BasedOn="{StaticResource VisibleFocusStyle}">
+            <Setter Property="MinWidth" Value="18" />
+            <Setter Property="Height" Value="18" />
+            <Setter Property="Margin" Value="2" />
+            <Setter Property="Padding" Value="0" />
+            <Setter Property="BorderBrush" Value="{DynamicResource BorderStrongBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Background" Value="{DynamicResource Heatmap0Brush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{StaticResource CellRadius}" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding IntensityLevel}" Value="1">
+                    <Setter Property="Background" Value="{DynamicResource Heatmap1Brush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IntensityLevel}" Value="2">
+                    <Setter Property="Background" Value="{DynamicResource Heatmap2Brush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IntensityLevel}" Value="3">
+                    <Setter Property="Background" Value="{DynamicResource Heatmap3Brush}" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding IntensityLevel}" Value="4">
+                    <Setter Property="Background" Value="{DynamicResource Heatmap4Brush}" />
+                </DataTrigger>
+                <Trigger Property="IsKeyboardFocused" Value="True">
+                    <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                    <Setter Property="BorderThickness" Value="2" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+    </UserControl.Resources>
+
+    <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+        <Grid MinWidth="420">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="56" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <ItemsControl Grid.Row="0" Grid.Column="1" ItemsSource="{Binding DateLabels}" Margin="0,0,0,4">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><UniformGrid Columns="7" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" Style="{StaticResource MicroStyle}" HorizontalAlignment="Center" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <ItemsControl Grid.Row="1" Grid.Column="0" ItemsSource="{Binding HourLabels}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><UniformGrid Rows="24" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <TextBlock Text="{Binding}" Style="{StaticResource MicroStyle}"
+                                   Foreground="{DynamicResource TextMutedBrush}" VerticalAlignment="Center" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <ItemsControl x:Name="CellsItemsControl" Grid.Row="1" Grid.Column="1" ItemsSource="{Binding Cells}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate><UniformGrid Columns="7" /></ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Style="{StaticResource HeatmapCellButtonStyle}"
+                                ToolTip="{Binding TooltipText}"
+                                AutomationProperties.Name="{Binding AutomationName}"
+                                Command="{Binding DataContext.NavigateToTimelineCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"
+                                PreviewKeyDown="HeatmapCell_PreviewKeyDown" />
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+        </Grid>
+    </ScrollViewer>
+</UserControl>

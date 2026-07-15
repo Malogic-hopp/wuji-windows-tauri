@@ -20,8 +20,8 @@
         <Border Style="{DynamicResource CardBorderStyle}">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Left">
-                    <TextBlock Text="Recent Samples" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="采样明细" Style="{StaticResource TitleSmallStyle}" />
+                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource TextMutedBrush}" />
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -38,7 +38,7 @@
         <Border Grid.Row="1" Style="{DynamicResource CardBorderStyle}">
             <Grid>
                 <TextBlock Text="{Binding EmptyStateText}"
-                           Foreground="{DynamicResource MutedTextBrush}"
+                           Foreground="{DynamicResource TextMutedBrush}"
                            TextWrapping="Wrap"
                            Visibility="{Binding Samples.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
 
@@ -56,13 +56,13 @@
                           VirtualizingStackPanel.VirtualizationMode="Recycling"
                           Visibility="{Binding Samples.Count, Converter={StaticResource CountToVisibilityConverter}}">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Local time" Binding="{Binding LocalTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" Width="170" />
-                        <DataGridTextColumn Header="Display name" Binding="{Binding DisplayName}" Width="170" />
-                        <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="170" />
-                        <DataGridTextColumn Header="Window title" Binding="{Binding WindowTitleText}" Width="*" />
-                        <DataGridTextColumn Header="Idle seconds" Binding="{Binding IdleSeconds}" Width="110" />
-                        <DataGridTextColumn Header="Activity" Binding="{Binding ActivityState}" Width="100" />
-                        <DataGridTextColumn Header="Sample id" Binding="{Binding SampleId}" Width="90" />
+                        <DataGridTextColumn Header="本地时间" Binding="{Binding LocalTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" Width="170" />
+                        <DataGridTextColumn Header="应用名称" Binding="{Binding DisplayName}" Width="170" />
+                        <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="170" />
+                        <DataGridTextColumn Header="窗口标题" Binding="{Binding WindowTitleText}" Width="*" />
+                        <DataGridTextColumn Header="空闲秒数" Binding="{Binding IdleSeconds}" Width="110" />
+                        <DataGridTextColumn Header="活动状态" Binding="{Binding ActivityState}" Width="100" />
+                        <DataGridTextColumn Header="采样标识" Binding="{Binding SampleId}" Width="90" />
                     </DataGrid.Columns>
                 </DataGrid>
             </Grid>

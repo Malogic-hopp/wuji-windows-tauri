@@ -1,6 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
-using QuantifiedSelf.Windows.App.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Options;

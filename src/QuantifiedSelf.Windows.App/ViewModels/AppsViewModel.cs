@@ -49,7 +49,10 @@ public sealed class AppsViewModel : ObservableObject
     public bool HasLoadError
     {
         get => _hasLoadError;
-        private set => SetProperty(ref _hasLoadError, value);
+        private set
+        {
+            if (SetProperty(ref _hasLoadError, value)) OnPropertyChanged(nameof(State));
+        }
     }
 
     public bool IsLoading
@@ -60,9 +63,12 @@ public sealed class AppsViewModel : ObservableObject
             if (SetProperty(ref _isLoading, value))
             {
                 RefreshCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(State));
             }
         }
     }
+
+    public PageState State => IsLoading ? PageState.Loading : HasLoadError ? PageState.Error : Apps.Count > 0 ? PageState.Ready : PageState.Empty;
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -83,6 +89,7 @@ public sealed class AppsViewModel : ObservableObject
                 ? "No app usage found for today."
                 : $"Showing top {Apps.Count} apps for today, ranked by active duration.";
             EmptyStateText = "暂无今日应用使用记录。Agent 运行并写入 app_sessions 后会显示在这里。";
+            OnPropertyChanged(nameof(State));
         }
         catch (Exception ex)
         {

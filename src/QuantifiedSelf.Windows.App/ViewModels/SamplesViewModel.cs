@@ -65,7 +65,10 @@ public sealed class SamplesViewModel : ObservableObject
     public bool HasLoadError
     {
         get => _hasLoadError;
-        private set => SetProperty(ref _hasLoadError, value);
+        private set
+        {
+            if (SetProperty(ref _hasLoadError, value)) OnPropertyChanged(nameof(State));
+        }
     }
 
     public bool IsLoading
@@ -76,9 +79,12 @@ public sealed class SamplesViewModel : ObservableObject
             if (SetProperty(ref _isLoading, value))
             {
                 RefreshCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(State));
             }
         }
     }
+
+    public PageState State => IsLoading ? PageState.Loading : HasLoadError ? PageState.Error : Samples.Count > 0 ? PageState.Ready : PageState.Empty;
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -127,5 +133,6 @@ public sealed class SamplesViewModel : ObservableObject
             ? "No samples found."
             : $"Showing {Samples.Count} of {_allSamples.Count} recent samples.";
         EmptyStateText = "暂无采样记录。Agent 运行并写入 foreground_samples 后会显示在这里。";
+        OnPropertyChanged(nameof(State));
     }
 }

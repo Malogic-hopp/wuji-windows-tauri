@@ -2,10 +2,9 @@ using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Threading;
 using System.Windows.Input;
-using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using QuantifiedSelf.Windows.App.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
@@ -20,13 +19,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
 {
     public static IReadOnlyList<string> NavigationPages { get; } =
     [
-        "Dashboard",
-        "Apps",
-        "Sessions",
-        "Samples",
-        "Diagnostics",
+        "Today",
+        "Timeline",
         "Insights",
-        "Settings"
+        "Trends",
+        "Privacy",
+        "Settings",
+        "Diagnostics"
     ];
 
     private readonly AgentProcessService _processService;
@@ -44,8 +43,12 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly SettingsService _settingsService;
     private readonly DashboardViewModel _dashboardViewModel;
     private readonly InsightsViewModel _insightsViewModel;
-    private readonly DispatcherTimer _refreshTimer;
-    private readonly DispatcherTimer _statusPollTimer;
+    private readonly TodayPageViewModel _todayPageViewModel;
+    private readonly TimelinePageViewModel _timelinePageViewModel;
+    private readonly TrendsPageViewModel _trendsPageViewModel;
+    private readonly PrivacyPageViewModel _privacyPageViewModel;
+    private readonly IRefreshScheduler _refreshScheduler;
+    private readonly IRefreshScheduler _statusPollScheduler;
     private CancellationTokenSource? _statusPollCts;
     private long _latestAppliedStatusSequence;
     private AgentCommandAvailability _commandAvailability = AgentCommandAvailability.FromStatus(new AgentStatusSnapshot());
@@ -56,14 +59,20 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private bool _suppressPagePersistence;
     private bool _isInitialized;
     internal bool AutoStartAgentWasTriggered { get; set; }
+    private readonly NavigationItemViewModel[] _primaryNavigationItems;
+    private readonly NavigationItemViewModel[] _secondaryNavigationItems;
 
     private string _agentStatusText = "Not running";
     private string _lastHeartbeatText = "-";
     private string _lastSampleText = "-";
     private bool _isBusy;
     private bool _isMaintenance;
-    private string _currentPage = "Dashboard";
+    private string _currentPage = "Today";
     private int _selectedTabIndex;
+    private object? _currentPageContent;
+    private string _currentPageTitle = "今天";
+    private string _currentPageSubtitle = "回顾今天发生了什么，先看结论，再看证据。";
+    private string _currentDateText = DateTime.Now.ToString("M月d日");
     private string _runtimeStateJson = "{}";
     private string _healthStateJson = "{}";
     private string _controlCommandJson = "{}";
@@ -105,7 +114,9 @@ public sealed partial class MainWindowViewModel : ObservableObject
         InsightsViewModel insightsViewModel,
         AgentIpcStatusService? ipcStatusService = null,
         RefreshService? refreshService = null,
-        ITrayStateSink? trayStateSink = null)
+        ITrayStateSink? trayStateSink = null,
+        IRefreshScheduler? refreshScheduler = null,
+        IRefreshScheduler? statusPollScheduler = null)
     {
         _processService = processService;
         _controlService = controlService;
@@ -122,26 +133,39 @@ public sealed partial class MainWindowViewModel : ObservableObject
         _settingsService = settingsService;
         _dashboardViewModel = dashboardViewModel;
         _insightsViewModel = insightsViewModel;
+        _todayPageViewModel = new TodayPageViewModel(_dashboardViewModel);
+        _timelinePageViewModel = new TimelinePageViewModel(_appsViewModel, _sessionsViewModel, _samplesViewModel);
+        _trendsPageViewModel = new TrendsPageViewModel(_dashboardViewModel);
+        _privacyPageViewModel = new PrivacyPageViewModel(_settingsViewModel);
+        _refreshScheduler = refreshScheduler ?? new DispatcherRefreshScheduler();
+        _statusPollScheduler = statusPollScheduler ?? new DispatcherRefreshScheduler();
         _settingsViewModel.AppSettingsSaved += HandleAppSettingsSaved;
+
+        _primaryNavigationItems =
+        [
+            new NavigationItemViewModel("Today", "今天", "查看今日活动、节奏和应用分布。"),
+            new NavigationItemViewModel("Timeline", "时间线", "按应用、会话和原始记录回放。"),
+            new NavigationItemViewModel("Insights", "洞察", "基于应用会话和活跃记录的可追溯分析。"),
+            new NavigationItemViewModel("Trends", "趋势", "查看活跃趋势与活动热力图。")
+        ];
+
+        _secondaryNavigationItems =
+        [
+            new NavigationItemViewModel("Privacy", "数据与隐私", "本机存储、排除规则与保留周期。"),
+            new NavigationItemViewModel("Settings", "设置", "采样、启动、通知和外观。")
+        ];
 
         StartAgentCommand = new AsyncRelayCommand(StartAgentAsync, () => !IsBusy && _commandAvailability.CanStart);
         StopAgentCommand = new AsyncRelayCommand(StopAgentAsync, () => !IsBusy && _commandAvailability.CanStop);
         PauseCollectionCommand = new AsyncRelayCommand(PauseCollectionAsync, () => !IsBusy && _commandAvailability.CanPause);
         ResumeCollectionCommand = new AsyncRelayCommand(ResumeCollectionAsync, () => !IsBusy && _commandAvailability.CanResume);
         RefreshCommand = new AsyncRelayCommand(RefreshAsync, () => !IsBusy);
+        PrimaryAgentActionCommand = new AsyncRelayCommand(ExecutePrimaryAgentActionAsync, CanExecutePrimaryAgentAction);
+        NavigateCommand = new RelayCommand<string?>(NavigateToPage);
+        NavigateToTimelineCommand = new RelayCommand<HeatmapCellViewModel?>(NavigateToTimeline);
         OpenSettingsCommand = new RelayCommand(() => SelectedTabIndex = GetPageIndex("Settings"));
-
-        _refreshTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(15)
-        };
-        _refreshTimer.Tick += async (_, _) => await RefreshAsync();
-
-        _statusPollTimer = new DispatcherTimer
-        {
-            Interval = TimeSpan.FromSeconds(2)
-        };
-        _statusPollTimer.Tick += async (_, _) => await RefreshStatusOnlyAsync();
+        OpenDiagnosticsCommand = new RelayCommand(() => SelectedTabIndex = GetPageIndex("Diagnostics"));
+        UpdatePagePresentation();
     }
 
     public IAsyncRelayCommand StartAgentCommand { get; }
@@ -154,7 +178,19 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     public IAsyncRelayCommand RefreshCommand { get; }
 
+    public IAsyncRelayCommand PrimaryAgentActionCommand { get; }
+
+    public ICommand NavigateCommand { get; }
+
+    public IRelayCommand<HeatmapCellViewModel?> NavigateToTimelineCommand { get; }
+
     public ICommand OpenSettingsCommand { get; }
+
+    public ICommand OpenDiagnosticsCommand { get; }
+
+    public IReadOnlyList<NavigationItemViewModel> PrimaryNavigationItems => _primaryNavigationItems;
+
+    public IReadOnlyList<NavigationItemViewModel> SecondaryNavigationItems => _secondaryNavigationItems;
 
     public ObservableCollection<string> Messages { get; } = new();
 
@@ -173,6 +209,14 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public DashboardViewModel DashboardViewModel => _dashboardViewModel;
 
     public InsightsViewModel InsightsViewModel => _insightsViewModel;
+
+    public TodayPageViewModel TodayPageViewModel => _todayPageViewModel;
+
+    public TimelinePageViewModel TimelinePageViewModel => _timelinePageViewModel;
+
+    public TrendsPageViewModel TrendsPageViewModel => _trendsPageViewModel;
+
+    public PrivacyPageViewModel PrivacyPageViewModel => _privacyPageViewModel;
 
     internal ITrayStateSink? TrayStateSink
     {
@@ -210,6 +254,13 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _agentStatusText, value);
     }
 
+    private string _agentStatusDotBrushKey = "AccentBrush";
+    public string AgentStatusDotBrushKey
+    {
+        get => _agentStatusDotBrushKey;
+        private set => SetProperty(ref _agentStatusDotBrushKey, value);
+    }
+
     public string LastHeartbeatText
     {
         get => _lastHeartbeatText;
@@ -234,6 +285,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
                 (PauseCollectionCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
                 (ResumeCollectionCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
                 (RefreshCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
+                (PrimaryAgentActionCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(PrimaryAgentActionText));
             }
         }
     }
@@ -241,7 +294,37 @@ public sealed partial class MainWindowViewModel : ObservableObject
     public string CurrentPage
     {
         get => _currentPage;
-        private set => SetProperty(ref _currentPage, value);
+        private set
+        {
+            if (SetProperty(ref _currentPage, value))
+            {
+                UpdatePagePresentation();
+            }
+        }
+    }
+
+    public string CurrentPageTitle
+    {
+        get => _currentPageTitle;
+        private set => SetProperty(ref _currentPageTitle, value);
+    }
+
+    public string CurrentPageSubtitle
+    {
+        get => _currentPageSubtitle;
+        private set => SetProperty(ref _currentPageSubtitle, value);
+    }
+
+    public string CurrentDateText
+    {
+        get => _currentDateText;
+        private set => SetProperty(ref _currentDateText, value);
+    }
+
+    public object? CurrentPageContent
+    {
+        get => _currentPageContent;
+        private set => SetProperty(ref _currentPageContent, value);
     }
 
     public int SelectedTabIndex
@@ -376,6 +459,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         private set => SetProperty(ref _statusMessage, value);
     }
 
+    public string PrimaryAgentActionText => GetPrimaryAgentActionText(GetPrimaryAgentActionKind());
+
     /// <summary>
     /// Diagnostics display: current login startup status.
     /// Values: "Enabled", "Disabled", "Mismatch", "Error", "Unavailable", or "Unknown".
@@ -434,9 +519,10 @@ public sealed partial class MainWindowViewModel : ObservableObject
         SelectedTabIndex = GetPageIndex(_appSettings.LastSelectedPage);
         _suppressPagePersistence = false;
 
-        _refreshTimer.Start();
-        _statusPollTimer.Start();
+        _refreshScheduler.Start(TimeSpan.FromSeconds(Math.Max(5, _appSettings.RefreshIntervalSeconds)), _ => RefreshAsync());
+        _statusPollScheduler.Start(TimeSpan.FromSeconds(2), _ => RefreshStatusOnlyAsync());
 
+        UpdatePagePresentation();
         await RefreshAsync(cancellationToken);
 
         // Auto-start Agent if configured and allowed — same guard as tray/manual commands.
@@ -481,7 +567,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
     internal void StopStatusPolling()
     {
-        _statusPollTimer.Stop();
+        _statusPollScheduler.Stop();
         _statusPollCts?.Cancel();
         _statusPollCts?.Dispose();
         _statusPollCts = null;
@@ -685,23 +771,21 @@ public sealed partial class MainWindowViewModel : ObservableObject
 
         switch (CurrentPage)
         {
-            case "Dashboard":
+            case "Today":
                 await RefreshDashboardAsync(status, cancellationToken);
                 break;
-            case "Apps":
-                await AppsViewModel.LoadAsync(cancellationToken);
-                break;
-            case "Sessions":
-                await SessionsViewModel.LoadAsync(cancellationToken);
-                break;
-            case "Samples":
-                await SamplesViewModel.LoadAsync(cancellationToken);
-                break;
-            case "Diagnostics":
-                await RefreshDiagnosticsAsync(status, cancellationToken);
+            case "Timeline":
+                await _timelinePageViewModel.LoadAsync(cancellationToken);
                 break;
             case "Insights":
                 await _insightsViewModel.LoadAsync(cancellationToken);
+                break;
+            case "Trends":
+                await RefreshDashboardAsync(status, cancellationToken);
+                break;
+            case "Privacy":
+                await _privacyPageViewModel.RefreshAsync(cancellationToken);
+                ApplyAppSettings(_settingsViewModel.AppSettings);
                 break;
             case "Settings":
                 if (!_settingsViewModel.IsDirty)
@@ -709,6 +793,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
                     await _settingsViewModel.LoadAsync(cancellationToken);
                     ApplyAppSettings(_settingsViewModel.AppSettings);
                 }
+                break;
+            case "Diagnostics":
+                await RefreshDiagnosticsAsync(status, cancellationToken);
+                break;
+            default:
                 break;
         }
     }
@@ -852,6 +941,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             ((AsyncRelayCommand)StopAgentCommand).NotifyCanExecuteChanged();
             ((AsyncRelayCommand)PauseCollectionCommand).NotifyCanExecuteChanged();
             ((AsyncRelayCommand)ResumeCollectionCommand).NotifyCanExecuteChanged();
+            (PrimaryAgentActionCommand as AsyncRelayCommand)?.NotifyCanExecuteChanged();
+            OnPropertyChanged(nameof(PrimaryAgentActionText));
         }
 
         // Dispatch same status to Settings so buttons stay in sync
@@ -865,7 +956,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
             _trayStateSink.UpdateState(trayState);
         }
 
-        AgentStatusText = status.StatusText;
+        AgentStatusText = GetAgentStatusBadgeText(status);
+        AgentStatusDotBrushKey = GetAgentStatusDotBrushKey(status.ActualState);
         LastHeartbeatText = status.LastHeartbeatText;
         LastSampleText = status.LastSampleText;
         AgentProcessText = processInfo is null
@@ -878,7 +970,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
         ControlCommandJson = string.IsNullOrWhiteSpace(status.CurrentControlCommandText)
             ? "{}"
             : status.CurrentControlCommandText;
-        StatusMessage = status.IsStale ? "Agent heartbeat is stale" : status.StatusText;
+        StatusMessage = GetAgentStatusDetailText(status);
     }
 
     private void RefreshMessages(AgentStatusSnapshot status)
@@ -915,7 +1007,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         ArgumentNullException.ThrowIfNull(settings);
         _appSettings = CloneAppSettings(settings);
-        _refreshTimer.Interval = TimeSpan.FromSeconds(Math.Max(5, settings.RefreshIntervalSeconds));
+        _refreshScheduler.UpdateInterval(TimeSpan.FromSeconds(Math.Max(5, settings.RefreshIntervalSeconds)));
     }
 
     private static AppSettings CloneAppSettings(AppSettings settings)
@@ -1038,7 +1130,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
     {
         return index >= 0 && index < NavigationPages.Count
             ? NavigationPages[index]
-            : "Dashboard";
+            : "Today";
     }
 
     private static int GetPageIndex(string? page)
@@ -1048,6 +1140,7 @@ public sealed partial class MainWindowViewModel : ObservableObject
             return 0;
         }
 
+        page = NormalizePageKey(page);
         for (var index = 0; index < NavigationPages.Count; index++)
         {
             if (string.Equals(NavigationPages[index], page, StringComparison.OrdinalIgnoreCase))
@@ -1057,6 +1150,218 @@ public sealed partial class MainWindowViewModel : ObservableObject
         }
 
         return 0;
+    }
+
+    private static string NormalizePageKey(string page)
+    {
+        return page.Trim() switch
+        {
+            "Dashboard" => "Today",
+            "Apps" or "Sessions" or "Samples" => "Timeline",
+            "DataPrivacy" or "Data & Privacy" => "Privacy",
+            _ => page.Trim()
+        };
+    }
+
+    private bool CanExecutePrimaryAgentAction()
+    {
+        return !IsBusy;
+    }
+
+    private async Task ExecutePrimaryAgentActionAsync()
+    {
+        switch (GetPrimaryAgentActionKind())
+        {
+            case PrimaryAgentActionKind.Start:
+                await StartAgentAsync();
+                break;
+            case PrimaryAgentActionKind.Resume:
+                await ResumeCollectionAsync();
+                break;
+            case PrimaryAgentActionKind.Pause:
+                await PauseCollectionAsync();
+                break;
+            case PrimaryAgentActionKind.Stop:
+                await StopAgentAsync();
+                break;
+            default:
+                await RefreshAsync();
+                break;
+        }
+    }
+
+    private PrimaryAgentActionKind GetPrimaryAgentActionKind()
+    {
+        if (_commandAvailability.CanStart)
+        {
+            return PrimaryAgentActionKind.Start;
+        }
+
+        if (_commandAvailability.CanResume)
+        {
+            return PrimaryAgentActionKind.Resume;
+        }
+
+        if (_commandAvailability.CanPause)
+        {
+            return PrimaryAgentActionKind.Pause;
+        }
+
+        if (_commandAvailability.CanStop)
+        {
+            return PrimaryAgentActionKind.Stop;
+        }
+
+        return PrimaryAgentActionKind.Refresh;
+    }
+
+    private static string GetPrimaryAgentActionText(PrimaryAgentActionKind kind)
+    {
+        return kind switch
+        {
+            PrimaryAgentActionKind.Start => "开始记录",
+            PrimaryAgentActionKind.Resume => "恢复记录",
+            PrimaryAgentActionKind.Pause => "暂停记录",
+            PrimaryAgentActionKind.Stop => "停止服务",
+            _ => "刷新状态"
+        };
+    }
+
+    private static string GetAgentStatusBadgeText(AgentStatusSnapshot status)
+    {
+        return status.ActualState switch
+        {
+            AgentActualState.NotRunning or AgentActualState.Stopped => "未运行",
+            AgentActualState.Starting => "正在启动",
+            AgentActualState.Running => "正在记录",
+            AgentActualState.Pausing => "正在暂停",
+            AgentActualState.Paused => "已暂停",
+            AgentActualState.Resuming => "正在恢复",
+            AgentActualState.Stopping => "正在停止",
+            AgentActualState.Stale => "记录超时",
+            AgentActualState.Error => "状态异常",
+            AgentActualState.Maintenance => "维护中",
+            _ => status.StatusText
+        };
+    }
+
+    private static string GetAgentStatusDotBrushKey(AgentActualState state)
+    {
+        return state switch
+        {
+            AgentActualState.Running => "AccentBrush",
+            AgentActualState.Starting => "AccentBrush",
+            AgentActualState.Resuming => "AccentBrush",
+            AgentActualState.Paused => "WarningBrush",
+            AgentActualState.Pausing => "WarningBrush",
+            AgentActualState.Stopping => "WarningBrush",
+            AgentActualState.Maintenance => "WarningBrush",
+            AgentActualState.Stale => "WarningBrush",
+            AgentActualState.Error => "DangerBrush",
+            AgentActualState.NotRunning or AgentActualState.Stopped => "IdleBrush",
+            _ => "IdleBrush"
+        };
+    }
+
+    private static string GetAgentStatusDetailText(AgentStatusSnapshot status)
+    {
+        if (status.IsStale)
+        {
+            return "最近心跳已超时，建议查看运行诊断。";
+        }
+
+        return status.ActualState switch
+        {
+            AgentActualState.NotRunning or AgentActualState.Stopped => "后台记录未运行。",
+            AgentActualState.Starting => "后台记录正在启动。",
+            AgentActualState.Running => "后台正在记录活动。",
+            AgentActualState.Pausing => "正在暂停记录。",
+            AgentActualState.Paused => "记录已暂停。",
+            AgentActualState.Resuming => "正在恢复记录。",
+            AgentActualState.Stopping => "正在停止后台服务。",
+            AgentActualState.Error => "后台状态异常，建议查看运行诊断。",
+            AgentActualState.Maintenance => "Agent 正在执行维护任务。",
+            _ => status.StatusText
+        };
+    }
+
+    private enum PrimaryAgentActionKind
+    {
+        Start,
+        Resume,
+        Pause,
+        Stop,
+        Refresh
+    }
+
+    private void NavigateToPage(string? pageKey)
+    {
+        var index = GetPageIndex(pageKey);
+        if (SelectedTabIndex == index)
+        {
+            UpdatePagePresentation();
+            return;
+        }
+
+        SelectedTabIndex = index;
+    }
+
+    private void NavigateToTimeline(HeatmapCellViewModel? cell)
+    {
+        if (cell is null)
+        {
+            return;
+        }
+
+        _timelinePageViewModel.NavigateTo(cell.Date, cell.Hour);
+        SelectedTabIndex = GetPageIndex("Timeline");
+    }
+
+    private void UpdatePagePresentation()
+    {
+        var page = CurrentPage;
+        CurrentPageContent = page switch
+        {
+            "Today" => _dashboardViewModel,
+            "Timeline" => _timelinePageViewModel,
+            "Insights" => _insightsViewModel,
+            "Trends" => _trendsPageViewModel,
+            "Privacy" => _privacyPageViewModel,
+            "Settings" => _settingsViewModel,
+            "Diagnostics" => this,
+            _ => _dashboardViewModel
+        };
+
+        CurrentDateText = DateTime.Now.ToString("M月d日");
+
+        (var title, var subtitle) = page switch
+        {
+            "Today" => ("今天", "先看结论，再回到证据和时间线。"),
+            "Timeline" => ("时间线", "按应用、会话与原始采样回放一天。"),
+            "Insights" => ("洞察", "基于应用会话和活跃记录的可追溯分析。"),
+            "Trends" => ("趋势", "观察最近 7 天、30 天和 12 周的变化。"),
+            "Privacy" => ("数据与隐私", "本机存储、排除规则和保留周期都在这里。"),
+            "Settings" => ("设置", "采样、启动、通知与外观配置。"),
+            "Diagnostics" => ("运行诊断", "查看状态文件、健康检查和最近事件。"),
+            _ => ("WUJI", "查看今天的时间分配与工作节奏。")
+        };
+
+        CurrentPageTitle = title;
+        CurrentPageSubtitle = subtitle;
+        UpdateNavigationSelection(page);
+    }
+
+    private void UpdateNavigationSelection(string page)
+    {
+        foreach (var item in _primaryNavigationItems)
+        {
+            item.IsSelected = string.Equals(item.Key, page, StringComparison.OrdinalIgnoreCase);
+        }
+
+        foreach (var item in _secondaryNavigationItems)
+        {
+            item.IsSelected = string.Equals(item.Key, page, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     private async Task PersistAppSettingsAsync()

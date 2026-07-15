@@ -1,3 +1,4 @@
+using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 using QuantifiedSelf.Windows.App.ViewModels;

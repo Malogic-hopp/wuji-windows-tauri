@@ -1,7 +1,7 @@
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Runtime;
 
-namespace QuantifiedSelf.Windows.App.Models;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Models;
 
 public sealed class AgentStatusSnapshot
 {

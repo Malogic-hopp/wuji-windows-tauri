@@ -20,8 +20,8 @@
         <Border Style="{DynamicResource CardBorderStyle}">
             <DockPanel LastChildFill="False">
                 <StackPanel DockPanel.Dock="Left">
-                    <TextBlock Text="Apps Today" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="应用汇总" Style="{StaticResource TitleSmallStyle}" />
+                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource TextMutedBrush}" />
                 </StackPanel>
 
                 <Button Content="Refresh"
@@ -34,7 +34,7 @@
         <Border Grid.Row="1" Style="{DynamicResource CardBorderStyle}">
             <Grid>
                 <TextBlock Text="{Binding EmptyStateText}"
-                           Foreground="{DynamicResource MutedTextBrush}"
+                           Foreground="{DynamicResource TextMutedBrush}"
                            TextWrapping="Wrap"
                            Visibility="{Binding Apps.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
 
@@ -52,15 +52,15 @@
                           VirtualizingStackPanel.VirtualizationMode="Recycling"
                           Visibility="{Binding Apps.Count, Converter={StaticResource CountToVisibilityConverter}}">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Rank" Binding="{Binding Rank}" Width="70" />
-                        <DataGridTextColumn Header="Display name" Binding="{Binding DisplayName}" Width="180" />
-                        <DataGridTextColumn Header="Process name" Binding="{Binding ProcessName}" Width="220" />
-                        <DataGridTextColumn Header="Active" Binding="{Binding ActiveDurationText}" Width="110" />
-                        <DataGridTextColumn Header="Total" Binding="{Binding TotalDurationText}" Width="110" />
-                        <DataGridTextColumn Header="Idle" Binding="{Binding IdleDurationText}" Width="110" />
-                        <DataGridTextColumn Header="Unknown" Binding="{Binding UnknownDurationText}" Width="110" />
-                        <DataGridTextColumn Header="Sessions" Binding="{Binding SessionCount}" Width="90" />
-                        <DataGridTextColumn Header="Last used local time" Binding="{Binding LastUsedLocalTimeText}" Width="170" />
+                        <DataGridTextColumn Header="排名" Binding="{Binding Rank}" Width="70" />
+                        <DataGridTextColumn Header="应用名称" Binding="{Binding DisplayName}" Width="180" />
+                        <DataGridTextColumn Header="进程名称" Binding="{Binding ProcessName}" Width="220" />
+                        <DataGridTextColumn Header="活跃时长" Binding="{Binding ActiveDurationText}" Width="110" />
+                        <DataGridTextColumn Header="记录时长" Binding="{Binding TotalDurationText}" Width="110" />
+                        <DataGridTextColumn Header="空闲时长" Binding="{Binding IdleDurationText}" Width="110" />
+                        <DataGridTextColumn Header="未知时长" Binding="{Binding UnknownDurationText}" Width="110" />
+                        <DataGridTextColumn Header="会话数" Binding="{Binding SessionCount}" Width="90" />
+                        <DataGridTextColumn Header="最近使用时间" Binding="{Binding LastUsedLocalTimeText}" Width="170" />
                     </DataGrid.Columns>
                 </DataGrid>
             </Grid>

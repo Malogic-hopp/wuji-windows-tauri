@@ -3,53 +3,51 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:ui="clr-namespace:QuantifiedSelf.Windows.App.UI"
              mc:Ignorable="d"
              d:DesignHeight="640"
              d:DesignWidth="1080">
     <UserControl.Resources>
-        <Style x:Key="SettingsSectionTitleStyle" TargetType="TextBlock">
-            <Setter Property="FontSize" Value="16" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
+        <Style x:Key="SettingsSectionTitleStyle" TargetType="TextBlock" BasedOn="{StaticResource TitleSmallStyle}" />
 
         <Style x:Key="SettingsLabelStyle" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
             <Setter Property="Margin" Value="0,10,0,0" />
         </Style>
 
         <Style x:Key="SettingsValueStyle" TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Foreground" Value="{DynamicResource TextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
             <Setter Property="Margin" Value="0,4,0,0" />
             <Setter Property="FontFamily" Value="Consolas" />
         </Style>
 
         <Style x:Key="ValidationStatusTextStyle" TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding HasAgentOptionsValidationError}" Value="True">
-                    <Setter Property="Foreground" Value="#B42318" />
+                    <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
 
         <Style x:Key="SaveStatusTextStyle" TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding HasAgentOptionsSaveError}" Value="True">
-                    <Setter Property="Foreground" Value="#B42318" />
+                    <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
 
         <Style x:Key="ReloadStatusTextStyle" TargetType="TextBlock">
             <Setter Property="TextWrapping" Value="Wrap" />
-            <Setter Property="Foreground" Value="{DynamicResource MutedTextBrush}" />
+            <Setter Property="Foreground" Value="{DynamicResource TextMutedBrush}" />
             <Style.Triggers>
                 <DataTrigger Binding="{Binding HasAgentOptionsReloadError}" Value="True">
-                    <Setter Property="Foreground" Value="#B42318" />
+                    <Setter Property="Foreground" Value="{DynamicResource DangerBrush}" />
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -64,25 +62,26 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
+            <!-- Page Header -->
             <Border Style="{DynamicResource CardBorderStyle}">
                 <DockPanel LastChildFill="False">
                     <StackPanel DockPanel.Dock="Left">
-                        <TextBlock Text="Settings" Style="{StaticResource SettingsSectionTitleStyle}" />
-                        <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
-                        <TextBlock Text="{Binding EmptyStateText}" Margin="0,6,0,0" Foreground="{DynamicResource MutedTextBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="设置" Style="{StaticResource SettingsSectionTitleStyle}" />
+                        <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" />
+                        <TextBlock Text="{Binding EmptyStateText}" Margin="0,6,0,0" Foreground="{DynamicResource TextMutedBrush}" TextWrapping="Wrap" />
                     </StackPanel>
 
                     <WrapPanel DockPanel.Dock="Right" HorizontalAlignment="Right" VerticalAlignment="Center">
-                        <Button Content="Refresh"
+                        <Button Content="刷新"
                                 Command="{Binding RefreshCommand}"
                                 Style="{DynamicResource SecondaryButtonStyle}" />
-                        <Button Content="Open Data Folder"
+                        <Button Content="打开数据目录"
                                 Command="{Binding OpenDataFolderCommand}"
                                 Style="{DynamicResource SecondaryButtonStyle}" />
-                        <Button Content="Open Logs Folder"
+                        <Button Content="打开日志目录"
                                 Command="{Binding OpenLogsFolderCommand}"
                                 Style="{DynamicResource SecondaryButtonStyle}" />
-                        <Button Content="Open Config Folder"
+                        <Button Content="打开配置目录"
                                 Command="{Binding OpenConfigFolderCommand}"
                                 Style="{DynamicResource SecondaryButtonStyle}" />
                     </WrapPanel>
@@ -90,17 +89,46 @@
             </Border>
 
             <Grid Grid.Row="1" Margin="0,0,0,16">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
 
-                <Border Style="{DynamicResource CardBorderStyle}" Margin="0,0,12,0">
+                <!-- 应用设置 -->
+                <Border Margin="0,0,12,0">
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Path=(ui:AdaptiveLayout.Mode), RelativeSource={RelativeSource AncestorType=Window}}" Value="Compact">
+                                    <Setter Property="Grid.ColumnSpan" Value="2" />
+                                    <Setter Property="Margin" Value="0,0,0,20" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <StackPanel>
-                        <TextBlock Text="App Settings" Style="{StaticResource SettingsSectionTitleStyle}" />
+                        <TextBlock Text="应用设置" Style="{StaticResource SettingsSectionTitleStyle}" />
 
-                        <TextBlock Text="app-settings.json path" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBlock Text="配置文件路径" Style="{StaticResource SettingsLabelStyle}" />
                         <TextBlock Text="{Binding AppSettingsPathText}" Style="{StaticResource SettingsValueStyle}" />
+
+                        <TextBlock Text="外观主题" Style="{StaticResource SettingsLabelStyle}" Margin="0,16,0,0" />
+                        <ComboBox ItemsSource="{Binding Appearance.ThemeOptions}"
+                                  DisplayMemberPath="DisplayName"
+                                  SelectedValuePath="Value"
+                                  SelectedValue="{Binding Appearance.SelectedTheme, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                  Width="180"
+                                  HorizontalAlignment="Left"
+                                  Margin="0,6,0,0"
+                                  AutomationProperties.Name="外观主题" />
+                        <TextBlock Text="选择后立即预览；保存应用设置后将在下次启动继续使用。"
+                                   Style="{StaticResource CaptionStyle}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
+                                   Margin="0,4,0,0" />
 
                         <Grid Margin="0,12,0,0">
                             <Grid.RowDefinitions>
@@ -115,7 +143,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="refreshIntervalSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="刷新间隔（秒）" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
                             <TextBox Grid.Row="0" Grid.Column="1"
                                      Text="{Binding RefreshIntervalSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="140"
@@ -125,37 +153,39 @@
                             <TextBlock Grid.Row="1" Grid.Column="0" Text="WUJI 启动后自动启动 Agent" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <CheckBox Grid.Row="1" Grid.Column="1"
                                       IsChecked="{Binding AutoStartAgentWhenAppStarts, Mode=TwoWay}"
+                                      Style="{StaticResource ToggleSwitchStyle}"
                                       Margin="0,12,0,0"
                                       HorizontalAlignment="Left" />
-                            <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="1"
-                                       Text="WUJI App 启动后自动开始后台采集。"
+                            <TextBlock Grid.Row="1" Grid.Column="1"
+                                       Text="WUJI 启动后自动开始后台记录。"
                                        Margin="0,32,0,0"
-                                       Foreground="{DynamicResource MutedTextBrush}" />
+                                       Foreground="{DynamicResource TextMutedBrush}" />
 
                             <TextBlock Grid.Row="2" Grid.Column="0" Text="登录 Windows 后启动 WUJI" Style="{StaticResource SettingsLabelStyle}" Margin="0,16,12,0" />
                             <CheckBox Grid.Row="2" Grid.Column="1"
                                       IsChecked="{Binding StartAppOnWindowsLogin, Mode=TwoWay}"
+                                      Style="{StaticResource ToggleSwitchStyle}"
                                       Margin="0,18,0,0"
                                       HorizontalAlignment="Left" />
-                            <TextBlock Grid.Row="2" Grid.Column="1" Grid.ColumnSpan="1"
-                                       Text="登录后自动启动 WUJI App，之后可从托盘打开窗口。"
+                            <TextBlock Grid.Row="2" Grid.Column="1"
+                                       Text="登录后自动启动 WUJI，之后可从系统托盘打开窗口。"
                                        Margin="0,38,0,0"
-                                       Foreground="{DynamicResource MutedTextBrush}" />
+                                       Foreground="{DynamicResource TextMutedBrush}" />
 
                             <TextBlock Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="2"
                                        Text="{Binding StartupRegistrationStatusText, Mode=OneWay}"
                                        Margin="0,10,0,0"
-                                       Foreground="{DynamicResource MutedTextBrush}"
+                                       Foreground="{DynamicResource TextMutedBrush}"
                                        TextWrapping="Wrap" />
 
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="lastSelectedPage (read-only)" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="最后打开页面（只读）" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <TextBlock Grid.Row="4" Grid.Column="1"
                                        Text="{Binding LastSelectedPageText, Mode=OneWay}"
                                        Style="{StaticResource SettingsValueStyle}"
                                        Margin="0,4,0,0" />
                         </Grid>
 
-                        <Button Content="Save App Settings"
+                        <Button Content="保存应用设置"
                                 Command="{Binding SaveAppSettingsCommand}"
                                 Style="{DynamicResource SecondaryButtonStyle}"
                                 Margin="0,16,0,0"
@@ -163,16 +193,28 @@
 
                         <TextBlock Text="{Binding SaveStatusText}"
                                    Margin="0,10,0,0"
-                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
                                    TextWrapping="Wrap" />
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="1" Style="{DynamicResource CardBorderStyle}">
+                <!-- Agent 选项 -->
+                <Border Grid.Column="1">
+                    <Border.Style>
+                        <Style TargetType="Border" BasedOn="{StaticResource CardBorderStyle}">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Path=(ui:AdaptiveLayout.Mode), RelativeSource={RelativeSource AncestorType=Window}}" Value="Compact">
+                                    <Setter Property="Grid.Row" Value="1" />
+                                    <Setter Property="Grid.Column" Value="0" />
+                                    <Setter Property="Grid.ColumnSpan" Value="2" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
                     <StackPanel>
-                        <TextBlock Text="Agent Options" Style="{StaticResource SettingsSectionTitleStyle}" />
+                        <TextBlock Text="Agent 选项" Style="{StaticResource SettingsSectionTitleStyle}" />
 
-                        <TextBlock Text="windows-agent.json path" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBlock Text="配置文件路径" Style="{StaticResource SettingsLabelStyle}" />
                         <TextBlock Text="{Binding AgentOptionsPathText}" Style="{StaticResource SettingsValueStyle}" />
 
                         <Grid Margin="0,12,0,0">
@@ -188,35 +230,35 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="samplingIntervalSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="采样间隔（秒）" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
                             <TextBox Grid.Row="0" Grid.Column="1"
                                      Text="{Binding SamplingIntervalSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="140"
                                      HorizontalAlignment="Left"
                                      Margin="0,8,0,0" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="idleThresholdSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="空闲阈值（秒）" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <TextBox Grid.Row="1" Grid.Column="1"
                                      Text="{Binding IdleThresholdSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="140"
                                      HorizontalAlignment="Left"
                                      Margin="0,8,0,0" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="heartbeatIntervalSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="心跳间隔（秒）" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <TextBox Grid.Row="2" Grid.Column="1"
                                      Text="{Binding HeartbeatIntervalSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="140"
                                      HorizontalAlignment="Left"
                                      Margin="0,8,0,0" />
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="staleThresholdSeconds" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="过期阈值（秒）" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <TextBox Grid.Row="3" Grid.Column="1"
                                      Text="{Binding StaleThresholdSecondsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="140"
                                      HorizontalAlignment="Left"
                                      Margin="0,8,0,0" />
 
-                            <TextBlock Grid.Row="4" Grid.Column="0" Text="retentionDays" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="4" Grid.Column="0" Text="数据保留（天）" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <TextBox Grid.Row="4" Grid.Column="1"
                                      Text="{Binding RetentionDaysText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="140"
@@ -224,9 +266,9 @@
                                      Margin="0,8,0,0" />
                         </Grid>
 
-                        <TextBlock Text="Note: retentionDays configures how long data is kept. PruneData and ClearHistory are available under Data Management."
+                        <TextBlock Text='说明：数据保留天数控制数据保留时间。清理过期数据和清空全部记录请在"数据与隐私"页操作。'
                                    Margin="0,10,0,0"
-                                   Foreground="{DynamicResource MutedTextBrush}"
+                                   Foreground="{DynamicResource TextMutedBrush}"
                                    TextWrapping="Wrap" />
 
                         <Grid Margin="0,14,0,0">
@@ -241,32 +283,36 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Row="0" Grid.Column="0" Text="enableJsonlJournal" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
+                            <TextBlock Grid.Row="0" Grid.Column="0" Text="启用 JSONL 日志" Style="{StaticResource SettingsLabelStyle}" Margin="0,0,12,0" />
                             <CheckBox Grid.Row="0" Grid.Column="1"
                                       IsChecked="{Binding EnableJsonlJournal, Mode=TwoWay}"
+                                      Style="{StaticResource ToggleSwitchStyle}"
                                       HorizontalAlignment="Left"
                                       Margin="0,12,0,0" />
 
-                            <TextBlock Grid.Row="1" Grid.Column="0" Text="enableAgentEventJournal" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="1" Grid.Column="0" Text="启用 Agent 事件日志" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <CheckBox Grid.Row="1" Grid.Column="1"
                                       IsChecked="{Binding EnableAgentEventJournal, Mode=TwoWay}"
+                                      Style="{StaticResource ToggleSwitchStyle}"
                                       HorizontalAlignment="Left"
                                       Margin="0,12,0,0" />
 
-                            <TextBlock Grid.Row="2" Grid.Column="0" Text="enableSessionMerge" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="2" Grid.Column="0" Text="启用会话合并" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <CheckBox Grid.Row="2" Grid.Column="1"
                                       IsChecked="{Binding EnableSessionMerge, Mode=TwoWay}"
+                                      Style="{StaticResource ToggleSwitchStyle}"
                                       HorizontalAlignment="Left"
                                       Margin="0,12,0,0" />
 
-                            <TextBlock Grid.Row="3" Grid.Column="0" Text="maskWindowTitles" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
+                            <TextBlock Grid.Row="3" Grid.Column="0" Text="脱敏窗口标题" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,12,0" />
                             <CheckBox Grid.Row="3" Grid.Column="1"
                                       IsChecked="{Binding MaskWindowTitles, Mode=TwoWay}"
+                                      Style="{StaticResource ToggleSwitchStyle}"
                                       HorizontalAlignment="Left"
                                       Margin="0,12,0,0" />
                         </Grid>
 
-                        <TextBlock Text="excludedProcesses" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBlock Text="排除进程" Style="{StaticResource SettingsLabelStyle}" />
                         <TextBox Text="{Binding ExcludedProcessesText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  Margin="0,4,0,0"
                                  MinHeight="84"
@@ -276,7 +322,7 @@
                                  TextWrapping="Wrap"
                                  FontFamily="Consolas" />
 
-                        <TextBlock Text="excludedTitlePatterns" Style="{StaticResource SettingsLabelStyle}" />
+                        <TextBlock Text="排除标题模式" Style="{StaticResource SettingsLabelStyle}" />
                         <TextBox Text="{Binding ExcludedTitlePatternsText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                  Margin="0,4,0,0"
                                  MinHeight="84"
@@ -287,22 +333,22 @@
                                  FontFamily="Consolas" />
 
                         <WrapPanel Margin="0,16,0,0">
-                            <Button Content="Save Agent Options"
+                            <Button Content="保存 Agent 选项"
                                     Command="{Binding SaveAgentOptionsCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
-                            <Button Content="Save and Reload"
+                            <Button Content="保存并重新加载"
                                     Command="{Binding SaveAndReloadAgentOptionsCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
-                            <Button Content="Reload Agent Config"
+                            <Button Content="重新加载配置"
                                     Command="{Binding ReloadAgentConfigCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
-                            <Button Content="Restore Backup"
+                            <Button Content="恢复备份"
                                     Command="{Binding RestoreAgentOptionsBackupCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
-                            <Button Content="Validate Agent Options"
+                            <Button Content="验证 Agent 选项"
                                     Command="{Binding ValidateAgentOptionsCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
-                            <Button Content="Reset Agent Options"
+                            <Button Content="重置编辑器"
                                     Command="{Binding ResetAgentOptionsEditorCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
                         </WrapPanel>
@@ -320,20 +366,20 @@
                                    Margin="0,10,0,0"
                                    Style="{StaticResource ReloadStatusTextStyle}" />
 
-                        <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="12" Padding="12" Margin="0,16,0,0">
+                        <Border Background="{DynamicResource SurfaceAltBrush}" CornerRadius="{StaticResource CardRadius}" Padding="{StaticResource SurfaceInsetPadding}" Margin="0,16,0,0">
                             <StackPanel>
-                                <TextBlock Text="Normalized preview" FontWeight="SemiBold" />
+                                <TextBlock Text="规范化预览" FontWeight="SemiBold" />
 
-                                <TextBlock Text="excludedProcesses" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,0,0" />
+                                <TextBlock Text="排除进程" Style="{StaticResource SettingsLabelStyle}" Margin="0,10,0,0" />
                                 <TextBlock Text="{Binding NormalizedExcludedProcessesText}" Style="{StaticResource SettingsValueStyle}" />
 
-                                <TextBlock Text="excludedTitlePatterns" Style="{StaticResource SettingsLabelStyle}" />
+                                <TextBlock Text="排除标题模式" Style="{StaticResource SettingsLabelStyle}" />
                                 <TextBlock Text="{Binding NormalizedExcludedTitlePatternsText}" Style="{StaticResource SettingsValueStyle}" />
 
-                                <TextBlock Text="idleSummaryIntervalMinutes" Style="{StaticResource SettingsLabelStyle}" />
+                                <TextBlock Text="空闲摘要间隔（分钟）" Style="{StaticResource SettingsLabelStyle}" />
                                 <TextBlock Text="{Binding IdleSummaryIntervalMinutesText}" Style="{StaticResource SettingsValueStyle}" />
 
-                                <TextBlock Text="useMockCapture" Style="{StaticResource SettingsLabelStyle}" />
+                                <TextBlock Text="模拟采集" Style="{StaticResource SettingsLabelStyle}" />
                                 <TextBlock Text="{Binding UseMockCaptureText}" Style="{StaticResource SettingsValueStyle}" />
                             </StackPanel>
                         </Border>
@@ -341,23 +387,24 @@
                 </Border>
             </Grid>
 
+            <!-- 数据管理 -->
             <Border Grid.Row="2" Style="{DynamicResource CardBorderStyle}" Margin="0,16,0,16">
                 <StackPanel>
-                    <TextBlock Text="Data Management" Style="{StaticResource SettingsSectionTitleStyle}" />
+                    <TextBlock Text="数据管理" Style="{StaticResource SettingsSectionTitleStyle}" />
 
-                    <TextBlock Text="{Binding CurrentRetentionDaysText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="{Binding CurrentRetentionDaysText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}" />
 
-                    <TextBlock Text="{Binding PruneDataStatusText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="{Binding PruneDataStatusText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}" />
 
-                    <Button Content="Prune Old Data"
+                    <Button Content="清理过期数据"
                             Command="{Binding PruneDataCommand}"
                             Style="{DynamicResource SecondaryButtonStyle}"
                             Margin="0,12,0,0"
                             HorizontalAlignment="Left" />
 
-                    <TextBlock Text="{Binding ClearHistoryStatusText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="{Binding ClearHistoryStatusText}" Margin="0,10,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}" />
 
-                    <Button Content="Clear All History"
+                    <Button Content="清空全部历史"
                             Command="{Binding ClearHistoryCommand}"
                             Style="{DynamicResource SecondaryButtonStyle}"
                             Margin="0,12,0,0"
@@ -366,41 +413,42 @@
                     <StackPanel Margin="0,12,0,0"
                                 Visibility="{Binding IsClearHistoryConfirming, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="Type CLEAR to confirm:" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource MutedTextBrush}" />
+                            <TextBlock Text="输入 CLEAR 确认：" VerticalAlignment="Center" Margin="0,0,8,0" Foreground="{DynamicResource TextMutedBrush}" />
                             <TextBox Text="{Binding ClearHistoryConfirmationInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Width="200"
                                      Margin="0,0,8,0" />
-                            <Button Content="Confirm Clear All History"
+                            <Button Content="确认清空全部历史"
                                     Command="{Binding ConfirmClearHistoryCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
-                            <Button Content="Cancel"
+                            <Button Content="取消"
                                     Command="{Binding ClearHistoryCommand}"
                                     Style="{DynamicResource SecondaryButtonStyle}" />
                         </StackPanel>
                     </StackPanel>
 
-                    <TextBlock Text="{Binding LastMaintenanceStatusText}" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="{Binding LastMaintenanceStatusText}" Margin="0,12,0,0" TextWrapping="Wrap" Foreground="{DynamicResource TextMutedBrush}" />
                 </StackPanel>
             </Border>
 
+            <!-- 本地数据 -->
             <Border Grid.Row="3" Style="{DynamicResource CardBorderStyle}">
                 <StackPanel>
-                    <TextBlock Text="Local Data" Style="{StaticResource SettingsSectionTitleStyle}" />
+                    <TextBlock Text="本地数据" Style="{StaticResource SettingsSectionTitleStyle}" />
 
-                    <TextBlock Text="data root" Style="{StaticResource SettingsLabelStyle}" />
-                    <TextBlock Text="{Binding DataRootText}" Style="{StaticResource SettingsValueStyle}" />
+                    <TextBlock Text="数据根目录" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding DataRootText, Mode=OneWay}" Style="{StaticResource SettingsValueStyle}" />
 
-                    <TextBlock Text="config directory" Style="{StaticResource SettingsLabelStyle}" />
-                    <TextBlock Text="{Binding ConfigDirectoryText}" Style="{StaticResource SettingsValueStyle}" />
+                    <TextBlock Text="配置目录" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding ConfigDirectoryText, Mode=OneWay}" Style="{StaticResource SettingsValueStyle}" />
 
-                    <TextBlock Text="database path" Style="{StaticResource SettingsLabelStyle}" />
-                    <TextBlock Text="{Binding DatabasePathText}" Style="{StaticResource SettingsValueStyle}" />
+                    <TextBlock Text="数据库路径" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding DatabasePathText, Mode=OneWay}" Style="{StaticResource SettingsValueStyle}" />
 
-                    <TextBlock Text="logs directory" Style="{StaticResource SettingsLabelStyle}" />
-                    <TextBlock Text="{Binding LogsDirectoryText}" Style="{StaticResource SettingsValueStyle}" />
+                    <TextBlock Text="日志目录" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding LogsDirectoryText, Mode=OneWay}" Style="{StaticResource SettingsValueStyle}" />
 
-                    <TextBlock Text="runtime directory" Style="{StaticResource SettingsLabelStyle}" />
-                    <TextBlock Text="{Binding RuntimeDirectoryText}" Style="{StaticResource SettingsValueStyle}" />
+                    <TextBlock Text="运行时目录" Style="{StaticResource SettingsLabelStyle}" />
+                    <TextBlock Text="{Binding RuntimeDirectoryText, Mode=OneWay}" Style="{StaticResource SettingsValueStyle}" />
                 </StackPanel>
             </Border>
         </Grid>

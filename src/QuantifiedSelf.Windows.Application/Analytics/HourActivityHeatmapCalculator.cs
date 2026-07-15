@@ -1,6 +1,6 @@
 using QuantifiedSelf.Windows.Core.Models;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 
 /// <summary>
 /// Pure-calculation service that aggregates foreground samples into

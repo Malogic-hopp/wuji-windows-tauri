@@ -1,4 +1,3 @@
-using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using QuantifiedSelf.Windows.App.Services;
@@ -18,12 +17,9 @@ public sealed class InsightsViewModel : ObservableObject
     private DateTime? _selectedDate = DateTime.Today;
     private string _selectedDateText = DateTime.Today.ToString("yyyy-MM-dd");
     private string _statusText = "Ready.";
-    private string _summaryText = "暂无今日洞察数据。Agent 运行并写入数据后会显示在这里。";
-    private string _actionText = string.Empty;
+    private string _summaryText = "暂无可追溯的洞察数据。Agent 运行并写入数据后会显示在这里。";
     private string _rawHopsText = "-";
     private string _meaningfulSwitchesText = "-";
-    private string _longestBlockText = "-";
-    private string _topInterruptionText = "-";
     private string _activeSampleText = "-";
     private string _estimatedActiveText = "-";
 
@@ -82,18 +78,6 @@ public sealed class InsightsViewModel : ObservableObject
         private set => SetProperty(ref _meaningfulSwitchesText, value);
     }
 
-    public string LongestBlockText
-    {
-        get => _longestBlockText;
-        private set => SetProperty(ref _longestBlockText, value);
-    }
-
-    public string TopInterruptionText
-    {
-        get => _topInterruptionText;
-        private set => SetProperty(ref _topInterruptionText, value);
-    }
-
     public string ActiveSampleText
     {
         get => _activeSampleText;
@@ -114,38 +98,30 @@ public sealed class InsightsViewModel : ObservableObject
         private set => SetProperty(ref _summaryText, value);
     }
 
-    public string ActionText
-    {
-        get => _actionText;
-        private set => SetProperty(ref _actionText, value);
-    }
-
     public string StatusText
     {
         get => _statusText;
         private set => SetProperty(ref _statusText, value);
     }
 
-    // ── Collections ──
-
-    public ObservableCollection<WorkBlockInsight> WorkBlocks { get; } = [];
-
-    public ObservableCollection<InterruptionSourceInsight> TopInterruptionSources { get; } = [];
-
-    public ObservableCollection<ContextTransitionInsight> TopContextTransitions { get; } = [];
-
     // ── State ──
 
     public bool HasLoadError
     {
         get => _hasLoadError;
-        private set => SetProperty(ref _hasLoadError, value);
+        private set
+        {
+            if (SetProperty(ref _hasLoadError, value)) OnPropertyChanged(nameof(State));
+        }
     }
 
     public bool HasInsightData
     {
         get => _hasInsightData;
-        private set => SetProperty(ref _hasInsightData, value);
+        private set
+        {
+            if (SetProperty(ref _hasInsightData, value)) OnPropertyChanged(nameof(State));
+        }
     }
 
     public int InsightDataCount
@@ -165,9 +141,16 @@ public sealed class InsightsViewModel : ObservableObject
                 PreviousDayCommand.NotifyCanExecuteChanged();
                 TodayCommand.NotifyCanExecuteChanged();
                 NextDayCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(State));
             }
         }
     }
+
+    public PageState State => IsLoading
+        ? PageState.Loading
+        : HasLoadError ? PageState.Error
+        : HasInsightData ? PageState.Ready
+        : PageState.Empty;
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -185,8 +168,8 @@ public sealed class InsightsViewModel : ObservableObject
             HasLoadError = true;
             var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
             StatusText = string.IsNullOrWhiteSpace(safeMessage)
-                ? "Insights load failed."
-                : $"Insights load failed: {safeMessage}";
+                ? "洞察数据加载失败。"
+                : $"洞察数据加载失败：{safeMessage}";
         }
         finally
         {
@@ -232,38 +215,40 @@ public sealed class InsightsViewModel : ObservableObject
         TaskSwitchesText = insight.ActiveSampleCount > 0
             ? insight.MeaningfulContextSwitchCount.ToString("N0")
             : "-";
-        LongestBlockText = insight.LongestWorkBlockText;
-        TopInterruptionText = insight.TopInterruptionText;
         ActiveSampleText = insight.ActiveSampleCount.ToString("N0");
 
         EstimatedActiveText = insight.EstimatedActiveTime.TotalHours >= 1
             ? $"{(int)insight.EstimatedActiveTime.TotalHours}h {insight.EstimatedActiveTime.Minutes}m"
             : $"{insight.EstimatedActiveTime.Minutes}m";
 
-        // Main content
-        SummaryText = string.IsNullOrWhiteSpace(insight.SummaryText)
-            ? "暂无今日洞察数据。Agent 运行并写入数据后会显示在这里。"
-            : insight.SummaryText;
-        ActionText = insight.ActionText;
+        // Main content — factual summary based on traceable data only
+        SummaryText = BuildSummaryText(insight);
         HasInsightData = insight.ActiveSampleCount > 0;
         InsightDataCount = HasInsightData ? 1 : 0;
 
-        // Collections
-        WorkBlocks.Clear();
-        foreach (var wb in insight.WorkBlocks)
-            WorkBlocks.Add(wb);
-
-        TopInterruptionSources.Clear();
-        foreach (var src in insight.TopInterruptionSources)
-            TopInterruptionSources.Add(src);
-
-        TopContextTransitions.Clear();
-        foreach (var ctx in insight.TopContextTransitions)
-            TopContextTransitions.Add(ctx);
-
         // Status
         StatusText = insight.ActiveSampleCount > 0
-            ? $"Insights loaded for {SelectedDateText}. {insight.ActiveSampleCount:N0} active samples."
-            : $"No active data for {SelectedDateText}.";
+            ? $"已加载 {SelectedDateText} 的洞察数据，{insight.ActiveSampleCount:N0} 个活跃样本。"
+            : $"{SelectedDateText} 没有活跃数据。";
+    }
+
+    private static string BuildSummaryText(FocusInterruptionInsight insight)
+    {
+        if (insight.ActiveSampleCount == 0)
+            return "暂无洞察数据。Agent 运行并写入数据后会显示在这里。";
+
+        var activeText = insight.EstimatedActiveTime.TotalHours >= 1
+            ? $"{(int)insight.EstimatedActiveTime.TotalHours}h {insight.EstimatedActiveTime.Minutes}m"
+            : $"{insight.EstimatedActiveTime.Minutes}m";
+
+        var parts = new List<string> { $"活跃 {activeText}", $"{insight.ActiveSampleCount:N0} 个活跃样本" };
+
+        if (insight.RawToolHopCount > 0)
+            parts.Add($"{insight.RawToolHopCount:N0} 次工具跳转");
+
+        if (insight.MeaningfulContextSwitchCount > 0)
+            parts.Add($"{insight.MeaningfulContextSwitchCount:N0} 次应用切换");
+
+        return string.Join("，", parts) + "。";
     }
 }

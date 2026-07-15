@@ -1,6 +1,7 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using LiveChartsCore;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
@@ -32,8 +33,12 @@ public sealed class DashboardViewModel : ObservableObject
     private string _timeRangeText = "-";
     private string _contextSwitchText = "-";
     private string _longestFocusText = "-";
+    private string _stableWorkText = "分析引擎升级后可用";
+    private string _totalActiveTrendText = "";
+    private string _contextSwitchTrendText = "";
+    private string _longestFocusTimeRangeText = "";
     private string _summaryText = "暂无今日活动数据。Agent 运行并写入数据后会显示在这里。";
-    private string _statusText = "No data loaded.";
+    private string _statusText = "暂无数据。";
     private string _activeTrendText = "";
     private string _yesterdayActiveTrendText = "";
     private string _weekActiveTrendText = "";
@@ -102,6 +107,13 @@ public sealed class DashboardViewModel : ObservableObject
         private set => SetProperty(ref _sessionCountText, value);
     }
 
+    private string _appCountText = "-";
+    public string AppCountText
+    {
+        get => _appCountText;
+        private set => SetProperty(ref _appCountText, value);
+    }
+
     public string TimeRangeText
     {
         get => _timeRangeText;
@@ -118,6 +130,33 @@ public sealed class DashboardViewModel : ObservableObject
     {
         get => _longestFocusText;
         private set => SetProperty(ref _longestFocusText, value);
+    }
+
+    /// <summary>
+    /// Stable work duration — currently a placeholder until ContextSegment/WorkBlock analysis is available.
+    /// </summary>
+    public string StableWorkText
+    {
+        get => _stableWorkText;
+        private set => SetProperty(ref _stableWorkText, value);
+    }
+
+    public string TotalActiveTrendText
+    {
+        get => _totalActiveTrendText;
+        private set => SetProperty(ref _totalActiveTrendText, value);
+    }
+
+    public string ContextSwitchTrendText
+    {
+        get => _contextSwitchTrendText;
+        private set => SetProperty(ref _contextSwitchTrendText, value);
+    }
+
+    public string LongestFocusTimeRangeText
+    {
+        get => _longestFocusTimeRangeText;
+        private set => SetProperty(ref _longestFocusTimeRangeText, value);
     }
 
     public string ActiveTrendText
@@ -249,7 +288,21 @@ public sealed class DashboardViewModel : ObservableObject
     public bool HasLoadError
     {
         get => _hasLoadError;
-        private set => SetProperty(ref _hasLoadError, value);
+        private set
+        {
+            if (SetProperty(ref _hasLoadError, value)) OnPropertyChanged(nameof(State));
+        }
+    }
+
+    private bool _hasAnyActivity;
+
+    public bool HasAnyActivity
+    {
+        get => _hasAnyActivity;
+        private set
+        {
+            if (SetProperty(ref _hasAnyActivity, value)) OnPropertyChanged(nameof(State));
+        }
     }
 
     public bool IsLoading
@@ -260,9 +313,16 @@ public sealed class DashboardViewModel : ObservableObject
             if (SetProperty(ref _isLoading, value))
             {
                 RefreshCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(State));
             }
         }
     }
+
+    public PageState State => IsLoading
+        ? PageState.Loading
+        : HasLoadError ? PageState.Error
+        : HasAnyActivity ? PageState.Ready
+        : PageState.Empty;
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -289,8 +349,8 @@ public sealed class DashboardViewModel : ObservableObject
 
             var safeMessage = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(ex);
             StatusText = string.IsNullOrWhiteSpace(safeMessage)
-                ? "Dashboard load failed."
-                : $"Dashboard load failed: {safeMessage}";
+                ? "今天概览加载失败。"
+                : $"今天概览加载失败：{safeMessage}";
         }
         finally
         {
@@ -414,6 +474,8 @@ public sealed class DashboardViewModel : ObservableObject
         TotalDurationText = FormatDurationLong(summary.TotalDurationSeconds);
         SampleCountText = summary.SampleCount.ToString("N0");
         SessionCountText = summary.SessionCount.ToString();
+        AppCountText = summary.TopApps?.Count.ToString() ?? "-";
+        HasAnyActivity = summary.SessionCount > 0 || summary.SampleCount > 0 || summary.TotalActiveDurationSeconds > 0;
 
         // Time range
         if (summary.FirstSeenAtUtc is { } first && summary.LastSeenAtUtc is { } last)
@@ -431,9 +493,12 @@ public sealed class DashboardViewModel : ObservableObject
 
         // Top apps
         TopApps.Clear();
-        foreach (var app in summary.TopApps)
+        if (summary.TopApps is not null)
         {
-            TopApps.Add(app);
+            foreach (var app in summary.TopApps)
+            {
+                TopApps.Add(app);
+            }
         }
 
         // Top windows
@@ -443,22 +508,53 @@ public sealed class DashboardViewModel : ObservableObject
             TopWindows.Add(window);
         }
 
-        // Focus metrics
+        // App switching count (NOT task/context switching — ContextSegment is not yet implemented)
         ContextSwitchText = summary.ContextSwitchCount > 0
-            ? $"{summary.ContextSwitchCount} switches"
-            : "0";
+            ? $"{summary.ContextSwitchCount} 次应用切换"
+            : "0 次应用切换";
 
         if (summary.LongestFocusSession is { } lf)
         {
             var dur = lf.Duration;
-            LongestFocusText = dur.TotalHours >= 1
-                ? $"{(int)dur.TotalHours}h {dur.Minutes}m"
-                : $"{dur.Minutes}m {dur.Seconds}s";
+            LongestFocusText = FormatDurationLong((long)dur.TotalSeconds);
+            LongestFocusTimeRangeText = $"{lf.StartUtc.ToLocalTime():HH:mm}—{lf.EndUtc.ToLocalTime():HH:mm}";
         }
         else
         {
             LongestFocusText = "-";
+            LongestFocusTimeRangeText = "";
         }
+
+        // Trend comparison text (simplified — compares against cached trend data)
+        if (_lastTrend is not null && _lastTrend.Days.Count >= 2)
+        {
+            var todayIdx = _lastTrend.Days.Count - 1;
+            var today = _lastTrend.Days[todayIdx];
+            var avgOthers = _lastTrend.Days.Take(todayIdx).Select(d => d.ActiveSeconds).DefaultIfEmpty(0).Average();
+            var diff = today.ActiveSeconds - (long)avgOthers;
+            TotalActiveTrendText = diff switch
+            {
+                > 60 => $"较近{_lastTrend.Days.Count - 1}日多 {FormatDurationLong(diff)}",
+                < -60 => $"较近{_lastTrend.Days.Count - 1}日少 {FormatDurationLong(-diff)}",
+                _ => "与近期持平"
+            };
+        }
+        else
+        {
+            TotalActiveTrendText = "";
+        }
+
+        // App switch frequency description (NOT task/context switch — data model not yet available)
+        ContextSwitchTrendText = summary.ContextSwitchCount switch
+        {
+            > 30 => "应用切换较频繁",
+            > 15 => "应用切换适中",
+            > 0 => "应用切换较少",
+            _ => ""
+        };
+
+        // Stable work: placeholder until ContextSegment analysis is available
+        StableWorkText = GetStableWorkPlaceholder(summary);
 
         // Generate insight suggestions
         Suggestions.Clear();
@@ -469,9 +565,9 @@ public sealed class DashboardViewModel : ObservableObject
         }
 
         // Build chart series
-        BuildTopAppsChart(summary.TopApps);
+        BuildTopAppsChart(summary.TopApps ?? []);
         BuildHourlyActiveChart(summary.HourlyActivity);
-        BuildAppShareChart(summary.TopApps, summary.TotalActiveDurationSeconds);
+        BuildAppShareChart(summary.TopApps ?? [], summary.TotalActiveDurationSeconds);
 
         // Record generation time
         GeneratedAtText = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
@@ -479,8 +575,8 @@ public sealed class DashboardViewModel : ObservableObject
         // One-sentence summary
         SummaryText = BuildSummaryText(summary);
         StatusText = summary.SessionCount > 0
-            ? $"Today: {TotalActiveText} active across {summary.SessionCount} sessions."
-            : "No activity recorded for today.";
+            ? $"已记录 {summary.SessionCount} 个应用会话，{summary.ContextSwitchCount} 次应用切换。"
+            : "今天还没有足够的活动数据。";
     }
 
     private void ClearAll()
@@ -489,9 +585,14 @@ public sealed class DashboardViewModel : ObservableObject
         TotalDurationText = "-";
         SampleCountText = "-";
         SessionCountText = "-";
+        AppCountText = "-";
         TimeRangeText = "-";
         ContextSwitchText = "-";
         LongestFocusText = "-";
+        StableWorkText = "分析引擎升级后可用";
+        TotalActiveTrendText = "";
+        ContextSwitchTrendText = "";
+        LongestFocusTimeRangeText = "";
         ActiveTrendText = "";
         YesterdayActiveTrendText = "";
         WeekActiveTrendText = "";
@@ -514,6 +615,17 @@ public sealed class DashboardViewModel : ObservableObject
         Heatmap = new HourActivityHeatmapViewModel();
         GeneratedAtText = "";
         SummaryText = "暂无今日活动数据。Agent 运行并写入数据后会显示在这里。";
+    }
+
+    /// <summary>
+    /// Returns a placeholder for stable work until ContextSegment/WorkBlock analysis is available.
+    /// </summary>
+    private static string GetStableWorkPlaceholder(DailyActivitySummary summary)
+    {
+        if (summary.TotalActiveDurationSeconds <= 0) return "暂无数据";
+        // Temporary: estimate stable work as active time minus idle-heavy sessions
+        // In the future, this will be replaced by actual WorkBlock analysis
+        return "分析引擎升级后可用";
     }
 
     private static ISeries[] CreateTrendSeries(double[] activeHours)
@@ -578,7 +690,7 @@ public sealed class DashboardViewModel : ObservableObject
     {
         if (hours <= 0)
         {
-            return "0m";
+            return "0分";
         }
 
         if (hours < 1)
@@ -611,36 +723,29 @@ public sealed class DashboardViewModel : ObservableObject
         var appList = topAppNames.Count switch
         {
             0 => string.Empty,
-            1 => $"主要在 {topAppNames[0]}",
-            _ => $"主要在 {string.Join("、", topAppNames)}"
+            1 => $"；主要在 {topAppNames[0]}",
+            _ => $"；主要在 {string.Join("、", topAppNames)}"
         };
 
         var sampleInfo = summary.SampleCount > 0
-            ? $"，{summary.SampleCount} 次采样"
+            ? $"；{summary.SampleCount:N0} 次采样"
             : string.Empty;
 
-        var focusInfo = string.Empty;
+        // Longest session info (app-session based, NOT "focus" or "work block")
+        var sessionInfo = string.Empty;
         if (summary.LongestFocusSession is { } lf)
         {
             var dur = lf.Duration;
-            var focusText = dur.TotalHours >= 1
-                ? $"{(int)dur.TotalHours}h {dur.Minutes}m"
-                : $"{dur.Minutes}m";
-
-            focusInfo = lf.IsFragmented
-                ? $"，最长专注 {focusText}（较分散）"
-                : $"，最长专注 {focusText}";
-        }
-        else if (summary.ContextSwitchCount > 0)
-        {
-            focusInfo = "，暂未检测到完整专注段";
+            var sessionText = FormatDurationLong((long)dur.TotalSeconds);
+            sessionInfo = $"；最长会话 {sessionText}";
         }
 
-        var switchInfo = summary.ContextSwitchCount > 20
-            ? "，跨任务切换较为频繁"
+        // App switch count — factual, not interpreted as "task switching"
+        var switchInfo = summary.ContextSwitchCount > 0
+            ? $"；{summary.ContextSwitchCount} 次应用切换"
             : string.Empty;
 
-        return $"今日活跃 {activeText}{appList}{sampleInfo}{focusInfo}{switchInfo}。";
+        return $"今日活跃 {activeText}{appList}{sampleInfo}{sessionInfo}{switchInfo}。";
     }
 
     internal static string FormatDurationLong(long totalSeconds)
@@ -652,19 +757,21 @@ public sealed class DashboardViewModel : ObservableObject
 
         var span = TimeSpan.FromSeconds(totalSeconds);
         return span.TotalHours >= 1
-            ? $"{(int)span.TotalHours}h {span.Minutes}m"
-            : $"{span.Minutes}m {span.Seconds}s";
+            ? $"{(int)span.TotalHours}小时 {span.Minutes}分"
+            : span.Minutes > 0
+                ? $"{span.Minutes}分 {span.Seconds}秒"
+                : $"{span.Seconds}秒";
     }
 
     // ── Top Apps Horizontal Bar Chart ──
 
     private static readonly SKColor[] TopAppBarColors =
     [
-        new(15, 118, 110),   // #0F766E teal
-        new(59, 130, 246),   // #3B82F6 blue
-        new(168, 85, 247),   // #A855F7 purple
-        new(245, 158, 11),   // #F59E0B amber
-        new(239, 68, 68),    // #EF4444 red
+        new(15, 118, 110),
+        new(63, 143, 136),
+        new(106, 166, 160),
+        new(140, 185, 180),
+        new(173, 203, 199),
     ];
 
     private void BuildTopAppsChart(IReadOnlyList<AppUsageSummary> topApps)
@@ -688,7 +795,7 @@ public sealed class DashboardViewModel : ObservableObject
             new MultiColorRowSeries(TopAppBarColors.Take(values.Length).Reverse().ToArray())
             {
                 Values = values,
-                Name = "Active",
+                Name = "活跃时长",
                 AnimationsSpeed = TimeSpan.Zero,
                 MaxBarWidth = 24,
                 Padding = 6,
@@ -860,7 +967,7 @@ public sealed class DashboardViewModel : ObservableObject
             seriesList.Add(new PieSeries<double>
             {
                 Values = [otherSeconds],
-                Name = "Other",
+                Name = "其他",
                 AnimationsSpeed = TimeSpan.Zero,
                 Pushout = 0,
                 Fill = new SolidColorPaint(new SKColor(148, 163, 184)), // #94A3B8 — Other
@@ -868,8 +975,8 @@ public sealed class DashboardViewModel : ObservableObject
                 DataLabelsPosition = LiveChartsCore.Measure.PolarLabelsPosition.Outer,
                 DataLabelsPaint = new SolidColorPaint(new SKColor(82, 96, 109)),
                 DataLabelsSize = 11,
-                DataLabelsFormatter = _ => "Other",
-                ToolTipLabelFormatter = _ => $"Other · {FormatDurationLong(otherSeconds)}"
+                DataLabelsFormatter = _ => "其他",
+                ToolTipLabelFormatter = _ => $"其他 · {FormatDurationLong(otherSeconds)}"
             });
         }
 

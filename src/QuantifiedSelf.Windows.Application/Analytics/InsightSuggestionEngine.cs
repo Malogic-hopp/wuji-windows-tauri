@@ -1,6 +1,6 @@
 using QuantifiedSelf.Windows.Core.Models;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 
 /// <summary>
 /// Pure-logic rule engine that generates gentle, actionable insight suggestions

@@ -87,7 +87,10 @@ public sealed class SessionsViewModel : ObservableObject
     public bool HasLoadError
     {
         get => _hasLoadError;
-        private set => SetProperty(ref _hasLoadError, value);
+        private set
+        {
+            if (SetProperty(ref _hasLoadError, value)) OnPropertyChanged(nameof(State));
+        }
     }
 
     public bool IsLoading
@@ -98,9 +101,12 @@ public sealed class SessionsViewModel : ObservableObject
             if (SetProperty(ref _isLoading, value))
             {
                 RefreshCommand.NotifyCanExecuteChanged();
+                OnPropertyChanged(nameof(State));
             }
         }
     }
+
+    public PageState State => IsLoading ? PageState.Loading : HasLoadError ? PageState.Error : Sessions.Count > 0 ? PageState.Ready : PageState.Empty;
 
     public async Task LoadAsync(CancellationToken cancellationToken = default)
     {
@@ -170,5 +176,6 @@ public sealed class SessionsViewModel : ObservableObject
             ? "No sessions found."
             : $"Showing {Sessions.Count} of {_allSessions.Count} {statusRange.ToLowerInvariant()} sessions.";
         EmptyStateText = "暂无会话记录。Agent 运行并写入 app_sessions 后会显示在这里。";
+        OnPropertyChanged(nameof(State));
     }
 }

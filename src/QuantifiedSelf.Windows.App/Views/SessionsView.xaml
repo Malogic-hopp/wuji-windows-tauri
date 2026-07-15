@@ -20,8 +20,8 @@
         <Border Style="{DynamicResource CardBorderStyle}">
             <DockPanel LastChildFill="True">
                 <StackPanel DockPanel.Dock="Left">
-                    <TextBlock Text="Sessions" FontSize="16" FontWeight="SemiBold" />
-                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource MutedTextBrush}" />
+                    <TextBlock Text="会话明细" Style="{StaticResource TitleSmallStyle}" />
+                    <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" Foreground="{DynamicResource TextMutedBrush}" />
                 </StackPanel>
 
                 <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -43,7 +43,7 @@
         <Border Grid.Row="1" Style="{DynamicResource CardBorderStyle}">
             <Grid>
                 <TextBlock Text="{Binding EmptyStateText}"
-                           Foreground="{DynamicResource MutedTextBrush}"
+                           Foreground="{DynamicResource TextMutedBrush}"
                            TextWrapping="Wrap"
                            Visibility="{Binding Sessions.Count, Converter={StaticResource CountToVisibilityConverter}, ConverterParameter=Invert}" />
 
@@ -61,16 +61,16 @@
                           VirtualizingStackPanel.VirtualizationMode="Recycling"
                           Visibility="{Binding Sessions.Count, Converter={StaticResource CountToVisibilityConverter}}">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Started local time" Binding="{Binding StartedLocalTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" Width="170" />
-                        <DataGridTextColumn Header="Ended local time" Binding="{Binding EndedLocalTimeText}" Width="170" />
-                        <DataGridTextColumn Header="Process" Binding="{Binding ProcessName}" Width="150" />
-                        <DataGridTextColumn Header="Display name" Binding="{Binding DisplayName}" Width="160" />
-                        <DataGridTextColumn Header="Total" Binding="{Binding TotalDurationText}" Width="95" />
-                        <DataGridTextColumn Header="Active" Binding="{Binding ActiveDurationText}" Width="95" />
-                        <DataGridTextColumn Header="Idle" Binding="{Binding IdleDurationText}" Width="95" />
-                        <DataGridTextColumn Header="Unknown" Binding="{Binding UnknownDurationText}" Width="95" />
-                        <DataGridTextColumn Header="Close reason" Binding="{Binding CloseReason}" Width="140" />
-                        <DataGridTextColumn Header="Session id" Binding="{Binding SessionId}" Width="90" />
+                        <DataGridTextColumn Header="开始时间" Binding="{Binding StartedLocalTime, StringFormat={}{0:yyyy-MM-dd HH:mm:ss}}" Width="170" />
+                        <DataGridTextColumn Header="结束时间" Binding="{Binding EndedLocalTimeText}" Width="170" />
+                        <DataGridTextColumn Header="进程" Binding="{Binding ProcessName}" Width="150" />
+                        <DataGridTextColumn Header="应用名称" Binding="{Binding DisplayName}" Width="160" />
+                        <DataGridTextColumn Header="记录时长" Binding="{Binding TotalDurationText}" Width="95" />
+                        <DataGridTextColumn Header="活跃时长" Binding="{Binding ActiveDurationText}" Width="95" />
+                        <DataGridTextColumn Header="空闲时长" Binding="{Binding IdleDurationText}" Width="95" />
+                        <DataGridTextColumn Header="未知时长" Binding="{Binding UnknownDurationText}" Width="95" />
+                        <DataGridTextColumn Header="结束原因" Binding="{Binding CloseReason}" Width="140" />
+                        <DataGridTextColumn Header="会话标识" Binding="{Binding SessionId}" Width="90" />
                     </DataGrid.Columns>
                 </DataGrid>
             </Grid>

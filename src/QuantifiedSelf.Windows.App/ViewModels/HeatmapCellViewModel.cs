@@ -7,6 +7,14 @@ namespace QuantifiedSelf.Windows.App.ViewModels;
 /// </summary>
 public sealed class HeatmapCellViewModel
 {
+    public DateOnly Date { get; set; }
+
+    public int Hour { get; set; }
+
+    public int IntensityLevel { get; set; }
+
+    public string AutomationName { get; set; } = string.Empty;
+
     /// <summary>
     /// Normalized activity intensity (0.0–1.0) used to compute the cell color.
     /// This is ActiveSamples / maxActiveInPeriod, NOT the within-hour active/idle split.

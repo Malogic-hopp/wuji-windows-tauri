@@ -5,7 +5,7 @@ using System.Linq;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using QuantifiedSelf.Windows.App.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
@@ -18,6 +18,13 @@ public sealed partial class SettingsViewModel : ObservableObject
 {
     public IReadOnlyList<string> LastSelectedPageOptions { get; } =
         MainWindowViewModel.NavigationPages;
+
+    public IReadOnlyList<ThemeChoice> ThemeOptions { get; } =
+    [
+        new("Light", "浅色"),
+        new("Dark", "深色"),
+        new("HighContrast", "高对比度")
+    ];
 
     private readonly Func<CancellationToken, Task<AppSettings>> _readAppSettingsAsync;
     private readonly Func<AppSettings, CancellationToken, Task> _saveAppSettingsAsync;
@@ -72,7 +79,8 @@ public sealed partial class SettingsViewModel : ObservableObject
     private IStartupRegistrationService? _startupRegistrationService;
     private string _startupRegistrationStatusText = "Login startup: unknown";
     private bool _loadedStartAppOnWindowsLogin;
-    private string _lastSelectedPageText = "Dashboard";
+    private string _lastSelectedPageText = "Today";
+    private string _selectedTheme = "Light";
     private string _samplingIntervalSecondsText = "3";
     private string _idleThresholdSecondsText = "60";
     private string _heartbeatIntervalSecondsText = "3";
@@ -206,6 +214,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         _getRecentAgentEventsAsync = getRecentAgentEventsAsync;
         _agentOptionsValidator = agentOptionsValidator;
         _paths = paths;
+
+        General = new GeneralSettingsViewModel(this);
+        Recording = new RecordingSettingsViewModel(this);
+        Notifications = new NotificationSettingsViewModel();
+        Appearance = new AppearanceSettingsViewModel(this);
+        Advanced = new AdvancedSettingsViewModel(this);
 
         AppSettingsPathText = Path.Combine(_paths.ConfigDir, "app-settings.json");
         AgentOptionsPathText = _paths.AgentOptionsPath;
@@ -530,6 +544,30 @@ public sealed partial class SettingsViewModel : ObservableObject
     {
         get => _lastSelectedPageText;
         set => SetProperty(ref _lastSelectedPageText, value);
+    }
+
+    public GeneralSettingsViewModel General { get; }
+
+    public RecordingSettingsViewModel Recording { get; }
+
+    public NotificationSettingsViewModel Notifications { get; }
+
+    public AppearanceSettingsViewModel Appearance { get; }
+
+    public AdvancedSettingsViewModel Advanced { get; }
+
+    public string SelectedTheme
+    {
+        get => _selectedTheme;
+        set
+        {
+            var normalized = ThemeService.ToSettingValue(ThemeService.Parse(value));
+            if (SetProperty(ref _selectedTheme, normalized))
+            {
+                ThemeService.ApplyTheme(ThemeService.Parse(normalized));
+                IsDirty = true;
+            }
+        }
     }
 
     public string SamplingIntervalSecondsText
@@ -1353,6 +1391,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         AutoStartAgentWhenAppStarts = appSettings.AutoStartAgentWhenAppStarts;
         StartAppOnWindowsLogin = appSettings.StartAppOnWindowsLogin;
         LastSelectedPageText = NormalizeLastSelectedPage(appSettings.LastSelectedPage);
+        SelectedTheme = ThemeService.ToSettingValue(ThemeService.Parse(appSettings.Theme));
     }
 
     private bool TryBuildAppSettings(out AppSettings appSettings, out string validationMessage)
@@ -1380,7 +1419,7 @@ public sealed partial class SettingsViewModel : ObservableObject
             LastSelectedPage = AppSettings.LastSelectedPage,
             MinimizeToTray = AppSettings.MinimizeToTray,
             CloseToTray = AppSettings.CloseToTray,
-            Theme = AppSettings.Theme
+            Theme = SelectedTheme
         };
         return true;
     }
@@ -1405,19 +1444,25 @@ public sealed partial class SettingsViewModel : ObservableObject
     private bool IsKnownPage(string? page)
     {
         return !string.IsNullOrWhiteSpace(page)
-            && LastSelectedPageOptions.Any(option => string.Equals(option, page.Trim(), StringComparison.OrdinalIgnoreCase));
+            && LastSelectedPageOptions.Any(option => string.Equals(option, NormalizeLastSelectedPage(page), StringComparison.OrdinalIgnoreCase));
     }
 
     private string NormalizeLastSelectedPage(string? page)
     {
         if (string.IsNullOrWhiteSpace(page))
         {
-            return "Dashboard";
+            return "Today";
         }
 
         var trimmed = page.Trim();
-        var match = LastSelectedPageOptions.FirstOrDefault(option => string.Equals(option, trimmed, StringComparison.OrdinalIgnoreCase));
-        return match ?? "Dashboard";
+        return trimmed switch
+        {
+            "Dashboard" => "Today",
+            "Apps" or "Sessions" or "Samples" => "Timeline",
+            "Data & Privacy" or "DataPrivacy" => "Privacy",
+            _ => LastSelectedPageOptions.FirstOrDefault(option => string.Equals(option, trimmed, StringComparison.OrdinalIgnoreCase))
+                ?? "Today"
+        };
     }
 
     private static string FormatLoadFailure(string section, Exception exception)

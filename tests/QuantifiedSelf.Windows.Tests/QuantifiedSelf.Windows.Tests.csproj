@@ -22,7 +22,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Application\QuantifiedSelf.Windows.Application.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
+    <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Client\QuantifiedSelf.Windows.Client.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Agent\QuantifiedSelf.Windows.Agent.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.App\QuantifiedSelf.Windows.App.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Infrastructure\QuantifiedSelf.Windows.Infrastructure.csproj" />

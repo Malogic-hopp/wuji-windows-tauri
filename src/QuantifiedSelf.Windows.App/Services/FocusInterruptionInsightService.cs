@@ -1,3 +1,4 @@
+using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Infrastructure.Database;
 

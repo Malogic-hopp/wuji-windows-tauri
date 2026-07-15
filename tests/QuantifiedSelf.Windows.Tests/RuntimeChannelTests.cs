@@ -6,9 +6,11 @@ using QuantifiedSelf.Windows.Core.Paths;
 using QuantifiedSelf.Windows.Core.Runtime;
 using QuantifiedSelf.Windows.Infrastructure.Control;
 using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
+using QuantifiedSelf.Windows.Tests.TestHelpers;
 
 namespace QuantifiedSelf.Windows.Tests;
 
+[Trait("Category", "Fast")]
 public sealed class RuntimeChannelTests
 {
     [Fact]
@@ -87,7 +89,7 @@ public sealed class RuntimeChannelTests
     [Fact]
     public void AgentProcessService_DevStartInfoPassesChannelToAgent()
     {
-        using var workspace = new TempDirectory();
+        using var workspace = new TempWorkspace("wuji-runtime-channel-tests");
         var agentExe = Path.Combine(workspace.Path, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(agentExe, "fake");
 
@@ -103,30 +105,5 @@ public sealed class RuntimeChannelTests
 
         Assert.Equal("--channel dev", startInfo.Arguments);
         Assert.Equal("dev", startInfo.Environment["WUJI_RUNTIME_CHANNEL"]);
-    }
-
-    private sealed class TempDirectory : IDisposable
-    {
-        public string Path { get; } = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(),
-            "wuji-runtime-channel-tests",
-            Guid.NewGuid().ToString("N"));
-
-        public TempDirectory()
-        {
-            Directory.CreateDirectory(Path);
-        }
-
-        public void Dispose()
-        {
-            try
-            {
-                Directory.Delete(Path, recursive: true);
-            }
-            catch
-            {
-                // Best effort cleanup for Windows file-handle timing.
-            }
-        }
     }
 }

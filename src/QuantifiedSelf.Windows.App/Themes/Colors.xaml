@@ -1,0 +1,80 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ============================================================
+         Colors.xaml — WUJI 基础色板
+         只定义 Color，不做语义绑定。语义绑定在 Brushes.xaml 中。
+         ============================================================ -->
+
+    <!-- ── 中性色系（Neutral Scale） ── -->
+    <Color x:Key="Neutral0Color">#FFFFFF</Color>
+    <Color x:Key="Neutral50Color">#F8FAFC</Color>
+    <Color x:Key="Neutral100Color">#F3F6F9</Color>
+    <Color x:Key="Neutral200Color">#E2E8F0</Color>
+    <Color x:Key="Neutral300Color">#CBD5E1</Color>
+    <Color x:Key="Neutral400Color">#94A3B8</Color>
+    <Color x:Key="Neutral500Color">#64748B</Color>
+    <Color x:Key="Neutral700Color">#334155</Color>
+    <Color x:Key="Neutral900Color">#0F172A</Color>
+    <Color x:Key="Neutral950Color">#020617</Color>
+
+    <!-- ── 强调色系（Teal / Accent）─ 保留现有 Teal 锚点 ── -->
+    <Color x:Key="Accent300Color">#5EEAD4</Color>
+    <Color x:Key="Accent500Color">#14B8A6</Color>
+    <Color x:Key="Accent700Color">#0F766E</Color>
+    <Color x:Key="Accent900Color">#134E4A</Color>
+    <Color x:Key="AccentSoftColor">#D9F0EC</Color>
+
+    <!-- ── 语义状态色 ── -->
+    <Color x:Key="StateStableColor">#0F766E</Color>
+    <Color x:Key="StateWarningColor">#B45309</Color>
+    <Color x:Key="StateDangerColor">#B91C1C</Color>
+    <Color x:Key="StateIdleColor">#94A3B8</Color>
+    <Color x:Key="StateInfoColor">#2563EB</Color>
+
+    <!-- ── 热力图专用色 ── -->
+    <Color x:Key="Heatmap0Color">#F1F5F9</Color>
+    <Color x:Key="Heatmap1Color">#CCFBF1</Color>
+    <Color x:Key="Heatmap2Color">#5EEAD4</Color>
+    <Color x:Key="Heatmap3Color">#14B8A6</Color>
+    <Color x:Key="Heatmap4Color">#0F766E</Color>
+
+    <!-- ── 工作上下文分类色 ── -->
+    <Color x:Key="ContextDevelopmentColor">#2563EB</Color>
+    <Color x:Key="ContextResearchColor">#7C3AED</Color>
+    <Color x:Key="ContextWritingColor">#059669</Color>
+    <Color x:Key="ContextCommunicationColor">#D97706</Color>
+    <Color x:Key="ContextBrowsingColor">#4B5563</Color>
+    <Color x:Key="ContextEntertainmentColor">#DB2777</Color>
+    <Color x:Key="ContextProductivityColor">#0891B2</Color>
+    <Color x:Key="ContextSystemColor">#6B7280</Color>
+    <Color x:Key="ContextOtherColor">#9CA3AF</Color>
+    <Color x:Key="ContextIdleColor">#E2E8F0</Color>
+
+    <!-- ── 侧边栏专用色 ── -->
+    <Color x:Key="ShellBackgroundColor">#F3F6F9</Color>
+    <Color x:Key="ShellSurfaceAltColor">#E2E8F0</Color>
+    <Color x:Key="ShellBorderColor">#E2E8F0</Color>
+    <Color x:Key="ShellNavHoverColor">#E2E8F0</Color>
+    <Color x:Key="ShellNavSelectedBgColor">#D9F0EC</Color>
+    <Color x:Key="ShellNavSelectedBorderColor">#0F766E</Color>
+    <Color x:Key="ShellTextColor">#0F172A</Color>
+    <Color x:Key="ShellMutedTextColor">#64748B</Color>
+    <Color x:Key="ShellAccentTextColor">#0F766E</Color>
+
+    <!-- ── 兼容旧 Key（映射到新色值，避免破坏现有引用） ── -->
+    <Color x:Key="SurfaceColor">#FFFFFF</Color>
+    <Color x:Key="SurfaceAltColor">#F3F6F9</Color>
+    <Color x:Key="SurfaceMutedColor">#E2E8F0</Color>
+    <Color x:Key="AccentColor">#0F766E</Color>
+    <Color x:Key="AccentDarkColor">#115E59</Color>
+    <Color x:Key="TextColor">#0F172A</Color>
+    <Color x:Key="MutedTextColor">#64748B</Color>
+    <Color x:Key="BorderColor">#E2E8F0</Color>
+    <Color x:Key="BorderStrongColor">#CBD5E1</Color>
+    <Color x:Key="WarningColor">#B45309</Color>
+    <Color x:Key="WarningSoftColor">#FEF3C7</Color>
+    <Color x:Key="DangerColor">#B91C1C</Color>
+    <Color x:Key="DangerSoftColor">#FEE4E2</Color>
+
+</ResourceDictionary>

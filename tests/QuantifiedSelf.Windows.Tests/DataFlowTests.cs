@@ -1,12 +1,14 @@
 using System.Globalization;
 using System.IO;
+using System.Collections.Specialized;
 using LiveChartsCore.Defaults;
 using LiveChartsCore.SkiaSharpView;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using QuantifiedSelf.Windows.App.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
+using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Agent.Events;
@@ -28,7 +30,9 @@ using QuantifiedSelf.Windows.Infrastructure.Settings;
 using QuantifiedSelf.Windows.Infrastructure.Win32;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Infrastructure.Ipc;
+using QuantifiedSelf.Windows.Tests.TestHelpers;
 using System.IO.Pipes;
+using System.Runtime.CompilerServices;
 using System.Windows.Threading;
 using System.Text.Json;
 
@@ -36,138 +40,8 @@ namespace QuantifiedSelf.Windows.Tests;
 
 public sealed class DataFlowTests
 {
-    [Fact]
-    public async Task AgentControlFileStore_RoundsTripStringEnums_AndFlagsMalformedFiles()
-    {
-        using var workspace = new TempWorkspace();
-        var store = new AgentControlFileStore();
-        var controlPath = Path.Combine(workspace.Root, "runtime", "agent_control.json");
-
-        var command = new AgentControlCommand
-        {
-            Command = AgentCommandType.Pause,
-            DesiredState = AgentDesiredState.Paused
-        };
-
-        await store.WriteAsync(controlPath, command);
-
-        var raw = await File.ReadAllTextAsync(controlPath);
-        Assert.Contains("\"command\": \"Pause\"", raw);
-        Assert.Contains("\"desiredState\": \"Paused\"", raw);
-
-        var readResult = await store.PeekAsync(controlPath);
-        Assert.False(readResult.WasMalformed);
-        Assert.NotNull(readResult.Command);
-        Assert.Equal(AgentCommandType.Pause, readResult.Command!.Command);
-        Assert.Equal(AgentDesiredState.Paused, readResult.Command.DesiredState);
-
-        await File.WriteAllTextAsync(controlPath, "{ not json");
-        var peekResult = await store.PeekAsync(controlPath);
-
-        Assert.True(peekResult.WasMalformed);
-        Assert.Null(peekResult.Command);
-        Assert.True(File.Exists(controlPath));
-        Assert.False(File.Exists(controlPath + ".bad"));
-
-        var agentReadResult = await store.ReadForAgentAsync(controlPath);
-        Assert.True(agentReadResult.WasMalformed);
-        Assert.Null(agentReadResult.Command);
-        Assert.False(File.Exists(controlPath));
-        Assert.True(File.Exists(controlPath + ".bad"));
-    }
-
-    [Fact]
-    public void PrivacyFilter_ExcludesProcesses_AndMasksWindowTitles()
-    {
-        var filter = new ForegroundSamplePrivacyFilter();
-        var options = new WindowsAgentOptions
-        {
-            MaskWindowTitles = true,
-            ExcludedProcesses = ["KeePass"],
-            ExcludedTitlePatterns = ["*Secret*"]
-        };
-
-        var excludedProcessDecision = filter.Apply(
-            new ForegroundSample
-            {
-                ProcessName = "KeePass",
-                WindowTitle = "Vault",
-                ActivityState = "Active"
-            },
-            options);
-
-        Assert.False(excludedProcessDecision.ShouldWriteSample);
-        Assert.True(excludedProcessDecision.ShouldCloseOpenSession);
-        Assert.Contains("process privacy rule", excludedProcessDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-
-        var maskedDecision = filter.Apply(
-            new ForegroundSample
-            {
-                ProcessName = "Code",
-                WindowTitle = "Regular Project",
-                ActivityState = "Active"
-            },
-            options);
-
-        Assert.True(maskedDecision.ShouldWriteSample);
-        Assert.NotNull(maskedDecision.Sample);
-        Assert.Null(maskedDecision.Sample!.WindowTitle);
-
-        var excludedTitleDecision = filter.Apply(
-            new ForegroundSample
-            {
-                ProcessName = "Code",
-                WindowTitle = "My Secret Notes",
-                ActivityState = "Active"
-            },
-            options);
-
-        Assert.False(excludedTitleDecision.ShouldWriteSample);
-        Assert.True(excludedTitleDecision.ShouldCloseOpenSession);
-        Assert.Contains("title privacy rule", excludedTitleDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Secret", excludedTitleDecision.Reason ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public void DiagnosticMessageSanitizer_RedactsWindowsAndUncPaths()
-    {
-        var exception = new InvalidOperationException(
-            @"Failed to open C:\Users\Alice\secrets\db.sqlite and \\server\share\logs\agent.log");
-
-        var message = DiagnosticMessageSanitizer.CreateSafeExceptionMessage(exception);
-
-        Assert.DoesNotContain(@"C:\Users\Alice\secrets\db.sqlite", message, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(@"\\server\share\logs\agent.log", message, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("<path>", message, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public void AgentEventPayloadSanitizer_RemovesForbiddenKeys_AndRedactsStringValues()
-    {
-        var payloadJson = AgentEventPayloadSanitizer.CreatePayloadJson(
-            new Dictionary<string, object?>
-            {
-                ["errorCode"] = "SampleWriteFailed",
-                ["exceptionType"] = "InvalidOperationException",
-                ["shortMessage"] = @"Failed at C:\Users\Alice\secrets\db.sqlite",
-                ["windowTitle"] = "Secret Bank Account",
-                ["rawJson"] = "{ secret: true }",
-                ["executablePath"] = @"C:\Users\Alice\AppData\Local\app.exe"
-            },
-            "errorCode",
-            "exceptionType",
-            "shortMessage");
-
-        Assert.NotNull(payloadJson);
-        Assert.Contains("\"errorCode\": \"SampleWriteFailed\"", payloadJson);
-        Assert.Contains("\"exceptionType\": \"InvalidOperationException\"", payloadJson);
-        Assert.Contains("\\u003Cpath\\u003E", payloadJson);
-        Assert.DoesNotContain("Secret Bank Account", payloadJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("rawJson", payloadJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("executablePath", payloadJson, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(@"C:\Users\Alice", payloadJson, StringComparison.OrdinalIgnoreCase);
-    }
-
+    private static readonly ConditionalWeakTable<AgentStateMachine, ManualTimeProvider> StateMachineTimeProviders = new();
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_SkipsWritingExcludedSamples()
     {
@@ -210,7 +84,7 @@ public sealed class DataFlowTests
                 ])));
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
 
         var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
         Assert.True(keepRunning);
@@ -226,6 +100,7 @@ public sealed class DataFlowTests
         Assert.Contains("title privacy rule", healthJson, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task ForegroundSampleRepository_InsertAsync_SetsInsertedSampleId()
     {
@@ -256,6 +131,7 @@ public sealed class DataFlowTests
         Assert.Equal(databaseId, sample.Id);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_EmitsChineseTerminalSampleLogsWithoutWindowTitle()
     {
@@ -291,7 +167,7 @@ public sealed class DataFlowTests
             logger);
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
 
         var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
 
@@ -314,6 +190,7 @@ public sealed class DataFlowTests
         Assert.Equal("QuantifiedSelf.Windows.App", storedProcessName);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_UsesMockCaptureWhenConfigured()
     {
@@ -355,7 +232,7 @@ public sealed class DataFlowTests
                 ])));
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
 
         var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
         Assert.True(keepRunning);
@@ -368,6 +245,7 @@ public sealed class DataFlowTests
         Assert.Equal("MockApp", processName);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_UsesWin32CaptureAndClassifiesIdleSamples()
     {
@@ -410,7 +288,7 @@ public sealed class DataFlowTests
                 ])));
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
 
         var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
         Assert.True(keepRunning);
@@ -428,6 +306,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, idleDurationSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task OverviewDataService_MapsSelfAppNamesToProductDisplayNames()
     {
@@ -456,6 +335,7 @@ public sealed class DataFlowTests
         Assert.Equal("Code", recentSessions[2].DisplayName);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SqliteDatabaseInitializer_CreatesAgentEventsTableAndIndexes()
     {
@@ -480,6 +360,7 @@ public sealed class DataFlowTests
         Assert.Contains("idx_agent_events_level_time", indexNames);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentEventRepository_InsertAndGetRecentAsync_UsesStableOrdering()
     {
@@ -518,6 +399,7 @@ public sealed class DataFlowTests
         Assert.Equal("First event", recent[1].Message);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentEventRepository_GetRecentErrorsAsync_FiltersToWarningAndAbove()
     {
@@ -558,6 +440,7 @@ public sealed class DataFlowTests
         Assert.Equal("Warning event", recentErrors[1].Message);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DiagnosticsQueryService_ReturnsEmptyListsWhenAgentEventsTableIsEmpty()
     {
@@ -574,6 +457,7 @@ public sealed class DataFlowTests
         Assert.Empty(recentErrors);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentEventRepository_ReturnsEmptyListsWhenAgentEventsTableIsMissing()
     {
@@ -596,6 +480,7 @@ public sealed class DataFlowTests
         Assert.Empty(recentErrors);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentEventJournal_WritesJsonLineWithStringEnums()
     {
@@ -628,6 +513,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"requestId\":\"request-1\"", lines[0]);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentEventWriter_ContinuesWhenDatabaseWriteFails()
     {
@@ -657,6 +543,7 @@ public sealed class DataFlowTests
         Assert.True(File.Exists(journal.GetJournalPath(agentEvent.EventTimeUtc)));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentEventWriter_ContinuesWhenJournalWriteFails()
     {
@@ -694,6 +581,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, count);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentEventRateLimiter_SuppressesRepeatedEventsWithinWindow()
     {
@@ -709,6 +597,7 @@ public sealed class DataFlowTests
         Assert.True(limiter.ShouldAllow("PrivacyFiltered:Other", utcNow.AddSeconds(30)));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesPauseCommandEvents()
     {
@@ -758,6 +647,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"commandSource\": \"FileFallback\"", commandDetected.PayloadJson ?? string.Empty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesResumeAndStopLifecycleEvents()
     {
@@ -816,6 +706,7 @@ public sealed class DataFlowTests
         Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "stop-lifecycle");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesConfigReloadedEvent()
     {
@@ -856,6 +747,7 @@ public sealed class DataFlowTests
         Assert.Contains(events, x => x.EventType == AgentEventType.CommandCompleted && x.RequestId == "reload-config");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesInvalidJsonCommandEvents()
     {
@@ -891,6 +783,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"quarantined\": true", invalidJsonEvent.PayloadJson ?? string.Empty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesCommandFailedEventForUnsupportedCommand()
     {
@@ -931,6 +824,7 @@ public sealed class DataFlowTests
         Assert.Equal("UnsupportedCommand", failedEvent.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesSessionStartedAndClosedEvents()
     {
@@ -973,9 +867,9 @@ public sealed class DataFlowTests
             eventWriter: eventWriter);
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         var events = await ReadEventsAsync(paths.DatabasePath);
@@ -990,6 +884,7 @@ public sealed class DataFlowTests
         Assert.Equal(2, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesPrivacyFilteredEvents_AndRateLimitsThem()
     {
@@ -1030,7 +925,7 @@ public sealed class DataFlowTests
 
         for (var i = 0; i < 6; i++)
         {
-            await Task.Delay(1100);
+            AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
             await stateMachine.TickAsync(CancellationToken.None);
         }
 
@@ -1049,6 +944,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_RateLimitsPrivacyFilteredEventsByRuleTypeAndProcessName()
     {
@@ -1089,7 +985,7 @@ public sealed class DataFlowTests
 
         for (var i = 0; i < samples.Length; i++)
         {
-            await Task.Delay(1100);
+            AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
             await stateMachine.TickAsync(CancellationToken.None);
         }
 
@@ -1102,6 +998,7 @@ public sealed class DataFlowTests
         Assert.Contains(privacyEvents, x => (x.PayloadJson ?? string.Empty).Contains("\"processName\": \"KeePass\"", StringComparison.Ordinal));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_WritesCaptureFailedEvents_AndRateLimitsThem()
     {
@@ -1127,7 +1024,7 @@ public sealed class DataFlowTests
             eventWriter: eventWriter);
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
 
         for (var i = 0; i < 6; i++)
         {
@@ -1145,6 +1042,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"shortMessage\": \"No samples left.\"", failedEvents[0].PayloadJson ?? string.Empty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_SanitizesPathLikeCaptureFailures()
     {
@@ -1172,7 +1070,7 @@ public sealed class DataFlowTests
             eventWriter: eventWriter);
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         var healthJson = await File.ReadAllTextAsync(paths.HealthStatePath);
@@ -1187,6 +1085,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(@"\\server\share\logs\agent.log", captureFailed.PayloadJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void DiagnosticsDataService_ReturnsCurrentJournalPathForToday()
     {
@@ -1200,6 +1099,7 @@ public sealed class DataFlowTests
         Assert.EndsWith(Path.Combine("logs", "agent_events_20260619.jsonl"), journalPath, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DiagnosticsQueryService_DoesNotParseJsonl()
     {
@@ -1221,6 +1121,7 @@ public sealed class DataFlowTests
         Assert.Empty(recentErrors);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_DoesNotWriteHighFrequencySampleOrHeartbeatEvents()
     {
@@ -1252,7 +1153,7 @@ public sealed class DataFlowTests
         await stateMachine.InitializeAsync(CancellationToken.None);
         for (var i = 0; i < 3; i++)
         {
-            await Task.Delay(1100);
+            AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
             await stateMachine.TickAsync(CancellationToken.None);
         }
 
@@ -1267,6 +1168,7 @@ public sealed class DataFlowTests
         Assert.Equal(3, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentDi_CanResolveIdleDetectorAndCapturePipeline()
     {
@@ -1309,6 +1211,7 @@ public sealed class DataFlowTests
         Assert.NotNull(stateMachine);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task OverviewQueryService_UsesLocalDayOverlap_AndOrdersByActiveDuration()
     {
@@ -1346,6 +1249,7 @@ public sealed class DataFlowTests
         Assert.Equal(900, topApps[1].ActiveDurationSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SampleQueryService_ReturnsRecentSamplesWithStableOrderingAndLimit()
     {
@@ -1370,6 +1274,7 @@ public sealed class DataFlowTests
         Assert.True(samples[0].Id > samples[1].Id);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SamplesViewModel_LoadsRecentSamplesAndFiltersByActivityState()
     {
@@ -1402,6 +1307,7 @@ public sealed class DataFlowTests
         Assert.Contains("Showing 1 of 3", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SamplesViewModel_ReturnsEmptyStateForEmptyDatabase()
     {
@@ -1420,6 +1326,7 @@ public sealed class DataFlowTests
         Assert.Contains("暂无采样记录", viewModel.EmptyStateText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SamplesViewModel_RedactsLoadFailureAndShowsErrorState()
     {
@@ -1438,6 +1345,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SessionQueryService_ReturnsRecentSessionsWithStableOrderingAndLimit()
     {
@@ -1462,6 +1370,7 @@ public sealed class DataFlowTests
         Assert.True(sessions[0].Id > sessions[1].Id);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SessionQueryService_ReturnsSessionsOverlappingLocalDay()
     {
@@ -1486,6 +1395,7 @@ public sealed class DataFlowTests
         Assert.Null(sessions[0].EndedAtUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SessionQueryService_ReturnsSessionsOverlappingExplicitRange()
     {
@@ -1511,6 +1421,7 @@ public sealed class DataFlowTests
         Assert.Equal(["Inside", "OverlapStart"], sessions.Select(x => x.ProcessName).ToArray());
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SessionsViewModel_LoadsSessionsAndFiltersCloseReason()
     {
@@ -1581,6 +1492,7 @@ public sealed class DataFlowTests
         Assert.Equal("Other", viewModel.Sessions[0].CloseReasonFilter);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SessionsViewModel_IgnoresStaleRangeLoadResults()
     {
@@ -1608,6 +1520,17 @@ public sealed class DataFlowTests
         viewModel.SelectedRange = "Last 24 Hours";
         await last24Requested.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
+        var rangeApplied = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        NotifyCollectionChangedEventHandler? collectionChanged = null;
+        collectionChanged = (_, _) =>
+        {
+            if (viewModel.Sessions.Count == 1 && viewModel.Sessions[0].ProcessName == "NewRange")
+            {
+                rangeApplied.TrySetResult();
+            }
+        };
+        viewModel.Sessions.CollectionChanged += collectionChanged;
+
         last24Result.SetResult(
         [
             new AppSession
@@ -1625,7 +1548,8 @@ public sealed class DataFlowTests
             }
         ]);
 
-        await WaitUntilAsync(() => viewModel.Sessions.Count == 1 && viewModel.Sessions[0].ProcessName == "NewRange");
+        await rangeApplied.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        viewModel.Sessions.CollectionChanged -= collectionChanged;
 
         todayResult.SetResult(
         [
@@ -1644,13 +1568,13 @@ public sealed class DataFlowTests
             }
         ]);
         await firstLoad;
-        await Task.Delay(50);
 
         Assert.Single(viewModel.Sessions);
         Assert.Equal("NewRange", viewModel.Sessions[0].ProcessName);
         Assert.Contains("last 24 hours", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SessionsViewModel_RedactsLoadFailureAndShowsErrorState()
     {
@@ -1669,6 +1593,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppUsageQueryService_RanksAppsByActiveDurationAndStableTieBreaking()
     {
@@ -1703,6 +1628,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(apps, x => x.ProcessName == "Ignored");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task OverviewDataService_TopAppsMatchesAppsViewTodayQuery()
     {
@@ -1744,6 +1670,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppsViewModel_LoadsTodayAppUsage()
     {
@@ -1797,6 +1724,7 @@ public sealed class DataFlowTests
         Assert.Contains("ranked by active duration", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppsViewModel_UsesDisplayNameFallback()
     {
@@ -1831,6 +1759,7 @@ public sealed class DataFlowTests
         Assert.Equal("Unknown", viewModel.Apps[1].DisplayName);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppsViewModel_ReturnsEmptyStateForEmptyDatabase()
     {
@@ -1849,6 +1778,7 @@ public sealed class DataFlowTests
         Assert.Contains("暂无今日应用使用记录", viewModel.EmptyStateText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppsViewModel_RedactsLoadFailureAndShowsErrorState()
     {
@@ -1867,14 +1797,16 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(@"\\server\share", viewModel.StatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void NavigationOrder_IsDashboardAppsSessionsSamplesDiagnosticsSettings()
     {
         Assert.Equal(
-            ["Dashboard", "Apps", "Sessions", "Samples", "Diagnostics", "Insights", "Settings"],
+            ["Today", "Timeline", "Insights", "Trends", "Privacy", "Settings", "Diagnostics"],
             MainWindowViewModel.NavigationPages);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_NavigatesToAppsSessionsSamples()
     {
@@ -1882,19 +1814,20 @@ public sealed class DataFlowTests
         var viewModel = await CreateMainWindowViewModelAsync(workspace);
 
         viewModel.SelectedTabIndex = 1;
-        Assert.Equal("Apps", viewModel.CurrentPage);
+        Assert.Equal("Timeline", viewModel.CurrentPage);
 
         viewModel.SelectedTabIndex = 2;
-        Assert.Equal("Sessions", viewModel.CurrentPage);
+        Assert.Equal("Insights", viewModel.CurrentPage);
 
         viewModel.SelectedTabIndex = 3;
-        Assert.Equal("Samples", viewModel.CurrentPage);
+        Assert.Equal("Trends", viewModel.CurrentPage);
 
         viewModel.OpenSettingsCommand.Execute(null);
-        Assert.Equal(6, viewModel.SelectedTabIndex);
+        Assert.Equal(5, viewModel.SelectedTabIndex);
         Assert.Equal("Settings", viewModel.CurrentPage);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_RefreshesCurrentPage()
     {
@@ -1930,17 +1863,10 @@ public sealed class DataFlowTests
         await viewModel.RefreshAsync();
 
         Assert.Equal(1, appsLoads);
-        Assert.Equal(0, sessionsLoads);
-        Assert.Equal(0, samplesLoads);
+        Assert.Equal(1, sessionsLoads);
+        Assert.Equal(1, samplesLoads);
 
         viewModel.SelectedTabIndex = 2;
-        await viewModel.RefreshAsync();
-
-        Assert.Equal(1, appsLoads);
-        Assert.Equal(1, sessionsLoads);
-        Assert.Equal(0, samplesLoads);
-
-        viewModel.SelectedTabIndex = 3;
         await viewModel.RefreshAsync();
 
         Assert.Equal(1, appsLoads);
@@ -1948,12 +1874,13 @@ public sealed class DataFlowTests
         Assert.Equal(1, samplesLoads);
         Assert.Equal(0, settingsLoads);
 
-        viewModel.SelectedTabIndex = 6;
+        viewModel.SelectedTabIndex = 5;
         await viewModel.RefreshAsync();
 
         Assert.Equal(1, settingsLoads);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_RefreshesInsightsPageThroughRealPath()
     {
@@ -1972,16 +1899,16 @@ public sealed class DataFlowTests
                 "Active");
         }
 
-        viewModel.SelectedTabIndex = 5; // Insights
+        viewModel.SelectedTabIndex = 2; // Insights
         await viewModel.RefreshAsync();
 
         Assert.Equal("Insights", viewModel.CurrentPage);
         Assert.Equal("30", viewModel.InsightsViewModel.ActiveSampleText);
         Assert.True(viewModel.InsightsViewModel.HasInsightData);
-        Assert.NotEmpty(viewModel.InsightsViewModel.WorkBlocks);
-        Assert.Contains("专注", viewModel.InsightsViewModel.SummaryText, StringComparison.Ordinal);
+        Assert.Contains("30", viewModel.InsightsViewModel.SummaryText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_AppliesRefreshIntervalAfterSettingsSave()
     {
@@ -2025,6 +1952,8 @@ public sealed class DataFlowTests
         var sessionsViewModel = new SessionsViewModel((_, _, _) => Task.FromResult<IReadOnlyList<AppSession>>([]));
         var appsViewModel = new AppsViewModel((_, _) => Task.FromResult<IReadOnlyList<AppUsageSummary>>([]));
         var settingsViewModel = new SettingsViewModel(settingsService, paths);
+        var refreshScheduler = new FakeRefreshScheduler();
+        var statusPollScheduler = new FakeRefreshScheduler();
         var mainViewModel = new MainWindowViewModel(
             processService,
             controlService,
@@ -2036,19 +1965,23 @@ public sealed class DataFlowTests
             appsViewModel,
             settingsViewModel,
             settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
+            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
+            refreshScheduler: refreshScheduler,
+            statusPollScheduler: statusPollScheduler);
 
         await mainViewModel.InitializeAsync();
 
-        var timer = GetPrivateFieldValue<System.Windows.Threading.DispatcherTimer>(mainViewModel, "_refreshTimer");
-        Assert.Equal(TimeSpan.FromSeconds(15), timer.Interval);
+        Assert.Equal(TimeSpan.FromSeconds(15), refreshScheduler.CurrentInterval);
+        Assert.Equal(1, refreshScheduler.StartCount);
+        Assert.True(refreshScheduler.IsRunning);
 
         settingsViewModel.RefreshIntervalSecondsText = "30";
         await settingsViewModel.SaveAppSettingsAsync();
 
-        Assert.Equal(TimeSpan.FromSeconds(30), timer.Interval);
+        Assert.Equal(TimeSpan.FromSeconds(30), refreshScheduler.CurrentInterval);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_LoadsAppSettings()
     {
@@ -2077,9 +2010,10 @@ public sealed class DataFlowTests
         Assert.Equal("Samples", viewModel.AppSettings.LastSelectedPage);
         Assert.Equal("42", viewModel.RefreshIntervalSecondsText);
         Assert.Equal("Enabled", viewModel.AutoStartAgentWhenAppStartsText);
-        Assert.Equal("Samples", viewModel.LastSelectedPageText);
+        Assert.Equal("Timeline", viewModel.LastSelectedPageText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_LoadsAgentOptions()
     {
@@ -2129,6 +2063,7 @@ public sealed class DataFlowTests
         Assert.Equal("*Secret*", viewModel.ExcludedTitlePatternsText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ReturnsDefaultsWhenFilesMissing()
     {
@@ -2151,6 +2086,7 @@ public sealed class DataFlowTests
         Assert.Equal("KeePass", viewModel.AgentOptions.ExcludedProcesses.First());
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_UsesEmptyStateForEmptyCollections()
     {
@@ -2177,6 +2113,7 @@ public sealed class DataFlowTests
         Assert.Equal("(none)", viewModel.ExcludedTitlePatternsText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RedactsLoadFailureAndShowsSafeStatusText()
     {
@@ -2199,6 +2136,7 @@ public sealed class DataFlowTests
         Assert.Equal("Settings could not be fully loaded. Refresh to retry.", viewModel.EmptyStateText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void SettingsViewModel_ExposesDataConfigLogRuntimePaths()
     {
@@ -2219,6 +2157,7 @@ public sealed class DataFlowTests
         Assert.Equal(paths.AgentOptionsPath, viewModel.AgentOptionsPathText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SavesAppSettings()
     {
@@ -2256,9 +2195,10 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasSaveError);
         Assert.Equal("45", viewModel.RefreshIntervalSecondsText);
         Assert.True(viewModel.AutoStartAgentWhenAppStarts);
-        Assert.Equal("Dashboard", viewModel.LastSelectedPageText);
+        Assert.Equal("Today", viewModel.LastSelectedPageText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RejectsInvalidRefreshInterval()
     {
@@ -2297,6 +2237,7 @@ public sealed class DataFlowTests
         Assert.Contains("Refresh interval must be an integer between 5 and 300 seconds.", viewModel.SaveStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_PreservesLastSelectedPageAsReadOnly()
     {
@@ -2329,6 +2270,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasValidationError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RedactsAppSettingsSaveFailure()
     {
@@ -2354,6 +2296,7 @@ public sealed class DataFlowTests
         Assert.Contains("<path>", viewModel.SaveStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_AcceptsDefaultOptions()
     {
@@ -2367,6 +2310,7 @@ public sealed class DataFlowTests
         Assert.Equal(["InPrivate"], result.NormalizedOptions.ExcludedTitlePatterns);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_RejectsInvalidNumericRanges()
     {
@@ -2390,6 +2334,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("C:\\", result.SafeMessageText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_RejectsStaleThresholdEqualToHeartbeat()
     {
@@ -2408,6 +2353,7 @@ public sealed class DataFlowTests
         Assert.Contains(result.Issues, issue => issue.FieldName == "staleThresholdSeconds" && issue.Message.Contains("greater than heartbeatIntervalSeconds", StringComparison.Ordinal));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_RejectsProcessPaths()
     {
@@ -2425,6 +2371,7 @@ public sealed class DataFlowTests
         Assert.Equal(["Notepad"], result.NormalizedOptions.ExcludedProcesses);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_NormalizesExcludedProcesses()
     {
@@ -2440,6 +2387,7 @@ public sealed class DataFlowTests
         Assert.Equal(["notepad", "calc"], result.NormalizedOptions.ExcludedProcesses);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_DeduplicatesPrivacyRules()
     {
@@ -2456,6 +2404,7 @@ public sealed class DataFlowTests
         Assert.Equal(["*Secret*", "*Private*"], result.NormalizedOptions.ExcludedTitlePatterns);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_RejectsOverlongExcludedProcesses()
     {
@@ -2472,6 +2421,7 @@ public sealed class DataFlowTests
         Assert.Empty(result.NormalizedOptions.ExcludedProcesses);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_RejectsOverlongExcludedTitlePatterns()
     {
@@ -2488,6 +2438,7 @@ public sealed class DataFlowTests
         Assert.Empty(result.NormalizedOptions.ExcludedTitlePatterns);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentOptionsValidator_RejectsExceedingMaxCount()
     {
@@ -2506,6 +2457,7 @@ public sealed class DataFlowTests
         Assert.Equal(AgentOptionsValidator.ExcludedTitlePatternsMaxCount, result.NormalizedOptions.ExcludedTitlePatterns.Count);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WindowsAgentOptionsStore_WriteWithBackupAsync_CreatesBackupAndWritesAtomically()
     {
@@ -2549,6 +2501,7 @@ public sealed class DataFlowTests
         Assert.Equal(7, current.IdleSummaryIntervalMinutes);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WindowsAgentOptionsStore_WriteWithBackupAsync_KeepsOriginalFileWhenTempWriteFails()
     {
@@ -2584,6 +2537,7 @@ public sealed class DataFlowTests
         Assert.Equal(60, current.IdleThresholdSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WindowsAgentOptionsStore_WriteWithBackupAsync_KeepsOriginalFileWhenReplaceFails()
     {
@@ -2626,6 +2580,7 @@ public sealed class DataFlowTests
         Assert.Equal(60, backup.IdleThresholdSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WindowsAgentOptionsStore_RestoreBackupAsync_RestoresFromBackup()
     {
@@ -2658,6 +2613,7 @@ public sealed class DataFlowTests
         Assert.Equal(120, current.IdleThresholdSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WindowsAgentOptionsStore_RestoreBackupAsync_ThrowsWhenBackupMissing()
     {
@@ -2670,6 +2626,7 @@ public sealed class DataFlowTests
         Assert.Contains("No backup file", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ValidatesAgentOptionsEditor()
     {
@@ -2700,6 +2657,7 @@ public sealed class DataFlowTests
         Assert.Equal("*Secret*", viewModel.NormalizedExcludedTitlePatternsText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ResetAgentOptionsEditorRestoresLoadedValues()
     {
@@ -2763,6 +2721,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasAgentOptionsValidationError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SaveAppSettingsDoesNotSaveAgentOptions()
     {
@@ -2822,6 +2781,7 @@ public sealed class DataFlowTests
         Assert.Equal(["Notepad"], savedAgentOptions.ExcludedProcesses);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SavesAgentOptionsWithBackup()
     {
@@ -2881,6 +2841,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasAgentOptionsValidationError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RejectsInvalidAgentOptionsBeforeSave()
     {
@@ -2914,6 +2875,7 @@ public sealed class DataFlowTests
         Assert.Contains("samplingIntervalSeconds", viewModel.AgentOptionsValidationDetailsText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RejectsPathLikeExcludedProcesses()
     {
@@ -2955,6 +2917,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(saved.ExcludedProcesses, p => p.Contains('\\') || p.Contains('/') || p.Contains(':'));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SaveAgentOptionsFailureDoesNotCorruptExistingFile()
     {
@@ -2987,6 +2950,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(paths.AgentOptionsPath, viewModel.AgentOptionsSaveStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RestoresAgentOptionsBackup()
     {
@@ -3031,6 +2995,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasAgentOptionsSaveError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RestoreBackupWhenMissingShowsSafeStatus()
     {
@@ -3055,6 +3020,7 @@ public sealed class DataFlowTests
         Assert.Contains("restore failed", viewModel.AgentOptionsSaveStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SaveAgentOptionsPreservesNonEditableFields()
     {
@@ -3088,6 +3054,7 @@ public sealed class DataFlowTests
         Assert.Equal("42", viewModel.IdleSummaryIntervalMinutesText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SaveAgentOptionsDoesNotReloadAgent()
     {
@@ -3106,6 +3073,7 @@ public sealed class DataFlowTests
         Assert.Contains("next Agent start", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataViewQueryServices_ReturnEmptyListsForMissingDatabaseAndMissingTables()
     {
@@ -3128,6 +3096,7 @@ public sealed class DataFlowTests
         Assert.Empty(await new AppUsageQueryService(emptyDatabasePath).GetAppUsageForLocalDayAsync(DateOnly.FromDateTime(DateTime.Now)));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ReloadConfigUsesValidatorAndNormalizesOptions()
     {
@@ -3185,7 +3154,7 @@ public sealed class DataFlowTests
         Assert.True(result.Accepted);
         Assert.True(result.Completed);
 
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         var events = await ReadEventsAsync(paths.DatabasePath);
@@ -3200,6 +3169,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ReloadConfigRejectsInvalidOptionsAndKeepsCurrentOptions()
     {
@@ -3257,7 +3227,7 @@ public sealed class DataFlowTests
         Assert.False(result.Completed);
         Assert.Equal("ReloadConfigValidationFailed", result.ErrorCode);
 
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         var events = await ReadEventsAsync(paths.DatabasePath);
@@ -3271,6 +3241,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"processName\": \"Notepad\"", privacyFiltered[0].PayloadJson ?? string.Empty, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ReloadConfigReadFailureKeepsCurrentOptions()
     {
@@ -3321,7 +3292,7 @@ public sealed class DataFlowTests
         Assert.False(result.Completed);
         Assert.Equal("ReloadConfigReadFailed", result.ErrorCode);
 
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         var events = await ReadEventsAsync(paths.DatabasePath);
@@ -3335,6 +3306,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"processName\": \"Notepad\"", privacyFiltered[0].PayloadJson ?? string.Empty, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ReloadConfigKeepsPausedState()
     {
@@ -3396,6 +3368,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"actualState\": \"Paused\"", configReloaded.PayloadJson ?? string.Empty, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_InitializeAsync_FallsBackToDefaultsForInvalidConfig_UsesNormalizedForValidConfig()
     {
@@ -3437,8 +3410,8 @@ public sealed class DataFlowTests
         var combinedLogs1 = string.Join(Environment.NewLine, logger1.Messages);
         Assert.Contains("falling back to defaults", combinedLogs1, StringComparison.OrdinalIgnoreCase);
 
-        // Default sampling interval is 3 s; wait long enough for a sample to be due.
-        await Task.Delay(3100);
+        // Default sampling interval is 3 s; advance the deterministic test clock.
+        AdvanceTime(stateMachine1, TimeSpan.FromMilliseconds(3100));
         await stateMachine1.TickAsync(CancellationToken.None);
 
         // KeePass 属于默认 ExcludedProcesses，应被排除
@@ -3478,7 +3451,7 @@ public sealed class DataFlowTests
             eventWriter: eventWriter2);
 
         await stateMachine2.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine2, TimeSpan.FromMilliseconds(1100));
         await stateMachine2.TickAsync(CancellationToken.None);
 
         // notepad.exe 归一化为 notepad，与 Notepad（大小写不敏感）匹配，应被排除
@@ -3491,6 +3464,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, await CountAsync(connection2, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SaveAndReloadSavesThenRequestsReload()
     {
@@ -3550,6 +3524,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasAgentOptionsReloadError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ReloadConfigDisabledWhenAgentNotRunning()
     {
@@ -3583,6 +3558,7 @@ public sealed class DataFlowTests
         Assert.Contains("next Agent start", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ReloadConfigFailureShowsSafeStatus()
     {
@@ -3619,6 +3595,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(@"C:\Users\Alice\runtime\agent_control.json", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_PollsUntilConfigReloadedObserved()
     {
@@ -3689,6 +3666,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.HasAgentOptionsReloadError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_PollsCommandFailedAndShowsError()
     {
@@ -3748,6 +3726,7 @@ public sealed class DataFlowTests
         Assert.Contains("ReloadConfigValidationFailed", viewModel.AgentOptionsReloadStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_RestoreBackupDoesNotReloadAutomatically()
     {
@@ -3803,6 +3782,7 @@ public sealed class DataFlowTests
         Assert.Contains("ReloadConfig or next Agent start", viewModel.AgentOptionsSaveStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SqliteDatabaseInitializer_ResetsLegacySchemaToCurrentShape()
     {
@@ -3865,6 +3845,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("session_id", sessionColumns);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ReloadConfigAppliesUpdatedExcludedTitlePatterns()
     {
@@ -3909,7 +3890,7 @@ public sealed class DataFlowTests
             eventWriter);
 
         await stateMachine.InitializeAsync(CancellationToken.None);
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         // First sample should be written (no exclusion yet)
@@ -3940,7 +3921,7 @@ public sealed class DataFlowTests
         Assert.True(result.Accepted);
         Assert.True(result.Completed);
 
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         await stateMachine.TickAsync(CancellationToken.None);
 
         // Second sample should be excluded (title matches *Secret*)
@@ -3965,6 +3946,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, await CountAsync(connection2, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneData_EntersAndLeavesMaintenance()
     {
@@ -4035,6 +4017,7 @@ public sealed class DataFlowTests
         Assert.Null(health.LastErrorMessage);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ClearHistory_EndsPaused()
     {
@@ -4087,6 +4070,7 @@ public sealed class DataFlowTests
         Assert.Null(health.LastErrorMessage);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_MaintenanceSkipsSampleCapture()
     {
@@ -4124,7 +4108,7 @@ public sealed class DataFlowTests
         // Directly set Maintenance (bypasses command processing for test simplicity)
         stateMachine.ActualState = AgentActualState.Maintenance;
 
-        await Task.Delay(1100);
+        AdvanceTime(stateMachine, TimeSpan.FromMilliseconds(1100));
         var keepRunning = await stateMachine.TickAsync(CancellationToken.None);
         Assert.True(keepRunning);
 
@@ -4133,6 +4117,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM foreground_samples;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_RejectsDuplicateMaintenanceCommands()
     {
@@ -4176,6 +4161,7 @@ public sealed class DataFlowTests
         Assert.Contains(events, x => x.EventType == AgentEventType.CommandFailed && x.ErrorCode == "AlreadyInMaintenance");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ClearHistoryFromPausedStaysPaused()
     {
@@ -4215,6 +4201,7 @@ public sealed class DataFlowTests
         Assert.Equal(AgentActualState.Paused, result.ActualState);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneData_WritesMaintenanceToRuntimeStateDuringOperation()
     {
@@ -4286,6 +4273,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataDeletesExpiredRows()
     {
@@ -4316,6 +4304,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataKeepsRecentRows()
     {
@@ -4337,6 +4326,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.SessionsDeleted);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataKeepsOpenSessions()
     {
@@ -4361,6 +4351,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions WHERE ended_at_utc IS NULL;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataHandlesMissingTables()
     {
@@ -4382,6 +4373,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.AgentEventsDeleted);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataUsesTransactionForSqliteDeletes()
     {
@@ -4402,6 +4394,7 @@ public sealed class DataFlowTests
         Assert.True(result.ForegroundSamplesDeleted > 0 || result.SessionsDeleted > 0);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataDeletesOldJsonlFilesOnly()
     {
@@ -4436,6 +4429,7 @@ public sealed class DataFlowTests
         Assert.True(File.Exists(nonMatchingFile));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataUsesLocalDateForJsonlCutoff()
     {
@@ -4457,6 +4451,7 @@ public sealed class DataFlowTests
         Assert.True(File.Exists(edgeFile));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataDoesNotDeleteConfigRuntimeOrDatabaseFiles()
     {
@@ -4485,6 +4480,7 @@ public sealed class DataFlowTests
         Assert.True(File.Exists(runtimeFile));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void DataMaintenanceService_ReportsJsonlDeleteFailureWithoutPaths()
     {
@@ -4506,6 +4502,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(":\\", result.SafeMessage ?? string.Empty, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void DataMaintenanceService_TryParseJournalDate_ReturnsCorrectDate()
     {
@@ -4517,6 +4514,7 @@ public sealed class DataFlowTests
         Assert.Null(DataMaintenanceService.TryParseJournalDate("agent_events_notadate.jsonl")); // not a date
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_PruneDataDeletesAgentEvents()
     {
@@ -4575,6 +4573,7 @@ public sealed class DataFlowTests
         await command.ExecuteNonQueryAsync();
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneData_WritesDataPrunedEventWithCorrectPayload()
     {
@@ -4624,6 +4623,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("\\\\", payload, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneDataRestoresRunningState()
     {
@@ -4660,6 +4660,7 @@ public sealed class DataFlowTests
         Assert.Equal(AgentActualState.Running, result.ActualState);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneDataRestoresPausedState()
     {
@@ -4699,6 +4700,7 @@ public sealed class DataFlowTests
         Assert.Equal(AgentActualState.Paused, result.ActualState);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneDataDoesNotDeleteItsOwnCompletionEvents()
     {
@@ -4747,6 +4749,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(events, x => x.EventType == AgentEventType.AgentStarted && x.Message == "Old event");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneDataUsesRetentionDays()
     {
@@ -4788,6 +4791,7 @@ public sealed class DataFlowTests
         Assert.Contains("\"retentionDays\": 7", payload, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_PruneDataFailureWritesCommandFailedAndSafeMessage()
     {
@@ -4840,6 +4844,7 @@ public sealed class DataFlowTests
         Assert.Equal(AgentActualState.Running, stateMachine.ActualState);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ClearHistoryEntersConfirmationMode()
     {
@@ -4869,6 +4874,7 @@ public sealed class DataFlowTests
         Assert.Contains("CLEAR", viewModel.ClearHistoryStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ClearHistoryRejectsWrongConfirmationText()
     {
@@ -4901,6 +4907,7 @@ public sealed class DataFlowTests
         Assert.Contains("does not match", viewModel.ClearHistoryStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ClearHistoryQueuesCommandAfterCorrectConfirmation()
     {
@@ -4939,6 +4946,7 @@ public sealed class DataFlowTests
         Assert.Contains("queued", viewModel.ClearHistoryStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_DisablesDataCleanupWhenAgentNotRunning()
     {
@@ -4967,6 +4975,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.ClearHistoryCommand.CanExecute(null));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_DisablesDataCleanupDuringMaintenance()
     {
@@ -4995,6 +5004,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.ClearHistoryCommand.CanExecute(null));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_DoesNotQueueDuplicateCleanupDuringMaintenance()
     {
@@ -5036,6 +5046,7 @@ public sealed class DataFlowTests
         Assert.Contains("Cannot prune data", viewModel.PruneDataStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshAfterClearHistory_EmptyStateDoesNotThrow()
     {
@@ -5070,6 +5081,7 @@ public sealed class DataFlowTests
         Assert.False(appsViewModel.HasLoadError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_SettingsDirtyGuardStillWorksWithDataManagement()
     {
@@ -5092,7 +5104,7 @@ public sealed class DataFlowTests
             .SetValue(viewModel.SettingsViewModel, true);
 
         // Navigate to Settings and refresh
-        viewModel.SelectedTabIndex = 6; // Settings tab
+        viewModel.SelectedTabIndex = 5; // Settings tab
         await viewModel.RefreshAsync();
 
         // Dirty guard: LoadAsync should NOT have been called because IsDirty was true
@@ -5103,6 +5115,7 @@ public sealed class DataFlowTests
         Assert.Equal("No maintenance performed in this session.", viewModel.SettingsViewModel.LastMaintenanceStatusText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ClearHistoryFailureWritesCommandFailed()
     {
@@ -5143,6 +5156,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(events, x => x.EventType == AgentEventType.HistoryCleared);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DiagnosticsViewModel_ClearHistoryAllowsEmptyRecentErrors()
     {
@@ -5170,6 +5184,7 @@ public sealed class DataFlowTests
 
     // ── IPC Protocol Tests (Phase 8.1) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentIpcRequest_RoundTripsJson()
     {
@@ -5197,6 +5212,7 @@ public sealed class DataFlowTests
         Assert.Equal(10000, deserialized.TimeoutMilliseconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentIpcResponse_RoundTripsJson()
     {
@@ -5225,6 +5241,7 @@ public sealed class DataFlowTests
         Assert.Null(deserialized.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentPipeName_GeneratesStableNameForUserSid()
     {
@@ -5238,6 +5255,7 @@ public sealed class DataFlowTests
         Assert.Equal(name1.DisplayPipeName, name2.DisplayPipeName);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentPipeName_DoesNotExposeRawSid()
     {
@@ -5250,6 +5268,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(sid, name.SidHash, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentPipeName_UsesDifferentNamesForDifferentUsers()
     {
@@ -5263,6 +5282,7 @@ public sealed class DataFlowTests
         Assert.NotEqual(name1.SidHash, name2.SidHash);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentPipeName_ExposesSafeDisplayName()
     {
@@ -5278,6 +5298,7 @@ public sealed class DataFlowTests
         Assert.StartsWith(displayHashPart, name.SidHash, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeProtocol_RoundTripsLengthPrefixedJson()
     {
@@ -5298,6 +5319,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, deserialized.ProtocolVersion);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeProtocol_RejectsInvalidPayloadSafely()
     {
@@ -5317,6 +5339,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("NOT_VALID", ex.Message, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeProtocol_RejectsPayloadOverMaxSize()
     {
@@ -5333,6 +5356,7 @@ public sealed class DataFlowTests
         Assert.Contains("too large", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeProtocol_RejectsTruncatedPayloadSafely()
     {
@@ -5350,6 +5374,7 @@ public sealed class DataFlowTests
         Assert.Equal("IpcProtocolError", ex.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeProtocol_RejectsWritePayloadOverMaxSize()
     {
@@ -5369,6 +5394,7 @@ public sealed class DataFlowTests
 
     // ── IPC Server Tests (Phase 8.2) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_RespondsToPing()
     {
@@ -5394,6 +5420,7 @@ public sealed class DataFlowTests
         Assert.NotEqual(default, response.CompletedAtUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_ReturnsStatus()
     {
@@ -5420,6 +5447,7 @@ public sealed class DataFlowTests
         Assert.True(response.Status.IsHealthy);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_RejectsUnsupportedProtocolVersion()
     {
@@ -5442,6 +5470,7 @@ public sealed class DataFlowTests
         Assert.Contains("Unsupported", response.Message, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_RejectsUnsupportedCommand()
     {
@@ -5465,6 +5494,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(request.Command, response.Message, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_UnsupportedCommandDoesNotEchoSensitiveStrings()
     {
@@ -5486,6 +5516,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("secret.txt", response.Message, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeAgentCommandServer_RoundTripsPingOverPipe()
     {
@@ -5511,9 +5542,6 @@ public sealed class DataFlowTests
             }, cts.Token);
         }, cts.Token);
 
-        // Give server a moment to start listening
-        await Task.Delay(200, cts.Token);
-
         using var client = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
         await client.ConnectAsync(5000, cts.Token);
 
@@ -5531,6 +5559,7 @@ public sealed class DataFlowTests
         try { await serverTask; } catch (OperationCanceledException) { }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeAgentCommandServer_HandlesInvalidJsonWithoutCrashing()
     {
@@ -5571,6 +5600,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("NOT_VALID", response.Message, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentCommandServerHostedService_StartsAndStopsCleanly()
     {
@@ -5591,7 +5621,6 @@ public sealed class DataFlowTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
         // Start and immediately cancel — should not throw
         var executeTask = hostedService.StartAsync(cts.Token);
-        await Task.Delay(300, CancellationToken.None);
         cts.Cancel();
 
         try { await executeTask; } catch (OperationCanceledException) { }
@@ -5616,6 +5645,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentIpcStatusService_RecordsLastSuccessAndFallback()
     {
@@ -5636,6 +5666,7 @@ public sealed class DataFlowTests
         Assert.NotNull(service.LastFallbackUsedUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentIpcStatusService_DoesNotExposeFullPipeNameInDisplayText()
     {
@@ -5649,6 +5680,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(pipeName.SidHash, display, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStatusService_UsesIpcStatusWhenAvailable()
     {
@@ -5692,6 +5724,7 @@ public sealed class DataFlowTests
         Assert.Equal("NamedPipe", ipcStatusService.LastCommandSource);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStatusService_FallsBackToRuntimeStateWhenIpcUnavailable()
     {
@@ -5731,6 +5764,7 @@ public sealed class DataFlowTests
         Assert.Contains("timed out", ipcStatusService.LastIpcError, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStatusService_FallsBackWhenIpcResponseIsFailed()
     {
@@ -5773,6 +5807,7 @@ public sealed class DataFlowTests
         Assert.Equal("FileFallback", ipcStatusService.LastCommandSource);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeAgentControlClient_PingReturnsPong()
     {
@@ -5796,8 +5831,6 @@ public sealed class DataFlowTests
                 });
             }, cts.Token);
         }, cts.Token);
-
-        await Task.Delay(200, cts.Token);
 
         var clientPipeName = new AgentPipeName("S-1-5-21-test");
         // Override pipe name for test — use a custom client that connects to test pipe
@@ -5845,6 +5878,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task NamedPipeAgentControlClient_TimesOutSafely()
     {
@@ -5859,6 +5893,7 @@ public sealed class DataFlowTests
         await Assert.ThrowsAsync<TimeoutException>(() => client.SendAsync(request, cts.Token));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_ExistingCommandsStillUseFileFallback()
     {
@@ -5887,6 +5922,7 @@ public sealed class DataFlowTests
 
     // ── IPC Command Migration Tests (Phase 8.4) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_PauseReturnsCompleted()
     {
@@ -5910,6 +5946,7 @@ public sealed class DataFlowTests
         Assert.Null(response.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_ResumeReturnsCompleted()
     {
@@ -5930,6 +5967,7 @@ public sealed class DataFlowTests
         Assert.False(response.ActualState == AgentActualState.Error);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_StopReturnsCompleted()
     {
@@ -5953,6 +5991,7 @@ public sealed class DataFlowTests
         Assert.NotEqual("", response.RequestId);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_ReloadConfigReturnsCompleted()
     {
@@ -5975,6 +6014,7 @@ public sealed class DataFlowTests
         Assert.Null(response.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void ProcessedRequestCache_SuppressesDuplicateRequestIds()
     {
@@ -5986,6 +6026,7 @@ public sealed class DataFlowTests
         Assert.False(cache.TryMarkProcessed("req-002")); // different id
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_DuplicateRequestDoesNotExecuteTwice()
     {
@@ -6013,6 +6054,7 @@ public sealed class DataFlowTests
         Assert.Equal("DuplicateRequest", r2.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_PauseUsesIpcWhenAvailable()
     {
@@ -6040,6 +6082,7 @@ public sealed class DataFlowTests
         Assert.Equal("NamedPipe", ipcStatus.LastCommandSource);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_PauseFallsBackToFileWhenIpcUnavailable()
     {
@@ -6068,6 +6111,7 @@ public sealed class DataFlowTests
         Assert.NotNull(readResult.Command);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_ReloadConfigPreservesNotRunningMessage()
     {
@@ -6083,6 +6127,7 @@ public sealed class DataFlowTests
         Assert.Contains("not running", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_RequestTimeoutDoesNotDuplicate()
     {
@@ -6112,6 +6157,7 @@ public sealed class DataFlowTests
         Assert.Null(readResult.Command);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_FallbackUsesSameRequestIdAsIpc()
     {
@@ -6143,6 +6189,7 @@ public sealed class DataFlowTests
         Assert.StartsWith("ipc-", readResult.Command.RequestId, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentProcessService_StopFallsBackToFileWhenIpcUnavailable()
     {
@@ -6177,6 +6224,7 @@ public sealed class DataFlowTests
         Assert.StartsWith("ipc-stop-", readResult.Command.RequestId, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentProcessService_StopDoesNotWriteFallbackWhenAgentAlreadyExitedAfterIpcFailure()
     {
@@ -6211,6 +6259,7 @@ public sealed class DataFlowTests
         Assert.Null(readResult.Command); // no stale file
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_StartInfoHidesAgentConsoleByDefaultForExe()
     {
@@ -6245,6 +6294,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_StartInfoShowsAgentConsoleWhenDebugEnvEnabled()
     {
@@ -6279,6 +6329,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_StartInfoShowsAgentConsoleWhenCommandLineFlagEnabled()
     {
@@ -6314,6 +6365,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_StartInfoHidesAgentConsoleByDefaultForDll()
     {
@@ -6349,6 +6401,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_SanitizesDuplicatePathEnvironmentKeys()
     {
@@ -6368,6 +6421,7 @@ public sealed class DataFlowTests
         Assert.Equal("1", sanitized["WUJI_AGENT_SHOW_CONSOLE"]);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_ResolveStartInfoUsesSanitizedEnvironment()
     {
@@ -6401,6 +6455,7 @@ public sealed class DataFlowTests
 
     // ── Maintenance Command IPC Migration Tests (Phase 8.5) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_PruneDataReturnsCompleted()
     {
@@ -6417,6 +6472,7 @@ public sealed class DataFlowTests
         Assert.Null(response.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_ClearHistoryReturnsCompletedAndPaused()
     {
@@ -6433,6 +6489,7 @@ public sealed class DataFlowTests
         Assert.Equal(AgentActualState.Paused, response.ActualState);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_DuplicatePruneDataDoesNotDeleteTwice()
     {
@@ -6450,6 +6507,7 @@ public sealed class DataFlowTests
         Assert.Equal("DuplicateRequest", r2.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentIpcCommandDispatcher_DuplicateClearHistoryDoesNotDeleteTwice()
     {
@@ -6467,6 +6525,7 @@ public sealed class DataFlowTests
         Assert.Equal("DuplicateRequest", r2.ErrorCode);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_PruneDataUsesIpcWhenAvailable()
     {
@@ -6490,6 +6549,7 @@ public sealed class DataFlowTests
         Assert.Equal("NamedPipe", ipcStatus.LastCommandSource);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_ClearHistoryUsesIpcWhenAvailable()
     {
@@ -6513,6 +6573,7 @@ public sealed class DataFlowTests
         Assert.Equal("NamedPipe", ipcStatus.LastCommandSource);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_PruneDataFallsBackToFileWhenIpcUnavailable()
     {
@@ -6551,6 +6612,7 @@ public sealed class DataFlowTests
         Assert.StartsWith("ipc-", readResult.Command.RequestId, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_ClearHistoryTimeoutDoesNotUseNewRequestId()
     {
@@ -6576,6 +6638,7 @@ public sealed class DataFlowTests
         Assert.Null(readResult.Command);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_DoesNotFallbackWhenIpcReturnsCompletedFalse()
     {
@@ -6614,6 +6677,7 @@ public sealed class DataFlowTests
 
     // ── Diagnostics IPC Status Display Tests (Phase 8.6) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_ShowsIpcUnavailableInitially()
     {
@@ -6622,12 +6686,13 @@ public sealed class DataFlowTests
         var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
         await viewModel.InitializeAsync();
         // Navigate to Diagnostics to trigger RefreshDiagnosticsAsync
-        viewModel.SelectedTabIndex = 4; // Diagnostics
+        viewModel.SelectedTabIndex = 6; // Diagnostics
         await viewModel.RefreshAsync();
 
         Assert.Contains("IPC status unknown", viewModel.IpcStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_ShowsIpcSuccessState()
     {
@@ -6638,13 +6703,14 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         Assert.Contains("IPC connected", viewModel.IpcStatusText, StringComparison.Ordinal);
         Assert.Contains("NamedPipe", viewModel.IpcStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_ShowsIpcFallbackUsed()
     {
@@ -6655,13 +6721,14 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         Assert.Contains("FileFallback", viewModel.IpcStatusText, StringComparison.Ordinal);
         Assert.Contains("file fallback", viewModel.IpcStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_DoesNotExposeFullPipeNameOrSid()
     {
@@ -6673,7 +6740,7 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         // Must NOT expose FullPipeName or raw SID
@@ -6683,6 +6750,7 @@ public sealed class DataFlowTests
         Assert.Contains(pipeName.DisplayPipeName, viewModel.IpcStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_RedactsIpcErrorWithPathLikeString()
     {
@@ -6693,7 +6761,7 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         Assert.Contains("file fallback", viewModel.IpcStatusText, StringComparison.Ordinal);
@@ -6701,6 +6769,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("Users", viewModel.IpcStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentControlService_HandlesCancellationWithoutFallback()
     {
@@ -6732,6 +6801,7 @@ public sealed class DataFlowTests
 
     // ── RefreshService Tests (Phase 9.1) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_RefreshesStatusAndProcessInfo()
     {
@@ -6765,6 +6835,7 @@ public sealed class DataFlowTests
         Assert.NotEqual(default, result.CompletedAtUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_RecordsLastSuccess()
     {
@@ -6795,6 +6866,7 @@ public sealed class DataFlowTests
         Assert.Equal("Refresh succeeded.", refreshService.Health.StatusText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_RecordsSafeError()
     {
@@ -6838,6 +6910,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_SkipsReentrantRefresh()
     {
@@ -6869,6 +6942,7 @@ public sealed class DataFlowTests
         Assert.True(refreshService.Health.SkippedRefreshCount >= 1);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_ReturnsSequenceAndTimestamps()
     {
@@ -6899,6 +6973,7 @@ public sealed class DataFlowTests
         Assert.True(r1.StartedAtUtc <= r1.CompletedAtUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_RefreshUsesRefreshService()
     {
@@ -6930,6 +7005,7 @@ public sealed class DataFlowTests
 
     // ── Status Polling Tests (Phase 9.2) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_RefreshStatusAsyncReturnsStatusOnly()
     {
@@ -6958,6 +7034,7 @@ public sealed class DataFlowTests
         Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_IgnoresOlderStatusResult()
     {
@@ -6985,6 +7062,7 @@ public sealed class DataFlowTests
         Assert.True(r2.RefreshSequence > r1.RefreshSequence);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_StatusPollingFailureDoesNotClearState()
     {
@@ -7003,6 +7081,7 @@ public sealed class DataFlowTests
         Assert.False(result.PageDataRefreshed);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_StatusPollingDoesNotLoadSettingsWhenDirty()
     {
@@ -7042,6 +7121,7 @@ public sealed class DataFlowTests
         Assert.NotNull(refreshService.Health.LastRefreshSuccessUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_StatusPollingDoesNotCallPageDataServices()
     {
@@ -7086,6 +7166,7 @@ public sealed class DataFlowTests
 
     // ── Command Availability Tests (Phase 9.3) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_FollowsRunningStatus()
     {
@@ -7102,6 +7183,7 @@ public sealed class DataFlowTests
         Assert.False(availability.IsMaintenance);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_FollowsPausedStatus()
     {
@@ -7115,6 +7197,7 @@ public sealed class DataFlowTests
         Assert.True(availability.CanPruneData);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_DisablesDuringMaintenance()
     {
@@ -7131,6 +7214,7 @@ public sealed class DataFlowTests
         Assert.True(availability.IsMaintenance);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_DisablesCleanupWhenNotRunning()
     {
@@ -7147,6 +7231,7 @@ public sealed class DataFlowTests
         Assert.Contains("not running", availability.ReloadConfigStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_AllowsStartWhenStoppedStateStillHasProcess()
     {
@@ -7162,6 +7247,7 @@ public sealed class DataFlowTests
         Assert.False(availability.CanClearHistory);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_HandlesStaleConservatively()
     {
@@ -7177,6 +7263,7 @@ public sealed class DataFlowTests
         Assert.False(availability.CanClearHistory);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentCommandAvailability_AllowsStartWhenStaleButProcessGone()
     {
@@ -7188,6 +7275,7 @@ public sealed class DataFlowTests
         Assert.False(availability.CanReloadConfigNow);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void SettingsViewModel_CommandStatesFollowSharedAgentStatus()
     {
@@ -7206,6 +7294,7 @@ public sealed class DataFlowTests
         Assert.Contains("running", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void SettingsViewModel_DataCleanupDisabledDuringMaintenance()
     {
@@ -7224,6 +7313,7 @@ public sealed class DataFlowTests
         Assert.Contains("maintenance", viewModel.AgentOptionsReloadStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_StatusUpdateDoesNotOverwriteDirtyEditors()
     {
@@ -7247,6 +7337,7 @@ public sealed class DataFlowTests
         Assert.True(viewModel.IsDirty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ClearHistoryConfirmDisabledWhenStatusChangesToMaintenance()
     {
@@ -7283,6 +7374,7 @@ public sealed class DataFlowTests
         Assert.True(viewModel.HasClearHistoryError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void MainWindowAndSettings_CommandAvailabilityStayConsistentForSameSnapshot()
     {
@@ -7312,6 +7404,7 @@ public sealed class DataFlowTests
 
     // ── Status/Page Decouple Tests (Phase 9.4) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RefreshService_StatusAndPageHealthAreTrackedSeparately()
     {
@@ -7340,6 +7433,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, refreshService.Health.SkippedPageRefreshCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_SlowPageRefreshDoesNotBlockStatusRefresh()
     {
@@ -7363,19 +7457,24 @@ public sealed class DataFlowTests
 
         // Use a slow session loader controlled by TaskCompletionSource
         var pageTcs = new TaskCompletionSource<IReadOnlyList<AppSession>>();
+        var pageStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var viewModel = await CreateMainWindowViewModelAsync(
             workspace, refreshService: refreshService,
-            sessionLoader: (_, _, _) => pageTcs.Task);
+            sessionLoader: (_, _, _) =>
+            {
+                pageStarted.TrySetResult();
+                return pageTcs.Task;
+            });
 
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 2; // Sessions tab
+        viewModel.SelectedTabIndex = 1; // Timeline tab
 
         // Start a page refresh that will hang on the session loader
         var pageTask = viewModel.RefreshAsync();
-        await Task.Delay(100);
+        await pageStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         // Status polling should still work while page refresh is hanging
-        var statusResult = await refreshService.RefreshStatusAsync("Sessions");
+        var statusResult = await refreshService.RefreshStatusAsync("Timeline");
 
         Assert.NotNull(refreshService.Health.LastStatusRefreshSuccessUtc);
         Assert.False(statusResult.PageDataRefreshed);
@@ -7385,6 +7484,7 @@ public sealed class DataFlowTests
         await pageTask;
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_ReentrantPageRefreshRecordsSkippedCount()
     {
@@ -7408,16 +7508,21 @@ public sealed class DataFlowTests
 
         // Hang on session loader
         var pageTcs = new TaskCompletionSource<IReadOnlyList<AppSession>>();
+        var pageStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var viewModel = await CreateMainWindowViewModelAsync(
             workspace, refreshService: refreshService,
-            sessionLoader: (_, _, _) => pageTcs.Task);
+            sessionLoader: (_, _, _) =>
+            {
+                pageStarted.TrySetResult();
+                return pageTcs.Task;
+            });
 
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 2; // Sessions
+        viewModel.SelectedTabIndex = 1; // Timeline
 
         // Start first page refresh — will hang
         var pageTask = viewModel.RefreshAsync();
-        await Task.Delay(100);
+        await pageStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
 
         // Second RefreshAsync should still update status (gate released) and skip page refresh
         var beforeSkipCount = refreshService.Health.SkippedPageRefreshCount;
@@ -7431,6 +7536,7 @@ public sealed class DataFlowTests
         await pageTask;
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_PageRefreshErrorDoesNotClearAgentStatus()
     {
@@ -7459,10 +7565,11 @@ public sealed class DataFlowTests
         await viewModel.InitializeAsync();
 
         // Agent status should still reflect the real state (Paused), not defaults
-        Assert.Contains("Paused", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("已暂停", viewModel.AgentStatusText, StringComparison.Ordinal);
         Assert.NotNull(refreshService.Health.LastStatusRefreshSuccessUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_StatusRefreshErrorDoesNotClearPageData()
     {
@@ -7503,6 +7610,7 @@ public sealed class DataFlowTests
         Assert.Null(failingRefreshService.Health.LastPageRefreshError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_SettingsDirtyStillSkipsConfigReloadDuringPageRefresh()
     {
@@ -7531,7 +7639,7 @@ public sealed class DataFlowTests
             .GetProperty("IsDirty", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic)!
             .SetValue(viewModel.SettingsViewModel, true);
 
-        viewModel.SelectedTabIndex = 6; // Settings
+        viewModel.SelectedTabIndex = 5; // Settings
         await viewModel.RefreshAsync();
 
         Assert.True(viewModel.SettingsViewModel.IsDirty);
@@ -7540,6 +7648,7 @@ public sealed class DataFlowTests
 
     // ── Diagnostics RefreshHealth Tests (Phase 9.5) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_DiagnosticsShowsRefreshHealth()
     {
@@ -7563,7 +7672,7 @@ public sealed class DataFlowTests
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
         await viewModel.InitializeAsync();
 
-        viewModel.SelectedTabIndex = 4; // Diagnostics
+        viewModel.SelectedTabIndex = 6; // Diagnostics
         await viewModel.RefreshAsync();
 
         Assert.Contains("Healthy", viewModel.RefreshHealthText, StringComparison.Ordinal);
@@ -7571,6 +7680,7 @@ public sealed class DataFlowTests
         Assert.Contains("Page:", viewModel.RefreshHealthText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_DiagnosticsShowsSkippedRefreshCount()
     {
@@ -7594,12 +7704,13 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         Assert.Contains("skipped=1", viewModel.RefreshHealthText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_DiagnosticsRedactsRefreshError()
     {
@@ -7629,6 +7740,7 @@ public sealed class DataFlowTests
         Assert.Contains("Degraded", viewModel.RefreshHealthText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_DiagnosticsShowsPageRefreshInterval()
     {
@@ -7650,13 +7762,14 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4;
+        viewModel.SelectedTabIndex = 6;
         await viewModel.RefreshAsync();
 
         Assert.Contains("status polling 2s", viewModel.RefreshHealthText, StringComparison.Ordinal);
         Assert.Contains("page refresh", viewModel.RefreshHealthText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_RefreshHealthUpdatesOnStatusPollWhenDiagnosticsActive()
     {
@@ -7679,7 +7792,7 @@ public sealed class DataFlowTests
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
         await viewModel.InitializeAsync();
-        viewModel.SelectedTabIndex = 4; // Diagnostics
+        viewModel.SelectedTabIndex = 6; // Diagnostics
 
         // Trigger a status poll through ViewModel's internal path (same as timer tick)
         await viewModel.PerformStatusPollAsync();
@@ -7691,6 +7804,7 @@ public sealed class DataFlowTests
 
     // ── Disconnect / Reconnect Tests (Phase 9.6) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_StatusFailureClearsRefreshingFlags()
     {
@@ -7709,6 +7823,7 @@ public sealed class DataFlowTests
         Assert.NotNull(refreshService.Health.LastStatusRefreshError);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_PageErrorDoesNotBlockStatusPoll()
     {
@@ -7729,16 +7844,17 @@ public sealed class DataFlowTests
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
         await viewModel.InitializeAsync();
 
-        Assert.Contains("Running", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("正在记录", viewModel.AgentStatusText, StringComparison.Ordinal);
 
         // Record a page error — must NOT block subsequent status from being applied
         refreshService.Health.RecordPageError("Page load failed");
 
         // Trigger status poll — should still apply status despite page error
         await viewModel.PerformStatusPollAsync();
-        Assert.Contains("Running", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("正在记录", viewModel.AgentStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_LatestWinsDoesNotApplyOlderSequenceOverNewer()
     {
@@ -7759,7 +7875,7 @@ public sealed class DataFlowTests
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
         await viewModel.InitializeAsync();
 
-        Assert.Contains("Paused", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("已暂停", viewModel.AgentStatusText, StringComparison.Ordinal);
 
         // Apply a high-sequence Running result
         var newResult = new RefreshResult
@@ -7770,7 +7886,7 @@ public sealed class DataFlowTests
         };
         viewModel.ApplyStatusRefreshResult(newResult);
 
-        Assert.Contains("Running", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("正在记录", viewModel.AgentStatusText, StringComparison.Ordinal);
 
         // Now try to apply an older low-sequence Stale result — must be rejected
         var oldResult = new RefreshResult
@@ -7782,9 +7898,10 @@ public sealed class DataFlowTests
         viewModel.ApplyStatusRefreshResult(oldResult);
 
         // Status must still be Running, not overwritten by the old Stale result
-        Assert.Contains("Running", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("正在记录", viewModel.AgentStatusText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_StatusPollRecoversFromStaleToRunning()
     {
@@ -7812,11 +7929,11 @@ public sealed class DataFlowTests
 
         // After init: NotRunning consumed. Poll → Stale.
         await viewModel.PerformStatusPollAsync();
-        Assert.Contains("Stale", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("记录超时", viewModel.AgentStatusText, StringComparison.Ordinal);
 
         // Poll again → Running (recovery from stale)
         await viewModel.PerformStatusPollAsync();
-        Assert.Contains("Running", viewModel.AgentStatusText, StringComparison.Ordinal);
+        Assert.Contains("正在记录", viewModel.AgentStatusText, StringComparison.Ordinal);
     }
 
     private sealed class SequenceStatusService : AgentStatusService
@@ -7894,6 +8011,7 @@ public sealed class DataFlowTests
         public void Dispose() => _callLog.Add("Dispose");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_BuildsInitialState()
     {
@@ -7903,6 +8021,7 @@ public sealed class DataFlowTests
         Assert.Contains("WUJI", state.TooltipText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_ShowMainWindowInvokesCallback()
     {
@@ -7918,6 +8037,7 @@ public sealed class DataFlowTests
         Assert.Contains("SetVisible:True", string.Join(",", adapter.CallLog));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_ExitAppInvokesShutdownCallback()
     {
@@ -7931,6 +8051,7 @@ public sealed class DataFlowTests
         Assert.True(exitCalled);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_DisposeIsIdempotent()
     {
@@ -7947,6 +8068,7 @@ public sealed class DataFlowTests
         Assert.True(setVisibleIdx < disposeIdx, "Visible must be set to false before Dispose");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_DoesNotExposeSensitiveDetailsInTooltip()
     {
@@ -7966,6 +8088,7 @@ public sealed class DataFlowTests
 
     // ── Window Lifecycle Tests (Phase 10.3) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void WindowLifecycleCoordinator_CloseToTrayCancelsClose()
     {
@@ -7974,6 +8097,7 @@ public sealed class DataFlowTests
         Assert.False(coordinator.ShouldCancelClose(closeToTray: false));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void WindowLifecycleCoordinator_ExitAppAllowsClose()
     {
@@ -7983,6 +8107,7 @@ public sealed class DataFlowTests
         Assert.True(coordinator.IsExitRequested);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void WindowLifecycleCoordinator_MinimizeToTrayHidesWhenEnabled()
     {
@@ -7991,6 +8116,7 @@ public sealed class DataFlowTests
         Assert.False(coordinator.ShouldHideOnMinimize(minimizeToTray: false));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void WindowLifecycleCoordinator_MinimizeToTraySkippedDuringExit()
     {
@@ -7999,6 +8125,7 @@ public sealed class DataFlowTests
         Assert.False(coordinator.ShouldHideOnMinimize(minimizeToTray: true));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AppSettings_DefaultsToCloseToTrayAndMinimizeToTray()
     {
@@ -8009,6 +8136,7 @@ public sealed class DataFlowTests
 
     // ── TrayMenuState Tests (Phase 10.4) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_FollowsRunningStatus()
     {
@@ -8024,6 +8152,7 @@ public sealed class DataFlowTests
         Assert.Contains("NamedPipe", state.TooltipText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_FollowsPausedStatus()
     {
@@ -8036,6 +8165,7 @@ public sealed class DataFlowTests
         Assert.False(state.CanPause);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_DisablesCommandsDuringMaintenance()
     {
@@ -8050,6 +8180,7 @@ public sealed class DataFlowTests
         Assert.True(state.IsMaintenance);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_AllowsStartWhenStaleButProcessGone()
     {
@@ -8062,6 +8193,7 @@ public sealed class DataFlowTests
         Assert.False(state.CanResume);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_DoesNotExposeSensitiveIpcDetails()
     {
@@ -8075,6 +8207,7 @@ public sealed class DataFlowTests
         Assert.True(state.TooltipText.Length <= 63);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayMenuState_TooltipTextIsSafelyTruncated()
     {
@@ -8092,6 +8225,7 @@ public sealed class DataFlowTests
         public void UpdateState(TrayMenuState state) => LastState = state;
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_RefreshCommonStatusUpdatesTrayStateSink()
     {
@@ -8126,6 +8260,7 @@ public sealed class DataFlowTests
 
     // ── Tray Command Tests (Phase 10.5) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_StartCommandInvokesCallback()
     {
@@ -8138,6 +8273,7 @@ public sealed class DataFlowTests
         Assert.True(started, "Start callback should be invoked");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_PauseCommandInvokesCallback()
     {
@@ -8150,6 +8286,7 @@ public sealed class DataFlowTests
         Assert.True(paused, "Pause callback should be invoked");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_StopCommandInvokesCallback()
     {
@@ -8162,6 +8299,7 @@ public sealed class DataFlowTests
         Assert.True(stopped, "Stop callback should be invoked");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_NullCallbackDoesNotThrow()
     {
@@ -8176,6 +8314,7 @@ public sealed class DataFlowTests
         Assert.True(true);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_DoesNotCallAgentServicesDirectly()
     {
@@ -8191,6 +8330,7 @@ public sealed class DataFlowTests
         Assert.True(true); // construction succeeds without Agent services
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_ResumeCommandInvokesCallback()
     {
@@ -8203,6 +8343,7 @@ public sealed class DataFlowTests
         Assert.True(resumed, "Resume callback should be invoked");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_DisabledStartDoesNotExecuteWhenCallbackGuards()
     {
@@ -8223,6 +8364,7 @@ public sealed class DataFlowTests
         Assert.False(executed, "Disabled Start should not execute");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayService_NullCallbackSafeForAllCommands()
     {
@@ -8240,6 +8382,7 @@ public sealed class DataFlowTests
 
     // ── Tray Status Recovery Tests (Phase 10.6) ──
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_ShowsNotRunningState()
     {
@@ -8253,6 +8396,7 @@ public sealed class DataFlowTests
         Assert.False(state.CanStop);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_DisablesStartWhenStaleButProcessAlive()
     {
@@ -8265,6 +8409,7 @@ public sealed class DataFlowTests
         Assert.False(state.CanPause);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_RecoversFromNotRunningToRunning()
     {
@@ -8283,6 +8428,7 @@ public sealed class DataFlowTests
         Assert.Contains("NamedPipe", running.TooltipText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_IpcFallbackRecoversToNamedPipe()
     {
@@ -8300,6 +8446,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("FileFallback", recovered.TooltipText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_IpcUnavailableShowsSafeText()
     {
@@ -8313,6 +8460,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("S-1-5-21", state.TooltipText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_RecoversFromStaleToRunning()
     {
@@ -8328,6 +8476,7 @@ public sealed class DataFlowTests
         Assert.True(runningState.CanPause, "After recovery: Pause must be available");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void TrayStatus_DoesNotCrashOnDefaultSnapshot()
     {
@@ -8340,6 +8489,7 @@ public sealed class DataFlowTests
         Assert.True(state.CanStart, "Default snapshot should allow Start");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task TrayStatus_RecoveryUpdatesTrayStateSinkViaViewModel()
     {
@@ -8379,6 +8529,7 @@ public sealed class DataFlowTests
         Assert.True(sink.LastState.CanStop, "After recovery: Stop must be available");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task TrayStatus_DoesNotOverrideSettingsDrafts()
     {
@@ -8572,6 +8723,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_ClearHistoryDeletesAllHistoryRows()
     {
@@ -8599,6 +8751,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM agent_events;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_ClearHistoryDeletesHistoricalJsonlFiles()
     {
@@ -8621,6 +8774,7 @@ public sealed class DataFlowTests
         Assert.True(File.Exists(todayFile));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_ClearHistoryKeepsConfigRuntimeAndDatabaseFiles()
     {
@@ -8651,6 +8805,7 @@ public sealed class DataFlowTests
         Assert.True(File.Exists(dbFile));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_ClearHistoryUsesTransaction()
     {
@@ -8671,6 +8826,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, await CountAsync(connection, "SELECT COUNT(*) FROM app_sessions;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DataMaintenanceService_ClearHistoryRollsBackTransactionOnFailure()
     {
@@ -8699,6 +8855,7 @@ public sealed class DataFlowTests
         Assert.Equal(sessBefore, await CountAsync(readAfter, "SELECT COUNT(*) FROM app_sessions;"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentStateMachine_ClearHistoryWritesHistoryClearedAfterClearingEvents()
     {
@@ -8789,10 +8946,12 @@ public sealed class DataFlowTests
         var privacyFilter = new ForegroundSamplePrivacyFilter();
 
         var optionsValidator = new AgentOptionsValidator();
+        var timeProvider = new ManualTimeProvider(DateTimeOffset.UtcNow);
+        AgentStateMachine stateMachine;
 
         if (eventWriter is null)
         {
-            return new AgentStateMachine(
+            stateMachine = new AgentStateMachine(
                 paths,
                 runtimeStateStore,
                 healthStateStore,
@@ -8803,24 +8962,50 @@ public sealed class DataFlowTests
                 sessionAggregator,
                 privacyFilter,
                 sampleProvider,
-                logger ?? NullLogger<AgentStateMachine>.Instance);
+                null,
+                optionsValidator,
+                dataMaintenanceService,
+                logger ?? NullLogger<AgentStateMachine>.Instance,
+                timeProvider);
         }
 
-        return new AgentStateMachine(
-            paths,
-            runtimeStateStore,
-            healthStateStore,
-            controlFileStore,
-            optionsStore,
-            initializer,
-            sampleRepository,
-            sessionAggregator,
-            privacyFilter,
-            sampleProvider,
-            eventWriter,
-            optionsValidator,
-            dataMaintenanceService,
-            logger ?? NullLogger<AgentStateMachine>.Instance);
+        else
+        {
+            stateMachine = new AgentStateMachine(
+                paths,
+                runtimeStateStore,
+                healthStateStore,
+                controlFileStore,
+                optionsStore,
+                initializer,
+                sampleRepository,
+                sessionAggregator,
+                privacyFilter,
+                sampleProvider,
+                eventWriter,
+                optionsValidator,
+                dataMaintenanceService,
+                logger ?? NullLogger<AgentStateMachine>.Instance,
+                timeProvider);
+        }
+
+        StateMachineTimeProviders.Add(stateMachine, timeProvider);
+        return stateMachine;
+    }
+
+    private static void AdvanceTime(AgentStateMachine stateMachine, TimeSpan amount)
+    {
+        Assert.True(StateMachineTimeProviders.TryGetValue(stateMachine, out var timeProvider));
+        timeProvider.Advance(amount);
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        private DateTimeOffset _utcNow = utcNow;
+
+        public override DateTimeOffset GetUtcNow() => _utcNow;
+
+        public void Advance(TimeSpan amount) => _utcNow = _utcNow.Add(amount);
     }
 
     private static async Task<AgentEventWriter> CreateEventWriterAsync(WindowsAgentPaths paths)
@@ -9032,7 +9217,9 @@ public sealed class DataFlowTests
         AgentIpcStatusService? ipcStatusService = null,
         RefreshService? refreshService = null,
         IStartupRegistrationService? startupRegistrationService = null,
-        StartupLaunchOptions? startupLaunchOptions = null)
+        StartupLaunchOptions? startupLaunchOptions = null,
+        IRefreshScheduler? refreshScheduler = null,
+        IRefreshScheduler? statusPollScheduler = null)
     {
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
@@ -9082,7 +9269,9 @@ public sealed class DataFlowTests
             settingsService,
             new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
             ipcStatusService,
-            refreshService);
+            refreshService,
+            refreshScheduler: refreshScheduler,
+            statusPollScheduler: statusPollScheduler);
 
         if (startupRegistrationService is not null)
             viewModel.StartupRegistrationService = startupRegistrationService;
@@ -9097,22 +9286,6 @@ public sealed class DataFlowTests
         var field = instance.GetType().GetField(fieldName, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
         Assert.NotNull(field);
         return (T)field!.GetValue(instance)!;
-    }
-
-    private static async Task WaitUntilAsync(Func<bool> condition)
-    {
-        var deadline = DateTime.UtcNow.AddSeconds(2);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (condition())
-            {
-                return;
-            }
-
-            await Task.Delay(20);
-        }
-
-        Assert.True(condition(), "Condition was not met before timeout.");
     }
 
     private static async Task<List<string>> GetColumnsAsync(SqliteConnection connection, string tableName)
@@ -9247,6 +9420,7 @@ public sealed class DataFlowTests
 
     // ─── Phase 11.1: AppSettings & StartupLaunchOptions ───
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AppSettings_DefaultsStartAppOnWindowsLoginToFalse()
     {
@@ -9254,6 +9428,7 @@ public sealed class DataFlowTests
         Assert.False(settings.StartAppOnWindowsLogin);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppSettingsStore_ReadOldSettingsDefaultsLoginStartupFalse()
     {
@@ -9272,6 +9447,7 @@ public sealed class DataFlowTests
         Assert.True(result.AutoStartAgentWhenAppStarts);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppSettingsStore_RoundTripPreservesStartAppOnWindowsLogin()
     {
@@ -9298,6 +9474,7 @@ public sealed class DataFlowTests
         Assert.False(result.AutoStartAgentWhenAppStarts);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_LoadsStartAppOnWindowsLogin()
     {
@@ -9327,6 +9504,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.AutoStartAgentWhenAppStarts);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SavesStartAppOnWindowsLogin()
     {
@@ -9353,6 +9531,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel2.IsDirty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_ParsesAutostartHiddenArgs()
     {
@@ -9365,6 +9544,7 @@ public sealed class DataFlowTests
         Assert.False(options.ShowAgentConsole);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_ParsesShowAgentConsoleArg()
     {
@@ -9377,6 +9557,7 @@ public sealed class DataFlowTests
         Assert.True(options.ShowAgentConsole);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_IgnoresUnknownArgs()
     {
@@ -9388,6 +9569,7 @@ public sealed class DataFlowTests
         Assert.False(options.StartHidden);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_DefaultsToManualVisible()
     {
@@ -9399,6 +9581,7 @@ public sealed class DataFlowTests
         Assert.False(options.ShowAgentConsole);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_ParsesOnlyStartHiddenWithoutFromAutostart()
     {
@@ -9410,6 +9593,7 @@ public sealed class DataFlowTests
         Assert.True(options.StartHidden);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_ParsesEmptyArgsAsManual()
     {
@@ -9422,6 +9606,7 @@ public sealed class DataFlowTests
         Assert.Empty(options.RawArgs);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_ParsesCaseInsensitive()
     {
@@ -9433,6 +9618,7 @@ public sealed class DataFlowTests
         Assert.True(options.StartHidden);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupLaunchOptions_ParsesAutostartOnly()
     {
@@ -9444,6 +9630,7 @@ public sealed class DataFlowTests
         Assert.False(options.StartHidden);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AppSettingsStore_WriteThenReadPreservesAllExistingFields()
     {
@@ -9509,168 +9696,9 @@ public sealed class DataFlowTests
 
     // ─── Phase 11.2: StartupCommandBuilder ───
 
-    [Fact]
-    public void StartupCommandBuilder_QuotesExecutablePath()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\Program Files\WUJI\WUJI.exe");
-        var command = builder.BuildCommand();
-
-        Assert.NotNull(command);
-        Assert.StartsWith("\"C:", command);
-        Assert.Contains("\" --from-autostart --start-hidden", command);
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_IncludesAutostartHiddenArgs()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-        var command = builder.BuildCommand();
-
-        Assert.NotNull(command);
-        Assert.Contains("--from-autostart", command);
-        Assert.Contains("--start-hidden", command);
-        Assert.EndsWith("--start-hidden", command);
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_RejectsDotnetHostPath()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\Program Files\dotnet\dotnet.exe");
-        Assert.False(builder.IsValidProcessPath());
-        Assert.Null(builder.BuildCommand());
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_UsesCurrentAppExePath()
-    {
-        var testPath = @"C:\WUJI\QuantifiedSelf.Windows.App.exe";
-        var builder = new StartupCommandBuilder(() => testPath);
-
-        Assert.True(builder.IsValidProcessPath());
-        var command = builder.BuildCommand();
-        Assert.NotNull(command);
-        Assert.Contains(testPath, command);
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_NormalizesPathsBeforeComparing()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        var registered = @"""C:/WUJI/app.exe"" --from-autostart --start-hidden";
-        Assert.True(builder.CommandsMatch(registered));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_HandlesSpacesAndQuotes()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\Program Files\WUJI\My App.exe");
-
-        var registered = @"""C:\Program Files\WUJI\My App.exe"" --from-autostart --start-hidden";
-        Assert.True(builder.CommandsMatch(registered));
-
-        // Extra spaces should be fine
-        var extraSpaces = @"""C:\Program Files\WUJI\My App.exe""   --from-autostart   --start-hidden  ";
-        Assert.True(builder.CommandsMatch(extraSpaces));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_SupportsInjectedProcessPathProvider()
-    {
-        var captured = "";
-        var builder = new StartupCommandBuilder(() =>
-        {
-            captured = "called";
-            return @"C:\Test\WUJI.exe";
-        });
-
-        var command = builder.BuildCommand();
-        Assert.Equal("called", captured);
-        Assert.NotNull(command);
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_RejectsEmptyProcessPath()
-    {
-        var builder = new StartupCommandBuilder(() => "");
-        Assert.False(builder.IsValidProcessPath());
-        Assert.Null(builder.BuildCommand());
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_RejectsNullProcessPath()
-    {
-        var builder = new StartupCommandBuilder(() => null!);
-        Assert.False(builder.IsValidProcessPath());
-        Assert.Null(builder.BuildCommand());
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_RejectsDllPath()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\Test\library.dll");
-        Assert.False(builder.IsValidProcessPath());
-        Assert.Null(builder.BuildCommand());
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_DetectsMissingAutostartArg()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        var registered = @"""C:\WUJI\app.exe"" --start-hidden";
-        Assert.False(builder.CommandsMatch(registered));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_DetectsMissingStartHiddenArg()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        var registered = @"""C:\WUJI\app.exe"" --from-autostart";
-        Assert.False(builder.CommandsMatch(registered));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_DetectsExePathMismatch()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        var registered = @"""C:\Other\different.exe"" --from-autostart --start-hidden";
-        Assert.False(builder.CommandsMatch(registered));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_CommandsMatchIsCaseInsensitive()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        var registered = @"""C:\WUJI\APP.EXE"" --FROM-AUTOSTART --START-HIDDEN";
-        Assert.True(builder.CommandsMatch(registered));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_DoesNotMatchAutostartArgPrefix()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        // --from-autostart-disabled is NOT the same as --from-autostart
-        var registered = @"""C:\WUJI\app.exe"" --from-autostart-disabled --start-hidden";
-        Assert.False(builder.CommandsMatch(registered));
-    }
-
-    [Fact]
-    public void StartupCommandBuilder_DoesNotMatchStartHiddenArgPrefix()
-    {
-        var builder = new StartupCommandBuilder(() => @"C:\WUJI\app.exe");
-
-        // --start-hidden-old is NOT the same as --start-hidden
-        var registered = @"""C:\WUJI\app.exe"" --from-autostart --start-hidden-old";
-        Assert.False(builder.CommandsMatch(registered));
-    }
-
     // ─── Phase 11.2: StartupRegistrationService ───
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_RegisterWritesRunKeyCommand()
     {
@@ -9689,6 +9717,7 @@ public sealed class DataFlowTests
         Assert.Contains("--start-hidden", command);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_UnregisterDeletesRunKeyValue()
     {
@@ -9706,6 +9735,7 @@ public sealed class DataFlowTests
         Assert.False(registry.HasValue("WUJI"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_RegisterIsIdempotent()
     {
@@ -9724,6 +9754,7 @@ public sealed class DataFlowTests
         Assert.Contains("--from-autostart", command);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_UnregisterIsIdempotent()
     {
@@ -9743,6 +9774,7 @@ public sealed class DataFlowTests
         Assert.False(registry.HasValue("WUJI"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_StatusDisabledWhenValueMissing()
     {
@@ -9755,6 +9787,7 @@ public sealed class DataFlowTests
         Assert.Contains("Disabled", status.StatusText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_StatusEnabledWhenCommandMatches()
     {
@@ -9769,6 +9802,7 @@ public sealed class DataFlowTests
         Assert.Contains("Enabled", status.StatusText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_StatusMismatchWhenCommandDiffers()
     {
@@ -9785,6 +9819,7 @@ public sealed class DataFlowTests
         Assert.Contains("repair", status.DetailText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_RedactsRegistryErrors()
     {
@@ -9800,6 +9835,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("C:", status.DetailText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_DoesNotRegisterWhenExecutablePathInvalid()
     {
@@ -9812,6 +9848,7 @@ public sealed class DataFlowTests
         Assert.False(registry.HasValue("WUJI"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_NormalizesCommandBeforeComparing()
     {
@@ -9829,6 +9866,7 @@ public sealed class DataFlowTests
         Assert.Equal(StartupRegistrationState.Enabled, status.State);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_GetStatusRedactsErrors()
     {
@@ -9842,6 +9880,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("InvalidOperationException", status.DetailText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_StatusMismatchWhenMissingAutostartArg()
     {
@@ -9855,6 +9894,7 @@ public sealed class DataFlowTests
         Assert.Equal(StartupRegistrationState.Mismatch, status.State);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_StatusMismatchWhenMissingStartHiddenArg()
     {
@@ -9868,6 +9908,7 @@ public sealed class DataFlowTests
         Assert.Equal(StartupRegistrationState.Mismatch, status.State);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task StartupRegistrationService_UnsupportedButExistingRunKeyReturnsMismatch()
     {
@@ -9929,6 +9970,7 @@ public sealed class DataFlowTests
 
     // ─── Phase 11.3: SettingsViewModel startup integration ───
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_SavesLoginStartupAndRegistersRunKey()
     {
@@ -9953,6 +9995,7 @@ public sealed class DataFlowTests
         Assert.Contains("saved", viewModel.SaveStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_DisablesLoginStartupAndUnregistersRunKey()
     {
@@ -9980,6 +10023,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.IsDirty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_StartupRegistrationFailureShowsSafeError()
     {
@@ -10006,6 +10050,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("C:", viewModel.SaveStatusText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ShowsStartupMismatchStatus()
     {
@@ -10028,6 +10073,7 @@ public sealed class DataFlowTests
         Assert.Contains("repair", viewModel.StartupRegistrationStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_LoginStartupDirtyDraftNotOverwritten()
     {
@@ -10056,6 +10102,7 @@ public sealed class DataFlowTests
         Assert.Contains("Disabled", viewModel.StartupRegistrationStatusText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_DirtyRefreshDoesNotWriteStartupRegistry()
     {
@@ -10080,6 +10127,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, fakeReg.UnregisterCallCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_ShowsWarningWhenAppSettingsEnabledButRunKeyMissing()
     {
@@ -10107,6 +10155,7 @@ public sealed class DataFlowTests
         Assert.True(viewModel.StartAppOnWindowsLogin);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_AutoStartAgentSettingRemainsIndependent()
     {
@@ -10133,6 +10182,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.IsDirty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_MismatchSavedAsTrueFixesRegistration()
     {
@@ -10161,6 +10211,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.IsDirty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_DisabledSavedAsTrueRepairsRegistration()
     {
@@ -10189,6 +10240,7 @@ public sealed class DataFlowTests
         Assert.False(viewModel.IsDirty);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task SettingsViewModel_StartupStatusTextDoesNotSetIsDirty()
     {
@@ -10212,70 +10264,9 @@ public sealed class DataFlowTests
         Assert.False(viewModel.IsDirty);
     }
 
-    // ─── Phase 11.4: WindowStartupPolicy ───
-
-    [Fact]
-    public void WindowStartupPolicy_ManualLaunchShowsWindow()
-    {
-        var options = StartupLaunchOptions.Parse([]);
-        var policy = WindowStartupPolicy.Decide(options);
-
-        Assert.True(policy.ShouldShowMainWindowOnLaunch);
-        Assert.False(policy.ShouldStartHidden);
-    }
-
-    [Fact]
-    public void WindowStartupPolicy_AutostartHiddenStartsHidden()
-    {
-        var options = StartupLaunchOptions.Parse(["--from-autostart", "--start-hidden"]);
-        var policy = WindowStartupPolicy.Decide(options);
-
-        Assert.False(policy.ShouldShowMainWindowOnLaunch);
-        Assert.True(policy.ShouldStartHidden);
-    }
-
-    [Fact]
-    public void WindowStartupPolicy_StartHiddenAloneIsManual()
-    {
-        // Only --start-hidden without --from-autostart should NOT hide
-        var options = StartupLaunchOptions.Parse(["--start-hidden"]);
-        var policy = WindowStartupPolicy.Decide(options);
-
-        Assert.True(policy.ShouldShowMainWindowOnLaunch);
-        Assert.False(policy.ShouldStartHidden);
-    }
-
-    [Fact]
-    public void WindowStartupPolicy_AutostartAloneIsManual()
-    {
-        // Only --from-autostart without --start-hidden should NOT hide
-        var options = StartupLaunchOptions.Parse(["--from-autostart"]);
-        var policy = WindowStartupPolicy.Decide(options);
-
-        Assert.True(policy.ShouldShowMainWindowOnLaunch);
-        Assert.False(policy.ShouldStartHidden);
-    }
-
-    [Fact]
-    public void WindowStartupPolicy_DoesNotUseCloseToTrayForAutostartHidden()
-    {
-        // The policy itself has no knowledge of CloseToTray / Window.Closing
-        var options = StartupLaunchOptions.Parse(["--from-autostart", "--start-hidden"]);
-        var policy = WindowStartupPolicy.Decide(options);
-
-        // Policy is pure logic — just decides show/hide, no window lifecycle tricks
-        Assert.False(policy.ShouldShowMainWindowOnLaunch);
-        Assert.True(policy.ShouldStartHidden);
-    }
-
-    [Fact]
-    public void WindowStartupPolicy_DecideThrowsOnNull()
-    {
-        Assert.Throws<ArgumentNullException>(() => WindowStartupPolicy.Decide(null!));
-    }
-
     // ─── Phase 11.4: InitializeAsync idempotency & Agent auto-start ───
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_InitializeAsyncIsIdempotent()
     {
@@ -10307,6 +10298,7 @@ public sealed class DataFlowTests
         // No crash = pass
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_AutoStartAgentWhenAppStartsTrueTriggersStart()
     {
@@ -10342,6 +10334,7 @@ public sealed class DataFlowTests
         Assert.False(string.IsNullOrEmpty(viewModel.AgentStatusText));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_AutoStartAgentWhenAppStartsFalseDoesNotTriggerStart()
     {
@@ -10376,6 +10369,7 @@ public sealed class DataFlowTests
         Assert.False(string.IsNullOrEmpty(viewModel.AgentStatusText));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task MainWindowViewModel_HiddenStartupThenShowDoesNotReinitialize()
     {
@@ -10421,6 +10415,7 @@ public sealed class DataFlowTests
 
     // ─── Phase 11.5: Diagnostics startup registration display ───
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLoginStartupEnabled()
     {
@@ -10440,6 +10435,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLoginStartupDisabled()
     {
@@ -10458,6 +10454,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLoginStartupMismatch()
     {
@@ -10476,6 +10473,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLoginStartupError()
     {
@@ -10494,6 +10492,7 @@ public sealed class DataFlowTests
         Assert.Equal("Registration unavailable.", viewModel.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLoginStartupUnsupported()
     {
@@ -10512,6 +10511,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", viewModel.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_RedactsStartupRegistrationError()
     {
@@ -10531,6 +10531,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("TestUser", viewModel.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLaunchModeManual()
     {
@@ -10542,6 +10543,7 @@ public sealed class DataFlowTests
         Assert.Equal("Manual", viewModel.LaunchModeText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_ShowsLaunchModeAutoStart()
     {
@@ -10553,6 +10555,7 @@ public sealed class DataFlowTests
         Assert.Equal("AutoStart", viewModel.LaunchModeText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_KeepsRefreshHealthVisible()
     {
@@ -10586,6 +10589,7 @@ public sealed class DataFlowTests
         Assert.Contains("Refresh loop", viewModel.RefreshHealthText, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_DoesNotExposeStartupCommandPath()
     {
@@ -10608,6 +10612,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(":\\", viewModel.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_DoesNotExposeStartupCommandFullText()
     {
@@ -10632,6 +10637,7 @@ public sealed class DataFlowTests
 
     // ─── StartupRegistrationDisplayModel unit tests ───
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupRegistrationDisplayModel_EnabledFromStatus()
     {
@@ -10645,6 +10651,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", display.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupRegistrationDisplayModel_DisabledFromStatus()
     {
@@ -10658,6 +10665,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", display.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupRegistrationDisplayModel_MismatchFromStatus()
     {
@@ -10670,6 +10678,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", display.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupRegistrationDisplayModel_ErrorFromStatus()
     {
@@ -10682,6 +10691,7 @@ public sealed class DataFlowTests
         Assert.Equal("Registration unavailable.", display.LastStartupRegistrationErrorText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void StartupRegistrationDisplayModel_UnsupportedFromStatus()
     {
@@ -10694,28 +10704,7 @@ public sealed class DataFlowTests
         Assert.Equal("None", display.LastStartupRegistrationErrorText);
     }
 
-    [Fact]
-    public void StartupRegistrationDisplayModel_SafeTextDoesNotContainPaths()
-    {
-        // Verify that all pre-defined summary/status/error texts from the factory
-        // are completely free of path separators
-        var enabled = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Enabled(), LaunchMode.Manual);
-        var disabled = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Disabled(), LaunchMode.Manual);
-        var mismatch = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Mismatch("test"), LaunchMode.Manual);
-        var error = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Error("test"), LaunchMode.Manual);
-        var unsupported = StartupRegistrationDisplayModel.FromStatus(StartupRegistrationStatus.Unsupported(), LaunchMode.Manual);
-
-        foreach (var d in new[] { enabled, disabled, mismatch, error, unsupported })
-        {
-            Assert.DoesNotContain("C:", d.LoginStartupStatusText, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("C:", d.StartupRegistrationSummary, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("C:", d.LastStartupRegistrationErrorText, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain(":\\", d.LoginStartupStatusText);
-            Assert.DoesNotContain(":\\", d.StartupRegistrationSummary);
-            Assert.DoesNotContain(":\\", d.LastStartupRegistrationErrorText);
-        }
-    }
-
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Diagnostics_StatusPollDoesNotCallStartupRegistrationGetStatus()
     {
@@ -10737,6 +10726,7 @@ public sealed class DataFlowTests
     // ─── Phase 12.1: AgentExeLocator & version tests ───
     // (BaseDirectory / EnvVar preference tests live in AgentExeLocatorTests.cs)
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentExeLocator_FallsBackToDevelopmentPath()
     {
@@ -10759,6 +10749,7 @@ public sealed class DataFlowTests
         Assert.EndsWith("QuantifiedSelf.Windows.Agent.exe", result);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentExeLocator_SkipsIncompleteAppHostInAppOutput()
     {
@@ -10783,6 +10774,7 @@ public sealed class DataFlowTests
         Assert.Equal(agentExe, result);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentExeLocator_LogsRedactedPaths()
     {
@@ -10818,6 +10810,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("S-1-5-", msg);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AgentProcessService_ResolveStartInfo_UsesPublishedAgentSubdirectory()
     {
@@ -10838,6 +10831,7 @@ public sealed class DataFlowTests
         Assert.Equal(agentExe, resolved);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void AssemblyVersion_MatchesDirectoryBuildProps()
     {
@@ -10857,6 +10851,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, agentVersion.Minor);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FileVersion_MatchesDirectoryBuildProps()
     {
@@ -10875,6 +10870,7 @@ public sealed class DataFlowTests
         Assert.StartsWith("0.1", agentFileVersion);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_ReturnsEmptySummaryWhenNoData()
     {
@@ -10897,6 +10893,7 @@ public sealed class DataFlowTests
         Assert.Empty(summary.TopWindows);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_ComputesTodayTotalActiveDuration()
     {
@@ -10925,6 +10922,7 @@ public sealed class DataFlowTests
             "Should have non-zero total duration from today's sessions.");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_ClampsCrossMidnightTimeRangeToLocalDay()
     {
@@ -10957,6 +10955,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(suggestions, s => s.Category == "Schedule");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_ComputesTopAppsFromSessions()
     {
@@ -10985,6 +10984,7 @@ public sealed class DataFlowTests
         Assert.True(summary.TopApps[1].ActiveDurationSeconds >= summary.TopApps[2].ActiveDurationSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_ComputesTopWindowsFromSamples()
     {
@@ -11013,6 +11013,7 @@ public sealed class DataFlowTests
         Assert.Equal("Code", summary.TopWindows[0].ProcessName);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_UsesStableOrdering()
     {
@@ -11039,6 +11040,7 @@ public sealed class DataFlowTests
             summary2.TopWindows.Select(w => w.WindowTitle).ToArray());
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_RedactsSensitiveTitles()
     {
@@ -11063,6 +11065,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(@"passwords", top.SafeWindowTitle, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_DoesNotWriteDatabase()
     {
@@ -11088,6 +11091,7 @@ public sealed class DataFlowTests
         Assert.Equal(initialSampleCount, await CountAsync(paths.DatabasePath, "foreground_samples"));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_ReturnsEmptySummaryWhenDatabaseMissing()
     {
@@ -11103,6 +11107,7 @@ public sealed class DataFlowTests
         Assert.Empty(summary.TopWindows);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_SampleCountMatchesInsertedSamples()
     {
@@ -11127,6 +11132,7 @@ public sealed class DataFlowTests
         Assert.NotNull(summary.LastSeenAtUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task DailyStatsService_TopAppsLimitIsRespected()
     {
@@ -11148,6 +11154,7 @@ public sealed class DataFlowTests
         Assert.Equal(3, summary.TopApps.Count);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_LoadsTodayInsightFromDailyStatsService()
     {
@@ -11166,12 +11173,13 @@ public sealed class DataFlowTests
         await dashboardVm.LoadAsync();
 
         Assert.False(dashboardVm.HasLoadError);
-        Assert.Equal("1h 0m", dashboardVm.TotalActiveText);
+        Assert.Equal("1小时 0分", dashboardVm.TotalActiveText);
         Assert.Equal("1", dashboardVm.SessionCountText);
         Assert.NotEmpty(dashboardVm.TopApps);
-        Assert.Contains("1h 0m", dashboardVm.SummaryText, StringComparison.Ordinal);
+        Assert.Contains("1小时 0分", dashboardVm.SummaryText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_RefreshUpdatesTodayInsight()
     {
@@ -11198,6 +11206,7 @@ public sealed class DataFlowTests
         Assert.Equal("2", dashboardVm.SessionCountText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_StatsFailureKeepsPreviousInsight()
     {
@@ -11224,16 +11233,17 @@ public sealed class DataFlowTests
         // First load succeeds
         await dashboardVm.LoadAsync();
         Assert.False(dashboardVm.HasLoadError);
-        Assert.Equal("1h 0m", dashboardVm.TotalActiveText);
+        Assert.Equal("1小时 0分", dashboardVm.TotalActiveText);
         Assert.Equal("3", dashboardVm.SessionCountText);
 
         // Second load fails — old data preserved
         await dashboardVm.LoadAsync();
         Assert.True(dashboardVm.HasLoadError);
-        Assert.Equal("1h 0m", dashboardVm.TotalActiveText);
+        Assert.Equal("1小时 0分", dashboardVm.TotalActiveText);
         Assert.Equal("3", dashboardVm.SessionCountText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_EmptyStatsShowsEmptyState()
     {
@@ -11255,6 +11265,7 @@ public sealed class DataFlowTests
         Assert.Contains("暂无今日活动数据", dashboardVm.SummaryText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_DoesNotOverwriteSettingsDrafts()
     {
@@ -11288,6 +11299,7 @@ public sealed class DataFlowTests
         Assert.Equal("notepad.exe", settingsViewModel.ExcludedProcessesText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_SummaryTextFormatsCorrectly()
     {
@@ -11309,11 +11321,12 @@ public sealed class DataFlowTests
 
         await dashboardVm.LoadAsync();
 
-        Assert.Contains("1h 30m", dashboardVm.SummaryText, StringComparison.Ordinal);
+        Assert.Contains("1小时 30分", dashboardVm.SummaryText, StringComparison.Ordinal);
         Assert.Contains("Code", dashboardVm.SummaryText, StringComparison.Ordinal);
         Assert.Contains("42", dashboardVm.SummaryText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_TimeRangeUsesLocalTime()
     {
@@ -11336,6 +11349,7 @@ public sealed class DataFlowTests
         Assert.Contains(":", dashboardVm.TimeRangeText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_ComputesContextSwitchCount()
     {
@@ -11355,6 +11369,7 @@ public sealed class DataFlowTests
         Assert.Equal(2, result.RawContextSwitchCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_DoesNotCountDevelopmentToolchainAsTaskSwitches()
     {
@@ -11374,6 +11389,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.ContextSwitchCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_ClassifiesEdgeTitleForMeaningfulSwitches()
     {
@@ -11418,6 +11434,7 @@ public sealed class DataFlowTests
         Assert.Equal(2, result.ContextSwitchCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_TreatsZoteroAndObsidianAsSameStudyContext()
     {
@@ -11435,6 +11452,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.ContextSwitchCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_ComputesLongestFocusSession()
     {
@@ -11460,6 +11478,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, result.FocusSessionCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_BreaksSessionOnLargeGap()
     {
@@ -11484,6 +11503,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.ContextSwitchCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_BreaksSessionOnIdle()
     {
@@ -11504,6 +11524,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.FocusSessionCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_MarksFragmentedTimeWhenSwitchesAreHigh()
     {
@@ -11529,6 +11550,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, result.FocusSessionCount);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void FocusMetrics_HandlesNoSamples()
     {
@@ -11540,6 +11562,7 @@ public sealed class DataFlowTests
         Assert.Equal(0L, result.FragmentedTimeSeconds);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_ShowsFocusAndSwitchMetrics()
     {
@@ -11578,11 +11601,12 @@ public sealed class DataFlowTests
         var dashboardVm = new DashboardViewModel((_, _, _) => Task.FromResult(summary));
         await dashboardVm.LoadAsync();
 
-        Assert.Equal("5 switches", dashboardVm.ContextSwitchText);
-        Assert.Equal("15m 0s", dashboardVm.LongestFocusText);
-        Assert.Contains("最长专注 15m", dashboardVm.SummaryText, StringComparison.Ordinal);
+        Assert.Equal("5 次应用切换", dashboardVm.ContextSwitchText);
+        Assert.Equal("15分 0秒", dashboardVm.LongestFocusText);
+        Assert.Contains("最长会话 15分", dashboardVm.SummaryText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_ReturnsSevenLocalDays()
     {
@@ -11605,6 +11629,7 @@ public sealed class DataFlowTests
         Assert.Equal(expectedToday, lastDay);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_FillsMissingDaysWithZero()
     {
@@ -11627,6 +11652,7 @@ public sealed class DataFlowTests
         Assert.True(result.Days[6].ActiveSeconds > 0, "Today should have active seconds");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_ShowsTodayActiveProgressAgainstCompletedDayAverage()
     {
@@ -11651,6 +11677,7 @@ public sealed class DataFlowTests
         Assert.Contains("此前 6 天日均", result.ActiveComparisonText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_DoesNotJudgePartialTodayAsLowerThanAverage()
     {
@@ -11678,6 +11705,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain("低于", result.ActiveComparisonText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_CompareYesterdayAgainstPriorSevenCompletedDays()
     {
@@ -11707,6 +11735,7 @@ public sealed class DataFlowTests
         Assert.Contains("多", result.YesterdayActiveComparisonText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_CompareThisWeekToSamePeriodLastWeek()
     {
@@ -11739,6 +11768,7 @@ public sealed class DataFlowTests
         Assert.Contains("多", result.WeekActiveComparisonText, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_ShowsSevenDayTrend()
     {
@@ -11784,6 +11814,7 @@ public sealed class DataFlowTests
         Assert.Equal(7, xAxis.Labels!.Count);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task WeeklyTrend_NormalizesBarRatios_AndHighlightsToday()
     {
@@ -11818,6 +11849,7 @@ public sealed class DataFlowTests
         });
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_GeneratesHighSwitchSuggestion()
     {
@@ -11844,6 +11876,7 @@ public sealed class DataFlowTests
         Assert.NotEmpty(s.ActionText);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_DoesNotWarnForRawToolHopsOnly()
     {
@@ -11866,6 +11899,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(suggestions, s => s.Category == "Switch");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_GeneratesLowFocusSuggestion()
     {
@@ -11884,6 +11918,7 @@ public sealed class DataFlowTests
         Assert.Contains("缺少", s.Title, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_DoesNotWarnLowFocusBeforeThirtyActiveMinutes()
     {
@@ -11899,6 +11934,7 @@ public sealed class DataFlowTests
         Assert.DoesNotContain(suggestions, s => s.Category == "Focus");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_GeneratesAppUsageSpikeSuggestion()
     {
@@ -11933,6 +11969,7 @@ public sealed class DataFlowTests
         Assert.Contains("Game", s.Title, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_DoesNotGenerateWhenDataInsufficient()
     {
@@ -11947,6 +11984,7 @@ public sealed class DataFlowTests
         Assert.Empty(suggestions);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_LimitsSuggestionCount()
     {
@@ -11987,6 +12025,7 @@ public sealed class DataFlowTests
             $"Expected ≤ {InsightSuggestionEngine.MaxSuggestions}, got {suggestions.Count}");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_UsesGentleCopy()
     {
@@ -12017,6 +12056,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightSuggestions_GeneratesPositiveFeedback()
     {
@@ -12047,6 +12087,7 @@ public sealed class DataFlowTests
         Assert.Contains("保持", s.Message, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourActivityHeatmap_ComputesCorrectBuckets()
     {
@@ -12092,6 +12133,7 @@ public sealed class DataFlowTests
         Assert.Equal(1, yesterdayPoint.ActiveSamples);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourActivityHeatmap_MissingHoursAreZero()
     {
@@ -12119,6 +12161,7 @@ public sealed class DataFlowTests
         Assert.Equal(0, after.TotalSamples);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourActivityHeatmap_EmptyDataReturnsZeroCells()
     {
@@ -12130,6 +12173,7 @@ public sealed class DataFlowTests
         Assert.All(points, p => Assert.Equal(0.0, p.ActiveRatio));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourActivityHeatmap_ColorInterpolationIsCorrect()
     {
@@ -12150,6 +12194,7 @@ public sealed class DataFlowTests
             $"Expected R between 0x1d and 0xe8, got 0x{mid.Color.R:x}");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourActivityHeatmap_ActiveIntensityDistinguishesVolume()
     {
@@ -12188,6 +12233,7 @@ public sealed class DataFlowTests
         Assert.NotEqual(colorA.Color, colorB.Color);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_HeatmapFailurePreservesOldData()
     {
@@ -12254,6 +12300,7 @@ public sealed class DataFlowTests
         Assert.Equal(168, dashboardVm3.Heatmap.Cells.Count);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_HeatmapLoadsWithTrend()
     {
@@ -12297,6 +12344,7 @@ public sealed class DataFlowTests
         Assert.Contains("晚上", yAxis.Labels);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_TopAppsBarChart_HasRowSeriesWithTooltips()
     {
@@ -12341,6 +12389,7 @@ public sealed class DataFlowTests
         // (XToolTipLabelFormatter is set inside MultiColorRowSeries; verified via smoke test.)
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_TopAppsBarChart_EmptyDataProducesEmptySeries()
     {
@@ -12355,6 +12404,7 @@ public sealed class DataFlowTests
         Assert.Empty(dashboardVm.TopAppsYAxes);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_HourlyActiveChart_HasOneSeriesWith24Values()
     {
@@ -12387,6 +12437,7 @@ public sealed class DataFlowTests
         Assert.Equal(TimeSpan.Zero, activeSeries.AnimationsSpeed);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_HourlyActiveChart_EmptyDataProducesEmptySeries()
     {
@@ -12399,6 +12450,7 @@ public sealed class DataFlowTests
         Assert.Empty(dashboardVm.HourlyActiveSeries);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_AppShareDonut_HasPieSeriesWithTop5AndOther()
     {
@@ -12428,16 +12480,16 @@ public sealed class DataFlowTests
 
         Assert.NotEmpty(dashboardVm.AppShareSeries);
 
-        // Top 5 + Other = 6 pie slices
+        // 前 5 个应用 + “其他” = 6 个扇区
         Assert.Equal(6, dashboardVm.AppShareSeries.Length);
 
         var firstSlice = Assert.IsType<PieSeries<double>>(dashboardVm.AppShareSeries[0]);
         Assert.Equal("Chrome", firstSlice.Name);
 
         var otherSlice = Assert.IsType<PieSeries<double>>(dashboardVm.AppShareSeries[5]);
-        Assert.Equal("Other", otherSlice.Name);
+        Assert.Equal("其他", otherSlice.Name);
 
-        // Other should be 300s (10000 - 9700)
+        // “其他”应为 300 秒（10000 - 9700）
         var otherValues = Assert.IsAssignableFrom<IEnumerable<double>>(otherSlice.Values).ToArray();
         Assert.Single(otherValues);
         Assert.Equal(300.0, otherValues[0], precision: 0);
@@ -12445,6 +12497,7 @@ public sealed class DataFlowTests
         Assert.Equal(TimeSpan.Zero, firstSlice.AnimationsSpeed);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task Dashboard_AppShareDonut_EmptyDataProducesEmptySeries()
     {
@@ -12457,6 +12510,7 @@ public sealed class DataFlowTests
         Assert.Empty(dashboardVm.AppShareSeries);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourlyActivity_Compute_AttributesGapToSampleState()
     {
@@ -12484,6 +12538,7 @@ public sealed class DataFlowTests
         Assert.True(hourData.IdleSeconds > 0, $"Expected IdleSeconds > 0, got {hourData.IdleSeconds}");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void HourlyActivity_Compute_SplitsGapAcrossHourBoundary()
     {
@@ -12521,6 +12576,7 @@ public sealed class DataFlowTests
             $"Expected hour 14 ActiveSeconds ≈ 30, got {hour14.ActiveSeconds}");
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void InsightEvidence_RedactsSensitiveTitles()
     {
@@ -12567,6 +12623,7 @@ public sealed class DataFlowTests
         }
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task InsightEvidence_ShowsGeneratedAt()
     {
@@ -12604,6 +12661,7 @@ public sealed class DataFlowTests
         return Convert.ToInt64(result);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task RuntimeStateStore_WriteCanReplaceFile_WhileReaderHoldsOpenHandle()
     {
@@ -12644,6 +12702,7 @@ public sealed class DataFlowTests
         Assert.Equal(updatedState.LastHeartbeatUtc, readBack!.LastHeartbeatUtc);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public async Task AgentHealthStateStore_WriteCanReplaceFile_WhileReaderHoldsOpenHandle()
     {
@@ -12684,29 +12743,4 @@ public sealed class DataFlowTests
         Assert.Equal("Updated", readBack!.Message);
     }
 
-    private sealed class TempWorkspace : IDisposable
-    {
-        public TempWorkspace()
-        {
-            Root = Path.Combine(Path.GetTempPath(), "qsw-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Root);
-        }
-
-        public string Root { get; }
-
-        public void Dispose()
-        {
-            try
-            {
-                if (Directory.Exists(Root))
-                {
-                    Directory.Delete(Root, recursive: true);
-                }
-            }
-            catch
-            {
-                // Best effort cleanup.
-            }
-        }
-    }
 }

@@ -1,4 +1,4 @@
-using QuantifiedSelf.Windows.App.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Core.Control;
 
 namespace QuantifiedSelf.Windows.App.Services;

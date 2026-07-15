@@ -4,6 +4,7 @@ using QuantifiedSelf.Windows.Core.Models;
 
 namespace QuantifiedSelf.Windows.Tests;
 
+[Trait("Category", "Fast")]
 public sealed class InsightsTests
 {
     // ── Classification tests ─────────────────────────────────────────────
@@ -264,7 +265,6 @@ public sealed class InsightsTests
                 ActiveSampleCount = 7,
                 RawToolHopCount = 3,
                 MeaningfulContextSwitchCount = 2,
-                SummaryText = "测试日期洞察",
             });
         });
 
@@ -277,7 +277,9 @@ public sealed class InsightsTests
         Assert.Equal("7", viewModel.ActiveSampleText);
         Assert.True(viewModel.HasInsightData);
         Assert.Equal(1, viewModel.InsightDataCount);
-        Assert.Equal("测试日期洞察", viewModel.SummaryText);
+        Assert.Contains("7", viewModel.SummaryText);    // 7 active samples
+        Assert.Contains("3", viewModel.SummaryText);    // 3 tool hops
+        Assert.Contains("2", viewModel.SummaryText);    // 2 app switches
     }
 
     [Fact]
@@ -289,17 +291,13 @@ public sealed class InsightsTests
                 Date = date,
                 ActiveSampleCount = 12,
                 MeaningfulContextSwitchCount = 5,
-                SummaryText = "今天有零散活动，但未形成较长连续工作块。",
-                ActionText = "试试安排一个 25 分钟不受打扰的 Code-Only 块。",
-                WorkBlocks = [],
             }));
 
         await viewModel.LoadAsync();
 
-        Assert.Empty(viewModel.WorkBlocks);
         Assert.True(viewModel.HasInsightData);
         Assert.Equal(1, viewModel.InsightDataCount);
-        Assert.Contains("零散活动", viewModel.SummaryText, StringComparison.Ordinal);
-        Assert.Contains("25 分钟", viewModel.ActionText, StringComparison.Ordinal);
+        Assert.Contains("12", viewModel.SummaryText);    // factual sample count
+        Assert.Contains("5", viewModel.SummaryText);     // factual switch count
     }
 }

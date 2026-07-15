@@ -1,0 +1,77 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ============================================================
+         Brushes.Dark.xaml — WUJI 深色主题语义画刷
+         与 Brushes.xaml (Light) 使用相同的 Key。
+         页面 XAML 通过 DynamicResource 自动跟随主题切换。
+         ============================================================ -->
+
+    <!-- ── 页面背景 ── -->
+    <SolidColorBrush x:Key="PageBackgroundBrush" Color="#0F172A" />
+    <SolidColorBrush x:Key="PageBackgroundAltBrush" Color="#1E293B" />
+
+    <!-- ── 表面（卡片 / 容器） ── -->
+    <SolidColorBrush x:Key="SurfaceBrush" Color="#1E293B" />
+    <SolidColorBrush x:Key="SurfaceAltBrush" Color="#334155" />
+    <SolidColorBrush x:Key="SurfaceMutedBrush" Color="#475569" />
+
+    <!-- ── 边框 ── -->
+    <SolidColorBrush x:Key="BorderBrush" Color="#475569" />
+    <SolidColorBrush x:Key="BorderStrongBrush" Color="#64748B" />
+
+    <!-- ── 文字 ── -->
+    <SolidColorBrush x:Key="TextPrimaryBrush" Color="#F1F5F9" />
+    <SolidColorBrush x:Key="TextSecondaryBrush" Color="#CBD5E1" />
+    <SolidColorBrush x:Key="TextMutedBrush" Color="#94A3B8" />
+    <SolidColorBrush x:Key="TextPlaceholderBrush" Color="#64748B" />
+
+    <!-- ── 强调色 ── -->
+    <SolidColorBrush x:Key="AccentBrush" Color="#14B8A6" />
+    <SolidColorBrush x:Key="AccentDarkBrush" Color="#5EEAD4" />
+    <SolidColorBrush x:Key="AccentSoftBrush" Color="#134E4A" />
+    <SolidColorBrush x:Key="AccentHoverBrush" Color="#0D9488" />
+
+    <!-- ── 状态色 ── -->
+    <SolidColorBrush x:Key="SuccessBrush" Color="#14B8A6" />
+    <SolidColorBrush x:Key="WarningBrush" Color="#F59E0B" />
+    <SolidColorBrush x:Key="WarningSoftBrush" Color="#78350F" />
+    <SolidColorBrush x:Key="DangerBrush" Color="#EF4444" />
+    <SolidColorBrush x:Key="DangerSoftBrush" Color="#7F1D1D" />
+    <SolidColorBrush x:Key="IdleBrush" Color="#64748B" />
+    <SolidColorBrush x:Key="InfoBrush" Color="#60A5FA" />
+
+    <!-- ── 侧边栏 ── -->
+    <SolidColorBrush x:Key="ShellBackgroundBrush" Color="#1E293B" />
+    <SolidColorBrush x:Key="ShellSurfaceAltBrush" Color="#334155" />
+    <SolidColorBrush x:Key="ShellBorderBrush" Color="#475569" />
+    <SolidColorBrush x:Key="ShellNavHoverBrush" Color="#334155" />
+    <SolidColorBrush x:Key="ShellNavSelectedBgBrush" Color="#134E4A" />
+    <SolidColorBrush x:Key="ShellNavSelectedBorderBrush" Color="#14B8A6" />
+    <SolidColorBrush x:Key="ShellTextBrush" Color="#F1F5F9" />
+    <SolidColorBrush x:Key="ShellMutedTextBrush" Color="#94A3B8" />
+    <SolidColorBrush x:Key="ShellAccentTextBrush" Color="#5EEAD4" />
+
+    <!-- ── 上下文分类色 ── (unchanged for now — not live yet) -->
+    <SolidColorBrush x:Key="ContextDevelopmentBrush" Color="#60A5FA" />
+    <SolidColorBrush x:Key="ContextResearchBrush" Color="#A78BFA" />
+    <SolidColorBrush x:Key="ContextWritingBrush" Color="#34D399" />
+    <SolidColorBrush x:Key="ContextCommunicationBrush" Color="#FBBF24" />
+    <SolidColorBrush x:Key="ContextBrowsingBrush" Color="#9CA3AF" />
+    <SolidColorBrush x:Key="ContextEntertainmentBrush" Color="#F472B6" />
+    <SolidColorBrush x:Key="ContextProductivityBrush" Color="#22D3EE" />
+    <SolidColorBrush x:Key="ContextSystemBrush" Color="#6B7280" />
+    <SolidColorBrush x:Key="ContextOtherBrush" Color="#6B7280" />
+    <SolidColorBrush x:Key="ContextIdleBrush" Color="#475569" />
+
+    <!-- ── 热力图 ── -->
+    <SolidColorBrush x:Key="Heatmap0Brush" Color="#334155" />
+    <SolidColorBrush x:Key="Heatmap1Brush" Color="#134E4A" />
+    <SolidColorBrush x:Key="Heatmap2Brush" Color="#0F766E" />
+    <SolidColorBrush x:Key="Heatmap3Brush" Color="#14B8A6" />
+    <SolidColorBrush x:Key="Heatmap4Brush" Color="#5EEAD4" />
+
+    <!-- ── 兼容旧 Key ── -->
+    <SolidColorBrush x:Key="TextBrush" Color="#F1F5F9" />
+
+</ResourceDictionary>

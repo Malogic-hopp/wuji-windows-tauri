@@ -48,6 +48,11 @@ public partial class App : Application
             appSettings = new AppSettings();
         }
 
+        if (_startupLaunchOptions.UsePreviewUi)
+        {
+            ThemeService.ApplyTheme(ThemeService.Parse(appSettings.Theme));
+        }
+
         // IPC setup
         var userSid = WindowsIdentity.GetCurrent().User?.Value ?? Environment.UserName;
         IAgentIpcClient? ipcClient = null;
@@ -118,13 +123,17 @@ public partial class App : Application
             insightsViewModel,
             ipcStatusService,
             refreshService,
-            trayStateSink: null); // set via TrayStateSink after tray creation
+            trayStateSink: null,
+            refreshScheduler: new DispatcherRefreshScheduler(),
+            statusPollScheduler: new DispatcherRefreshScheduler()); // set via TrayStateSink after tray creation
 
         // Inject startup registration service and launch options for Diagnostics display
         viewModel.StartupRegistrationService = startupRegistrationService;
         viewModel.StartupLaunchOptions = _startupLaunchOptions;
 
-        var window = new MainWindow(viewModel);
+        Window window = _startupLaunchOptions.UsePreviewUi
+            ? new MainWindow(viewModel)
+            : new LegacyMainWindow(viewModel);
         if (!runtimeChannel.IsDefault)
         {
             window.Title = $"{runtimeChannel.ProductDisplayName} - {window.Title}";

@@ -8,8 +8,11 @@ namespace QuantifiedSelf.Windows.Tests;
 /// Verify that Directory.Build.props sets the unified version 0.1.0
 /// on all projects in the solution.
 /// </summary>
+[Trait("Category", "Fast")]
 public sealed class VersionTests
 {
+    [Trait("Category", "Fast")]
+    [Trait("Category", "Fast")]
     [Fact]
     public void CoreAssemblyVersion_Is_0_1_0_0()
     {
@@ -21,6 +24,8 @@ public sealed class VersionTests
         // Revision is typically 0 unless specified
     }
 
+    [Trait("Category", "Fast")]
+    [Trait("Category", "Fast")]
     [Fact]
     public void CoreAssemblyFileVersion_Is_0_1_0_0()
     {
@@ -30,6 +35,8 @@ public sealed class VersionTests
         Assert.StartsWith("0.1.0", fileVersionAttr!.Version);
     }
 
+    [Trait("Category", "Fast")]
+    [Trait("Category", "Fast")]
     [Fact]
     public void AppAssemblyInformationalVersion_Contains_0_1_0()
     {
@@ -39,6 +46,8 @@ public sealed class VersionTests
         Assert.StartsWith("0.1.0", infoVersionAttr!.InformationalVersion);
     }
 
+    [Trait("Category", "Fast")]
+    [Trait("Category", "Fast")]
     [Fact]
     public void AgentAssemblyVersion_Is_0_1_0_0()
     {

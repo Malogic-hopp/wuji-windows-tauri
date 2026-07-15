@@ -1,4 +1,4 @@
-namespace QuantifiedSelf.Windows.App.Models;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Models;
 
 public sealed class AgentProcessInfo
 {

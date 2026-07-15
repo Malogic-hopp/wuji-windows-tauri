@@ -1,14 +1,16 @@
 using System.IO;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Tests.TestHelpers;
 
 namespace QuantifiedSelf.Windows.Tests;
 
+[Trait("Category", "Fast")]
 public sealed class AgentExeLocatorTests
 {
     [Fact]
     public void ResolveAgentExecutablePath_ReturnsNull_WhenNoCandidateFound()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
         Assert.Null(result);
     }
@@ -16,7 +18,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_FindsExeInBaseDirectory()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var fakeExe = Path.Combine(workspace.Path, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(fakeExe, "");
 
@@ -29,7 +31,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_PrefersIsolatedAgentSubdirectory()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var legacyExe = Path.Combine(workspace.Path, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(legacyExe, "");
 
@@ -47,7 +49,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_PrefersBaseDirOverEnvVar()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var baseDirExe = Path.Combine(workspace.Path, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(baseDirExe, "");
 
@@ -81,7 +83,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_FallsBackToEnvVar_WhenBaseDirEmpty()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var envDir = Path.Combine(Path.GetTempPath(), "qsw-env-" + Guid.NewGuid().ToString("N"));
         try
         {
@@ -112,7 +114,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_IgnoresEnvVar_WhenFileMissing()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var envExe = Path.Combine(workspace.Path, "NonExistentAgent.exe");
 
         var oldEnv = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
@@ -131,7 +133,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_IgnoresEmptyEnvVar()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
 
         var oldEnv = Environment.GetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE");
         try
@@ -149,7 +151,7 @@ public sealed class AgentExeLocatorTests
     [Fact]
     public void ResolveAgentExecutablePath_FindsDevelopmentPath_WhenTargetFrameworkDepthChanges()
     {
-        using var workspace = new TempDir();
+        using var workspace = new TempWorkspace("qsw-ael");
         var baseDir = Path.Combine(
             workspace.Path,
             "src",
@@ -174,32 +176,5 @@ public sealed class AgentExeLocatorTests
 
         Assert.NotNull(result);
         Assert.Equal(agentExe, result, ignoreCase: true);
-    }
-
-    /// <summary>
-    /// Temporary directory for test isolation. Disposed automatically.
-    /// </summary>
-    private sealed class TempDir : IDisposable
-    {
-        public TempDir()
-        {
-            Path = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "qsw-ael-" + Guid.NewGuid().ToString("N"));
-            Directory.CreateDirectory(Path);
-        }
-
-        public string Path { get; }
-
-        public void Dispose()
-        {
-            try
-            {
-                if (Directory.Exists(Path))
-                    Directory.Delete(Path, recursive: true);
-            }
-            catch
-            {
-                // Best effort cleanup
-            }
-        }
     }
 }

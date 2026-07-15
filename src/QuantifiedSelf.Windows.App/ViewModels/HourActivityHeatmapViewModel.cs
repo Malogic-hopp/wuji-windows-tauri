@@ -115,12 +115,27 @@ public sealed class HourActivityHeatmapViewModel : ObservableObject
 
         return new HeatmapCellViewModel
         {
+            Date = DateOnly.Parse(dateStr),
+            Hour = hour,
+            IntensityLevel = GetIntensityLevel(intensity),
+            AutomationName = point is not null && total > 0
+                ? $"{DateOnly.Parse(dateStr):M月d日} {hour:D2}:00，有效使用记录 {active} 个样本"
+                : $"{DateOnly.Parse(dateStr):M月d日} {hour:D2}:00，无数据",
             ActiveIntensity = intensity,
             Background = HeatmapCellViewModel.InterpolateColor(intensity),
             TooltipText = tooltip,
             IsPhaseBoundary = hour == 0 || hour == 6 || hour == 12 || hour == 18
         };
     }
+
+    private static int GetIntensityLevel(double intensity) => intensity switch
+    {
+        <= 0 => 0,
+        <= 0.25 => 1,
+        <= 0.5 => 2,
+        <= 0.75 => 3,
+        _ => 4
+    };
 
     private static string? PhaseLabelForHour(int hour)
     {

@@ -1,0 +1,133 @@
+<UserControl x:Class="QuantifiedSelf.Windows.App.Views.DiagnosticsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:ui="clr-namespace:QuantifiedSelf.Windows.App.UI"
+             mc:Ignorable="d"
+             d:DesignHeight="860"
+             d:DesignWidth="1280"
+             Background="Transparent">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="0,4">
+            <Border Style="{StaticResource ContentCardStyle}" Margin="0,0,0,16">
+                <StackPanel>
+                    <TextBlock Text="运行健康" Style="{StaticResource TitleSmallStyle}" />
+                    <TextBlock Text="先确认记录是否正常；进程、IPC、SQLite 和 Tick 等信息默认收起。"
+                               Style="{StaticResource BodySmallStyle}"
+                               Foreground="{DynamicResource TextMutedBrush}"
+                               Margin="0,4,0,16" />
+
+                    <UniformGrid>
+                        <UniformGrid.Style>
+                            <Style TargetType="UniformGrid">
+                                <Setter Property="Columns" Value="4" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Path=(ui:AdaptiveLayout.Mode), RelativeSource={RelativeSource AncestorType=Window}}" Value="Compact">
+                                        <Setter Property="Columns" Value="2" />
+                                        <Setter Property="Rows" Value="2" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </UniformGrid.Style>
+
+                        <StackPanel Margin="8">
+                            <TextBlock Text="后台记录" Style="{StaticResource MetricLabelStyle}" />
+                            <TextBlock Text="{Binding AgentStatusText}" Style="{StaticResource MetricValueStyle}" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MetricTrendStyle}"
+                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <StackPanel Margin="8">
+                            <TextBlock Text="最近记录" Style="{StaticResource MetricLabelStyle}" />
+                            <TextBlock Text="{Binding LastSampleText}" Style="{StaticResource MetricValueStyle}" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding LastHeartbeatText, StringFormat=心跳 {0}}"
+                                       Style="{StaticResource MetricTrendStyle}" Margin="0,4,0,0" />
+                        </StackPanel>
+                        <StackPanel Margin="8">
+                            <TextBlock Text="本地数据库" Style="{StaticResource MetricLabelStyle}" />
+                            <TextBlock Text="{Binding EventWriterStatusText}" Style="{StaticResource BodyLargeStyle}"
+                                       FontWeight="SemiBold" Margin="0,6,0,0" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding LastEventWriteErrorText}" Style="{StaticResource MetricTrendStyle}"
+                                       Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <StackPanel Margin="8">
+                            <TextBlock Text="隐私过滤" Style="{StaticResource MetricLabelStyle}" />
+                            <TextBlock Text="本机生效" Style="{StaticResource BodyLargeStyle}"
+                                       FontWeight="SemiBold" Margin="0,6,0,0" />
+                            <TextBlock Text="配置与数据均保存在本机" Style="{StaticResource MetricTrendStyle}" Margin="0,4,0,0" />
+                        </StackPanel>
+                    </UniformGrid>
+
+                    <StackPanel Orientation="Horizontal" Margin="0,20,0,0">
+                        <Button Content="尝试修复" Command="{Binding PrimaryAgentActionCommand}" Margin="0,0,8,0" />
+                        <Button Content="重新检查" Command="{Binding RefreshCommand}" Style="{StaticResource SecondaryButtonStyle}" />
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <Expander IsExpanded="False"
+                      AutomationProperties.Name="查看技术详情"
+                      Background="{DynamicResource SurfaceBrush}"
+                      BorderBrush="{DynamicResource BorderBrush}"
+                      BorderThickness="1"
+                      Foreground="{DynamicResource TextPrimaryBrush}">
+                <Expander.Header>
+                    <TextBlock Text="查看技术详情" Style="{StaticResource BodyStyle}" FontWeight="SemiBold" />
+                </Expander.Header>
+                <StackPanel Margin="20,12,20,20">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.25*" />
+                            <ColumnDefinition Width="20" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="进程与通信" Style="{StaticResource TitleSmallStyle}" />
+                            <TextBlock Text="{Binding AgentProcessText, StringFormat=Agent 进程：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,8,0,0" />
+                            <TextBlock Text="{Binding IpcStatusText, StringFormat=IPC：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding RefreshHealthText, StringFormat=刷新循环：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding LoginStartupStatusText, StringFormat=登录启动：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding StartupRegistrationSummary, StringFormat=启动注册：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="采样与写入" Style="{StaticResource TitleSmallStyle}" />
+                            <TextBlock Text="{Binding LastTickPhaseText, StringFormat=Tick 阶段：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,8,0,0" />
+                            <TextBlock Text="{Binding LastTickDurationText, StringFormat=总耗时：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding LastCaptureDurationText, StringFormat=采样：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding LastPersistDurationText, StringFormat=持久化：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" />
+                            <TextBlock Text="{Binding JournalWriterStatusText, StringFormat=JSONL：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                            <TextBlock Text="{Binding CurrentSessionIdText, StringFormat=会话标识：{0}}" Style="{StaticResource BodySmallStyle}" Margin="0,6,0,0" />
+                        </StackPanel>
+                    </Grid>
+
+                    <Separator Margin="0,20,0,16" />
+                    <TextBlock Text="状态文件与路径" Style="{StaticResource TitleSmallStyle}" />
+                    <TextBlock Text="{Binding CurrentJournalPathText, StringFormat=当前日志：{0}}"
+                               Style="{StaticResource BodySmallStyle}" Margin="0,8,0,0" TextWrapping="Wrap" />
+                    <TextBlock Text="原始状态内容仅用于排障，默认不在首屏显示。"
+                               Style="{StaticResource CaptionStyle}" Foreground="{DynamicResource TextMutedBrush}" Margin="0,6,0,0" />
+
+                    <Expander Header="查看原始状态" IsExpanded="False" Margin="0,12,0,0">
+                        <Grid Margin="0,8,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Grid.Column="0" Text="{Binding RuntimeStateJson}" AcceptsReturn="True" IsReadOnly="True"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" MinHeight="200" />
+                            <TextBox Grid.Column="2" Text="{Binding HealthStateJson}" AcceptsReturn="True" IsReadOnly="True"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" MinHeight="200" />
+                            <TextBox Grid.Column="4" Text="{Binding ControlCommandJson}" AcceptsReturn="True" IsReadOnly="True"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" MinHeight="200" />
+                        </Grid>
+                    </Expander>
+                </StackPanel>
+            </Expander>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
