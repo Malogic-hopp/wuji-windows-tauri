@@ -1,7 +1,7 @@
 # WUJI Application / Client SDK 抽取方案
 
 日期：2026-07-16  
-状态：待实施  
+状态：阶段 0～3 已完成，阶段 4～8 待实施
 适用范围：`QuantifiedSelf.Windows.Core`、`Infrastructure`、`Agent`、`App`
 
 ## 1. 结论与目标
