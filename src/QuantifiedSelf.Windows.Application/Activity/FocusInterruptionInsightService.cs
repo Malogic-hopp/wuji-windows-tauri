@@ -1,19 +1,19 @@
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Data;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.Core.Models;
-using QuantifiedSelf.Windows.Infrastructure.Database;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Activity;
 
 /// <summary>
 /// Read-only service that produces a <see cref="FocusInterruptionInsight"/> for a given
 /// local date by analysing foreground_samples.
 ///
-/// Reuses <see cref="DailyStatsQueryService"/> for data access; all computation is in-memory.
+/// Reads samples through an Application query port; all computation is in-memory.
 /// Classification rules mirror <see cref="FocusMetricsCalculator"/> where possible.
 /// </summary>
-public sealed class FocusInterruptionInsightService
+public sealed class FocusInterruptionInsightService : IFocusInterruptionInsightService
 {
-    private readonly DailyStatsQueryService _queryService;
+    private readonly IDailyStatsQueryPort _queryPort;
 
     // Work-block detection thresholds (different from FocusMetricsCalculator
     // because Insights targets broader "work blocks", not just pristine focus sessions).
@@ -22,9 +22,9 @@ public sealed class FocusInterruptionInsightService
     internal const int MaxSwitchesForFocus = 3;
     internal const double FocusPrimaryContextRatio = 0.70;
 
-    public FocusInterruptionInsightService(string databasePath)
+    public FocusInterruptionInsightService(IDailyStatsQueryPort queryPort)
     {
-        _queryService = new DailyStatsQueryService(databasePath);
+        _queryPort = queryPort ?? throw new ArgumentNullException(nameof(queryPort));
     }
 
     // ── Public API ──────────────────────────────────────────────────────────
@@ -33,7 +33,7 @@ public sealed class FocusInterruptionInsightService
         DateOnly date,
         CancellationToken cancellationToken = default)
     {
-        var samples = await _queryService.GetSamplesForLocalDayAsync(date, cancellationToken);
+        var samples = await _queryPort.GetSamplesForLocalDayAsync(date, cancellationToken);
 
         if (samples.Count == 0)
         {

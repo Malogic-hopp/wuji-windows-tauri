@@ -1,6 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 
@@ -23,7 +23,7 @@ public sealed class InsightsViewModel : ObservableObject
     private string _activeSampleText = "-";
     private string _estimatedActiveText = "-";
 
-    public InsightsViewModel(FocusInterruptionInsightService insightService)
+    public InsightsViewModel(IFocusInterruptionInsightService insightService)
         : this(insightService.GetInsightAsync)
     {
     }

@@ -4,6 +4,7 @@ using System.Threading;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Control;
@@ -32,8 +33,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
     private readonly AgentControlService _controlService;
     private readonly AgentStatusService _statusService;
     private readonly RefreshService? _refreshService;
-    private readonly OverviewDataService _overviewDataService;
-    private readonly DiagnosticsDataService _diagnosticsDataService;
+    private readonly IOverviewDataService _overviewDataService;
+    private readonly IDiagnosticsDataService _diagnosticsDataService;
     private readonly AgentIpcStatusService? _ipcStatusService;
     private ITrayStateSink? _trayStateSink;
     private readonly SamplesViewModel _samplesViewModel;
@@ -103,8 +104,8 @@ public sealed partial class MainWindowViewModel : ObservableObject
         AgentProcessService processService,
         AgentControlService controlService,
         AgentStatusService statusService,
-        OverviewDataService overviewDataService,
-        DiagnosticsDataService diagnosticsDataService,
+        IOverviewDataService overviewDataService,
+        IDiagnosticsDataService diagnosticsDataService,
         SamplesViewModel samplesViewModel,
         SessionsViewModel sessionsViewModel,
         AppsViewModel appsViewModel,

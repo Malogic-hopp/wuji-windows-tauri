@@ -2,7 +2,7 @@ using System.Collections.ObjectModel;
 using System.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 
@@ -22,7 +22,7 @@ public sealed class SessionsViewModel : ObservableObject
     private bool _hasLoadError;
     private bool _isLoading;
 
-    public SessionsViewModel(SessionsDataService sessionsDataService)
+    public SessionsViewModel(ISessionsDataService sessionsDataService)
         : this((range, limit, cancellationToken) => range switch
         {
             "Recent" => sessionsDataService.GetRecentSessionsAsync(limit, cancellationToken),

@@ -7,6 +7,7 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
@@ -320,7 +321,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(10), dayStart.AddHours(10).AddMinutes(20), "QuantifiedSelf.Windows.Agent", 1200, 1200, 0, 0, "Closed");
         await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(11), dayStart.AddHours(11).AddMinutes(30), "QuantifiedSelf.Windows.App", 1800, 1800, 0, 0, "Closed");
 
-        var overviewDataService = new OverviewDataService(paths);
+        var overviewDataService = ActivityTestServices.CreateOverview(paths);
 
         var topApps = await overviewDataService.GetTopAppsTodayAsync(5);
         Assert.Equal(3, topApps.Count);
@@ -1091,7 +1092,7 @@ public sealed class DataFlowTests
     {
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
-        var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var diagnosticsDataService = ActivityTestServices.CreateDiagnostics(paths);
 
         var journalPath = diagnosticsDataService.GetCurrentJournalPath(new DateTime(2026, 6, 19, 12, 0, 0, DateTimeKind.Utc));
 
@@ -1288,7 +1289,7 @@ public sealed class DataFlowTests
         await InsertSampleAsync(paths.DatabasePath, sampleTime.AddMinutes(-1), "Explorer", null, "Unknown");
         await InsertSampleAsync(paths.DatabasePath, sampleTime, "QuantifiedSelf.Windows.App", null, "Idle");
 
-        var viewModel = new SamplesViewModel(new SamplesDataService(paths));
+        var viewModel = new SamplesViewModel(ActivityTestServices.CreateSamples(paths));
 
         await viewModel.LoadAsync();
 
@@ -1316,7 +1317,7 @@ public sealed class DataFlowTests
         var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
         await initializer.InitializeAsync();
 
-        var viewModel = new SamplesViewModel(new SamplesDataService(paths));
+        var viewModel = new SamplesViewModel(ActivityTestServices.CreateSamples(paths));
 
         await viewModel.LoadAsync();
 
@@ -1642,7 +1643,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, dayStart.AddHours(9), dayStart.AddHours(10), "Code", 3600, 1800, 1200, 600, "ProcessChanged");
         await InsertOpenSessionAsync(paths.DatabasePath, DateTime.Now.AddMinutes(-10), "OpenApp", 600, 500, 100, 0);
 
-        var overviewDataService = new OverviewDataService(paths);
+        var overviewDataService = ActivityTestServices.CreateOverview(paths);
         var appUsageQueryService = new AppUsageQueryService(paths.DatabasePath);
 
         var dashboardTopApps = await overviewDataService.GetTopAppsTodayAsync(5);
@@ -1768,7 +1769,7 @@ public sealed class DataFlowTests
         var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
         await initializer.InitializeAsync();
 
-        var viewModel = new AppsViewModel(new AppsDataService(paths));
+        var viewModel = new AppsViewModel(ActivityTestServices.CreateApps(paths));
 
         await viewModel.LoadAsync();
 
@@ -1946,8 +1947,8 @@ public sealed class DataFlowTests
             controlFileStore,
             NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, controlFileStore, statusService);
-        var overviewDataService = new OverviewDataService(paths);
-        var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var overviewDataService = ActivityTestServices.CreateOverview(paths);
+        var diagnosticsDataService = ActivityTestServices.CreateDiagnostics(paths);
         var samplesViewModel = new SamplesViewModel((_, _) => Task.FromResult<IReadOnlyList<ForegroundSample>>([]));
         var sessionsViewModel = new SessionsViewModel((_, _, _) => Task.FromResult<IReadOnlyList<AppSession>>([]));
         var appsViewModel = new AppsViewModel((_, _) => Task.FromResult<IReadOnlyList<AppUsageSummary>>([]));
@@ -1965,7 +1966,7 @@ public sealed class DataFlowTests
             appsViewModel,
             settingsViewModel,
             settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
+            new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)),
             refreshScheduler: refreshScheduler,
             statusPollScheduler: statusPollScheduler);
 
@@ -5056,26 +5057,26 @@ public sealed class DataFlowTests
         await initializer.InitializeAsync();
 
         // Dashboard with empty DB returns zero values without throwing
-        var overviewService = new OverviewDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
         var summary = await overviewService.GetDashboardSummaryAsync();
         Assert.Equal(0, summary.SessionCount);
         Assert.Equal(0, summary.TotalDurationSeconds);
         Assert.Equal(0, summary.ActiveDurationSeconds);
 
         // Sessions with empty DB returns empty list without throwing
-        var sessionsViewModel = new SessionsViewModel(new SessionsDataService(paths));
+        var sessionsViewModel = new SessionsViewModel(ActivityTestServices.CreateSessions(paths));
         await sessionsViewModel.LoadAsync();
         Assert.Empty(sessionsViewModel.Sessions);
         Assert.False(sessionsViewModel.HasLoadError);
 
         // Samples with empty DB returns empty list without throwing
-        var samplesViewModel = new SamplesViewModel(new SamplesDataService(paths));
+        var samplesViewModel = new SamplesViewModel(ActivityTestServices.CreateSamples(paths));
         await samplesViewModel.LoadAsync();
         Assert.Empty(samplesViewModel.Samples);
         Assert.False(samplesViewModel.HasLoadError);
 
         // Apps with empty DB returns empty list without throwing
-        var appsViewModel = new AppsViewModel(new AppsDataService(paths));
+        var appsViewModel = new AppsViewModel(ActivityTestServices.CreateApps(paths));
         await appsViewModel.LoadAsync();
         Assert.Empty(appsViewModel.Apps);
         Assert.False(appsViewModel.HasLoadError);
@@ -5173,7 +5174,7 @@ public sealed class DataFlowTests
             EventTimeUtc = DateTime.UtcNow
         });
 
-        var diagnosticsService = new DiagnosticsDataService(paths);
+        var diagnosticsService = ActivityTestServices.CreateDiagnostics(paths);
         // Must not throw when RecentErrors is empty
         var recentErrors = await diagnosticsService.GetRecentErrorsAsync();
         var recentEvents = await diagnosticsService.GetRecentEventsAsync();
@@ -8553,16 +8554,16 @@ public sealed class DataFlowTests
         var processService = new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var overviewService = new OverviewDataService(paths);
-        var diagService = new DiagnosticsDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
         var viewModel = new MainWindowViewModel(
             processService, controlService, statusService, overviewService, diagService,
-            new SamplesViewModel(new SamplesDataService(paths)),
-            new SessionsViewModel(new SessionsDataService(paths)),
-            new AppsViewModel(new AppsDataService(paths)),
+            new SamplesViewModel(ActivityTestServices.CreateSamples(paths)),
+            new SessionsViewModel(ActivityTestServices.CreateSessions(paths)),
+            new AppsViewModel(ActivityTestServices.CreateApps(paths)),
             settingsViewModel, settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
+            new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)),
             trayStateSink: sink);
 
         // Apply status update — tray should receive it, but settings drafts must stay
@@ -8586,18 +8587,18 @@ public sealed class DataFlowTests
         var processService = new AgentProcessService(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var overviewService = new OverviewDataService(paths);
-        var diagService = new DiagnosticsDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
         var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
         var settingsViewModel = new SettingsViewModel(settingsService, paths);
 
         var viewModel = new MainWindowViewModel(
             processService, controlService, statusService, overviewService, diagService,
-            new SamplesViewModel(new SamplesDataService(paths)),
-            new SessionsViewModel(new SessionsDataService(paths)),
-            new AppsViewModel(new AppsDataService(paths)),
+            new SamplesViewModel(ActivityTestServices.CreateSamples(paths)),
+            new SessionsViewModel(ActivityTestServices.CreateSessions(paths)),
+            new AppsViewModel(ActivityTestServices.CreateApps(paths)),
             settingsViewModel, settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
+            new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)),
             refreshService: null,
             trayStateSink: null);
         viewModel.TrayStateSink = trayStateSink;
@@ -9247,8 +9248,8 @@ public sealed class DataFlowTests
             controlFileStore,
             NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, controlFileStore, statusService);
-        var overviewDataService = new OverviewDataService(paths);
-        var diagnosticsDataService = new DiagnosticsDataService(paths);
+        var overviewDataService = ActivityTestServices.CreateOverview(paths);
+        var diagnosticsDataService = ActivityTestServices.CreateDiagnostics(paths);
         var samplesViewModel = new SamplesViewModel(sampleLoader ?? ((_, _) =>
             Task.FromResult<IReadOnlyList<ForegroundSample>>([])));
         var sessionsViewModel = new SessionsViewModel(sessionLoader ?? ((_, _, _) =>
@@ -9267,7 +9268,7 @@ public sealed class DataFlowTests
             appsViewModel,
             settingsViewModel,
             settingsService,
-            new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)),
+            new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)),
             ipcStatusService,
             refreshService,
             refreshScheduler: refreshScheduler,
@@ -9494,7 +9495,7 @@ public sealed class DataFlowTests
         var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var diagService = new DiagnosticsDataService(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
         var viewModel = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
 
         await viewModel.LoadAsync();
@@ -9517,7 +9518,7 @@ public sealed class DataFlowTests
         var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var diagService = new DiagnosticsDataService(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
         var viewModel = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
 
         await viewModel.LoadAsync();
@@ -10281,15 +10282,15 @@ public sealed class DataFlowTests
         var processService = new AgentProcessService(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var overviewService = new OverviewDataService(paths);
-        var diagService = new DiagnosticsDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
         var viewModel = new MainWindowViewModel(
             processService, controlService, statusService, overviewService, diagService,
-            new SamplesViewModel(new SamplesDataService(paths)),
-            new SessionsViewModel(new SessionsDataService(paths)),
-            new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
+            new SamplesViewModel(ActivityTestServices.CreateSamples(paths)),
+            new SessionsViewModel(ActivityTestServices.CreateSessions(paths)),
+            new AppsViewModel(ActivityTestServices.CreateApps(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)));
 
         // First call should succeed
         await viewModel.InitializeAsync();
@@ -10316,15 +10317,15 @@ public sealed class DataFlowTests
         var processService = new AgentProcessService(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var overviewService = new OverviewDataService(paths);
-        var diagService = new DiagnosticsDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
         var viewModel = new MainWindowViewModel(
             processService, controlService, statusService, overviewService, diagService,
-            new SamplesViewModel(new SamplesDataService(paths)),
-            new SessionsViewModel(new SessionsDataService(paths)),
-            new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
+            new SamplesViewModel(ActivityTestServices.CreateSamples(paths)),
+            new SessionsViewModel(ActivityTestServices.CreateSessions(paths)),
+            new AppsViewModel(ActivityTestServices.CreateApps(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)));
 
         await viewModel.InitializeAsync();
 
@@ -10352,15 +10353,15 @@ public sealed class DataFlowTests
         var processService = new AgentProcessService(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var overviewService = new OverviewDataService(paths);
-        var diagService = new DiagnosticsDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
         var viewModel = new MainWindowViewModel(
             processService, controlService, statusService, overviewService, diagService,
-            new SamplesViewModel(new SamplesDataService(paths)),
-            new SessionsViewModel(new SessionsDataService(paths)),
-            new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
+            new SamplesViewModel(ActivityTestServices.CreateSamples(paths)),
+            new SessionsViewModel(ActivityTestServices.CreateSessions(paths)),
+            new AppsViewModel(ActivityTestServices.CreateApps(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)));
 
         await viewModel.InitializeAsync();
 
@@ -10389,15 +10390,15 @@ public sealed class DataFlowTests
         var processService = new AgentProcessService(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
         var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
-        var overviewService = new OverviewDataService(paths);
-        var diagService = new DiagnosticsDataService(paths);
+        var overviewService = ActivityTestServices.CreateOverview(paths);
+        var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
         var viewModel = new MainWindowViewModel(
             processService, controlService, statusService, overviewService, diagService,
-            new SamplesViewModel(new SamplesDataService(paths)),
-            new SessionsViewModel(new SessionsDataService(paths)),
-            new AppsViewModel(new AppsDataService(paths)),
-            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(new DailyStatsService(paths)), new InsightsViewModel(new FocusInterruptionInsightService(paths.DatabasePath)));
+            new SamplesViewModel(ActivityTestServices.CreateSamples(paths)),
+            new SessionsViewModel(ActivityTestServices.CreateSessions(paths)),
+            new AppsViewModel(ActivityTestServices.CreateApps(paths)),
+            new SettingsViewModel(settingsService, paths), settingsService, new DashboardViewModel(ActivityTestServices.CreateDailyStats(paths)), new InsightsViewModel(ActivityTestServices.CreateInsights(paths)));
 
         // First init (simulates explicit call in App.xaml.cs hidden mode)
         await viewModel.InitializeAsync();
@@ -10879,7 +10880,7 @@ public sealed class DataFlowTests
         var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
         await initializer.InitializeAsync();
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync();
 
         Assert.Equal(0L, summary.TotalDurationSeconds);
@@ -10910,7 +10911,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(-1), today.AddHours(1),
             "Terminal", 7200, 2400, 3600, 1200, "ProcessChanged");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync();
 
         Assert.Equal(2, summary.SessionCount);
@@ -10942,7 +10943,7 @@ public sealed class DataFlowTests
             0,
             "ProcessChanged");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync();
 
         Assert.NotNull(summary.FirstSeenAtUtc);
@@ -10975,7 +10976,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(11), today.AddHours(12),
             "Beta", 3600, 600, 3000, 0, "ProcessChanged");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync(topAppsLimit: 3);
 
         Assert.Equal(3, summary.TopApps.Count);
@@ -11003,7 +11004,7 @@ public sealed class DataFlowTests
         await InsertSampleAsync(paths.DatabasePath, todayUtcStart.AddHours(10).AddMinutes(1), "Terminal", "Terminal", "Active");
         await InsertSampleAsync(paths.DatabasePath, todayUtcStart.AddHours(11), "Browser", "Browser Window", "Active");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync(topWindowsLimit: 10);
 
         Assert.NotEmpty(summary.TopWindows);
@@ -11030,7 +11031,7 @@ public sealed class DataFlowTests
         await InsertSampleAsync(paths.DatabasePath, todayUtcStart.AddHours(10), "App", "Alpha", "Active");
         await InsertSampleAsync(paths.DatabasePath, todayUtcStart.AddHours(10).AddMinutes(1), "App", "Alpha", "Active");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary1 = await service.GetTodaySummaryAsync();
         var summary2 = await service.GetTodaySummaryAsync();
 
@@ -11054,7 +11055,7 @@ public sealed class DataFlowTests
         await InsertSampleAsync(paths.DatabasePath, todayUtcStart.AddHours(9), "Code",
             @"C:\Users\Alice\secrets\passwords.txt - Notepad", "Active");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync();
 
         Assert.NotEmpty(summary.TopWindows);
@@ -11083,7 +11084,7 @@ public sealed class DataFlowTests
         var initialSessionCount = await CountAsync(paths.DatabasePath, "app_sessions");
         var initialSampleCount = await CountAsync(paths.DatabasePath, "foreground_samples");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         await service.GetTodaySummaryAsync();
 
         // Verify no rows were inserted or modified
@@ -11097,7 +11098,7 @@ public sealed class DataFlowTests
     {
         // Use a non-existent path
         var paths = new WindowsAgentPaths(Path.Combine(Path.GetTempPath(), "nonexistent-" + Guid.NewGuid().ToString("N")));
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync();
 
         Assert.Equal(0L, summary.TotalDurationSeconds);
@@ -11124,7 +11125,7 @@ public sealed class DataFlowTests
         // Yesterday's sample should not count
         await InsertSampleAsync(paths.DatabasePath, todayUtcStart.AddDays(-1).AddHours(9), "Code", "Old", "Active");
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync();
 
         Assert.Equal(3L, summary.SampleCount);
@@ -11148,7 +11149,7 @@ public sealed class DataFlowTests
                 $"App{i:D2}", 3600, 3600 - i * 100, 0, i * 100, "ProcessChanged");
         }
 
-        var service = new DailyStatsService(paths);
+        var service = ActivityTestServices.CreateDailyStats(paths);
         var summary = await service.GetTodaySummaryAsync(topAppsLimit: 3);
 
         Assert.Equal(3, summary.TopApps.Count);
@@ -11167,7 +11168,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(9), today.AddHours(10),
             "Code", 3600, 3600, 0, 0, "ProcessChanged");
 
-        var dailyStatsService = new DailyStatsService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
         var dashboardVm = new DashboardViewModel(dailyStatsService);
 
         await dashboardVm.LoadAsync();
@@ -11192,7 +11193,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(9), today.AddHours(10),
             "Code", 3600, 3600, 0, 0, "ProcessChanged");
 
-        var dailyStatsService = new DailyStatsService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
         var dashboardVm = new DashboardViewModel(dailyStatsService);
 
         await dashboardVm.LoadAsync();
@@ -11252,7 +11253,7 @@ public sealed class DataFlowTests
         var initializer = new SqliteDatabaseInitializer(paths.DatabasePath);
         await initializer.InitializeAsync();
 
-        var dailyStatsService = new DailyStatsService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
         var dashboardVm = new DashboardViewModel(dailyStatsService);
 
         await dashboardVm.LoadAsync();
@@ -11290,7 +11291,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(9), today.AddHours(10),
             "Code", 3600, 3600, 0, 0, "ProcessChanged");
 
-        var dailyStatsService = new DailyStatsService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
         var dashboardVm = new DashboardViewModel(dailyStatsService);
         await dashboardVm.LoadAsync();
 
@@ -11619,7 +11620,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(9), today.AddHours(10),
             "Code", 3600, 3600, 0, 0, "ProcessChanged");
 
-        var service = new WeeklyTrendService(paths);
+        var service = ActivityTestServices.CreateWeeklyTrend(paths);
         var result = await service.GetWeeklyTrendAsync();
 
         Assert.Equal(7, result.Days.Count);
@@ -11643,7 +11644,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(9), today.AddHours(10),
             "Code", 3600, 3600, 0, 0, "ProcessChanged");
 
-        var service = new WeeklyTrendService(paths);
+        var service = ActivityTestServices.CreateWeeklyTrend(paths);
         var result = await service.GetWeeklyTrendAsync();
 
         // Today should have data, older days should be zero
@@ -11669,7 +11670,7 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddDays(-1).AddHours(9), today.AddDays(-1).AddHours(9).AddMinutes(30),
             "Terminal", 1800, 1800, 0, 0, "ProcessChanged");
 
-        var service = new WeeklyTrendService(paths);
+        var service = ActivityTestServices.CreateWeeklyTrend(paths);
         var result = await service.GetWeeklyTrendAsync();
 
         Assert.Contains("今日已活跃", result.ActiveComparisonText, StringComparison.Ordinal);
@@ -11697,7 +11698,7 @@ public sealed class DataFlowTests
                 "Code", 7200, 7200, 0, 0, "ProcessChanged");
         }
 
-        var service = new WeeklyTrendService(paths);
+        var service = ActivityTestServices.CreateWeeklyTrend(paths);
         var result = await service.GetWeeklyTrendAsync();
 
         Assert.Contains("今日已活跃", result.ActiveComparisonText, StringComparison.Ordinal);
@@ -11727,7 +11728,7 @@ public sealed class DataFlowTests
                 "Code", 3600, 3600, 0, 0, "ProcessChanged");
         }
 
-        var service = new WeeklyTrendService(paths);
+        var service = ActivityTestServices.CreateWeeklyTrend(paths);
         var result = await service.GetWeeklyTrendAsync();
 
         Assert.Contains("昨日活跃", result.YesterdayActiveComparisonText, StringComparison.Ordinal);
@@ -11760,7 +11761,7 @@ public sealed class DataFlowTests
                 "Code", 3600, 3600, 0, 0, "ProcessChanged");
         }
 
-        var service = new WeeklyTrendService(paths);
+        var service = ActivityTestServices.CreateWeeklyTrend(paths);
         var result = await service.GetWeeklyTrendAsync();
 
         Assert.Contains("本周至今活跃", result.WeekActiveComparisonText, StringComparison.Ordinal);
@@ -11781,8 +11782,8 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddHours(9), today.AddHours(10),
             "Code", 3600, 3600, 0, 0, "ProcessChanged");
 
-        var dailyStatsService = new DailyStatsService(paths);
-        var weeklyTrendService = new WeeklyTrendService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
+        var weeklyTrendService = ActivityTestServices.CreateWeeklyTrend(paths);
         var dashboardVm = new DashboardViewModel(dailyStatsService, weeklyTrendService);
 
         await dashboardVm.LoadAsync();
@@ -11829,8 +11830,8 @@ public sealed class DataFlowTests
         await InsertSessionAsync(paths.DatabasePath, today.AddDays(-1).AddHours(9), today.AddDays(-1).AddHours(9).AddMinutes(30),
             "Terminal", 1800, 1800, 0, 0, "ProcessChanged");
 
-        var dailyStatsService = new DailyStatsService(paths);
-        var weeklyTrendService = new WeeklyTrendService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
+        var weeklyTrendService = ActivityTestServices.CreateWeeklyTrend(paths);
         var dashboardVm = new DashboardViewModel(dailyStatsService, weeklyTrendService);
 
         await dashboardVm.LoadAsync();
@@ -12249,8 +12250,8 @@ public sealed class DataFlowTests
         var utcToday = today.ToUniversalTime();
         await InsertSampleAsync(paths.DatabasePath, utcToday.AddHours(9), "Code", "Win", "Active");
 
-        var dailyStatsService = new DailyStatsService(paths);
-        var heatmapService = new HourActivityHeatmapService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
+        var heatmapService = ActivityTestServices.CreateHeatmap(paths);
         var dashboardVm = new DashboardViewModel(
             dailyStatsService, weeklyTrendService: null, heatmapService: heatmapService);
 
@@ -12262,7 +12263,7 @@ public sealed class DataFlowTests
 
         // Second load: corrupt the database path so heatmap query fails
         var brokenPaths = new WindowsAgentPaths(Path.Combine(workspace.Root, "nonexistent.db"));
-        var brokenHeatmapService = new HourActivityHeatmapService(brokenPaths);
+        var brokenHeatmapService = ActivityTestServices.CreateHeatmap(brokenPaths);
         var dashboardVm2 = new DashboardViewModel(
             dailyStatsService, weeklyTrendService: null, heatmapService: brokenHeatmapService);
 
@@ -12273,7 +12274,7 @@ public sealed class DataFlowTests
         // (no prior successful load for this VM instance, so empty is expected)
 
         // Now test same-VM preservation: create VM that loads successfully once
-        var heatmapService2 = new HourActivityHeatmapService(paths);
+        var heatmapService2 = ActivityTestServices.CreateHeatmap(paths);
         var dashboardVm3 = new DashboardViewModel(
             dailyStatsService, weeklyTrendService: null, heatmapService: heatmapService2);
 
@@ -12316,8 +12317,8 @@ public sealed class DataFlowTests
         await InsertSampleAsync(paths.DatabasePath, utcToday.AddHours(10), "Code", "Win", "Active");
         await InsertSampleAsync(paths.DatabasePath, today.AddDays(-1).ToUniversalTime().AddHours(9), "Code", "Win", "Active");
 
-        var dailyStatsService = new DailyStatsService(paths);
-        var heatmapService = new HourActivityHeatmapService(paths);
+        var dailyStatsService = ActivityTestServices.CreateDailyStats(paths);
+        var heatmapService = ActivityTestServices.CreateHeatmap(paths);
         var dashboardVm = new DashboardViewModel(
             dailyStatsService, weeklyTrendService: null, heatmapService: heatmapService);
 

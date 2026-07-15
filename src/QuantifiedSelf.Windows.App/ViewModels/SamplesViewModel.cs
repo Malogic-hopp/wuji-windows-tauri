@@ -1,7 +1,7 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
-using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 
@@ -19,7 +19,7 @@ public sealed class SamplesViewModel : ObservableObject
     private bool _hasLoadError;
     private bool _isLoading;
 
-    public SamplesViewModel(SamplesDataService samplesDataService)
+    public SamplesViewModel(ISamplesDataService samplesDataService)
         : this(samplesDataService.GetRecentSamplesAsync)
     {
     }

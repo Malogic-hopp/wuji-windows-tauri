@@ -1,4 +1,4 @@
-using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.App.ViewModels;
 using QuantifiedSelf.Windows.Core.Models;
 

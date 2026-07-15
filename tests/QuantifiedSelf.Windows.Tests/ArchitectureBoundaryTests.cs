@@ -1,8 +1,13 @@
 using System.IO;
 using System.Reflection;
 using System.Xml.Linq;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Data;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
+using QuantifiedSelf.Windows.ApplicationLayer.Contracts.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Infrastructure.Database;
 
 namespace QuantifiedSelf.Windows.Tests;
 
@@ -69,10 +74,26 @@ public sealed class ArchitectureBoundaryTests
             GetProjectReferences(projectPath));
     }
 
+    [Fact]
+    public void Infrastructure_ProjectReferencesApplicationAndCore()
+    {
+        var projectPath = GetProjectPath(
+            "QuantifiedSelf.Windows.Infrastructure",
+            "QuantifiedSelf.Windows.Infrastructure.csproj");
+
+        Assert.Equal(
+            [
+                "QuantifiedSelf.Windows.Application",
+                "QuantifiedSelf.Windows.Core"
+            ],
+            GetProjectReferences(projectPath));
+    }
+
     [Theory]
     [InlineData("QuantifiedSelf.Windows.Application", "QuantifiedSelf.Windows.Application.csproj")]
     [InlineData("QuantifiedSelf.Windows.Client", "QuantifiedSelf.Windows.Client.csproj")]
-    public void ApplicationAndClient_SourceAndProjectFilesContainNoUiFrameworkReferences(
+    [InlineData("QuantifiedSelf.Windows.Infrastructure", "QuantifiedSelf.Windows.Infrastructure.csproj")]
+    public void HeadlessProjects_SourceAndProjectFilesContainNoUiFrameworkReferences(
         string projectDirectory,
         string projectFileName)
     {
@@ -120,6 +141,98 @@ public sealed class ArchitectureBoundaryTests
         Assert.Same(applicationAssembly, typeof(FocusMetricsCalculator).Assembly);
         Assert.Same(applicationAssembly, typeof(HourActivityHeatmapCalculator).Assembly);
         Assert.Same(applicationAssembly, typeof(InsightSuggestionEngine).Assembly);
+    }
+
+    [Fact]
+    public void ActivityPortsContractsAndUseCases_AreOwnedByApplicationAssembly()
+    {
+        var applicationAssembly = typeof(AgentStatusSnapshot).Assembly;
+
+        Assert.Same(applicationAssembly, typeof(IOverviewQueryPort).Assembly);
+        Assert.Same(applicationAssembly, typeof(IDailyStatsQueryPort).Assembly);
+        Assert.Same(applicationAssembly, typeof(IOverviewDataService).Assembly);
+        Assert.Same(applicationAssembly, typeof(DailyStatsService).Assembly);
+        Assert.Same(applicationAssembly, typeof(FocusInterruptionInsightService).Assembly);
+        Assert.Same(applicationAssembly, typeof(HourActivityHeatmapResult).Assembly);
+    }
+
+    [Fact]
+    public void SqliteActivityAdapter_IsOwnedByInfrastructureAndImplementsAllQueryPorts()
+    {
+        var adapterType = typeof(SqliteActivityQueryAdapter);
+
+        Assert.Equal("QuantifiedSelf.Windows.Infrastructure", adapterType.Assembly.GetName().Name);
+        Assert.True(typeof(IOverviewQueryPort).IsAssignableFrom(adapterType));
+        Assert.True(typeof(IDiagnosticsQueryPort).IsAssignableFrom(adapterType));
+        Assert.True(typeof(ISampleQueryPort).IsAssignableFrom(adapterType));
+        Assert.True(typeof(ISessionQueryPort).IsAssignableFrom(adapterType));
+        Assert.True(typeof(IAppUsageQueryPort).IsAssignableFrom(adapterType));
+        Assert.True(typeof(IDailyStatsQueryPort).IsAssignableFrom(adapterType));
+    }
+
+    [Fact]
+    public void HeatmapUseCase_ReturnsFrameworkIndependentApplicationContract()
+    {
+        var method = typeof(IHourActivityHeatmapService).GetMethod(nameof(IHourActivityHeatmapService.GetHeatmapAsync));
+
+        Assert.NotNull(method);
+        Assert.Equal(typeof(Task<HourActivityHeatmapResult>), method!.ReturnType);
+        Assert.Equal(typeof(HourActivityHeatmapResult).Assembly, method.ReturnType.GenericTypeArguments[0].Assembly);
+    }
+
+    [Fact]
+    public void AppServicesDirectory_ContainsNoMigratedActivityServices()
+    {
+        string[] migratedServices =
+        [
+            "OverviewDataService.cs",
+            "DiagnosticsDataService.cs",
+            "SamplesDataService.cs",
+            "SessionsDataService.cs",
+            "AppsDataService.cs",
+            "DailyStatsService.cs",
+            "WeeklyTrendService.cs",
+            "FocusInterruptionInsightService.cs",
+            "HourActivityHeatmapService.cs"
+        ];
+
+        var servicesDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "Services");
+
+        foreach (var serviceFile in migratedServices)
+        {
+            Assert.False(
+                File.Exists(Path.Combine(servicesDirectory, serviceFile)),
+                $"Migrated activity service must not remain in App: {serviceFile}");
+        }
+    }
+
+    [Fact]
+    public void WpfActivityViewModels_AcceptApplicationUseCaseInterfaces()
+    {
+        AssertConstructorAccepts<AppsViewModel, IAppsDataService>();
+        AssertConstructorAccepts<SamplesViewModel, ISamplesDataService>();
+        AssertConstructorAccepts<SessionsViewModel, ISessionsDataService>();
+        AssertConstructorAccepts<InsightsViewModel, IFocusInterruptionInsightService>();
+        AssertConstructorAccepts<DashboardViewModel, IDailyStatsService>();
+        AssertConstructorAccepts<DashboardViewModel, IWeeklyTrendService>();
+        AssertConstructorAccepts<DashboardViewModel, IHourActivityHeatmapService>();
+        AssertConstructorAccepts<MainWindowViewModel, IOverviewDataService>();
+        AssertConstructorAccepts<MainWindowViewModel, IDiagnosticsDataService>();
+        AssertConstructorAccepts<SettingsViewModel, IDiagnosticsDataService>();
+    }
+
+    private static void AssertConstructorAccepts<TConsumer, TDependency>()
+    {
+        var parameterTypes = typeof(TConsumer)
+            .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            .SelectMany(constructor => constructor.GetParameters())
+            .Select(parameter => parameter.ParameterType);
+
+        Assert.Contains(typeof(TDependency), parameterTypes);
     }
 
     private static string GetProjectPath(string projectDirectory, string projectFileName)

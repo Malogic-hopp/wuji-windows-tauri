@@ -1,11 +1,11 @@
 ﻿using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using LiveChartsCore;
 using LiveChartsCore.SkiaSharpView;
 using LiveChartsCore.SkiaSharpView.Painting;
-using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
 using SkiaSharp;
@@ -19,8 +19,8 @@ public sealed class DashboardViewModel : ObservableObject
     private const double TrendBarMaxHeight = 72.0;
 
     private readonly Func<int, int, CancellationToken, Task<DailyActivitySummary>> _loadSummaryAsync;
-    private readonly WeeklyTrendService? _weeklyTrendService;
-    private readonly HourActivityHeatmapService? _heatmapService;
+    private readonly IWeeklyTrendService? _weeklyTrendService;
+    private readonly IHourActivityHeatmapService? _heatmapService;
 
     // Cache the last successful summary and trend so old data is preserved on refresh failure.
     private DailyActivitySummary? _lastSummary;
@@ -58,17 +58,17 @@ public sealed class DashboardViewModel : ObservableObject
     private bool _hasLoadError;
     private bool _isLoading;
 
-    public DashboardViewModel(DailyStatsService dailyStatsService,
-        WeeklyTrendService? weeklyTrendService = null,
-        HourActivityHeatmapService? heatmapService = null)
+    public DashboardViewModel(IDailyStatsService dailyStatsService,
+        IWeeklyTrendService? weeklyTrendService = null,
+        IHourActivityHeatmapService? heatmapService = null)
         : this((topApps, topWindows, ct) => dailyStatsService.GetTodaySummaryAsync(topApps, topWindows, ct),
                weeklyTrendService, heatmapService)
     {
     }
 
     public DashboardViewModel(Func<int, int, CancellationToken, Task<DailyActivitySummary>> loadSummaryAsync,
-        WeeklyTrendService? weeklyTrendService = null,
-        HourActivityHeatmapService? heatmapService = null)
+        IWeeklyTrendService? weeklyTrendService = null,
+        IHourActivityHeatmapService? heatmapService = null)
     {
         ArgumentNullException.ThrowIfNull(loadSummaryAsync);
         _loadSummaryAsync = loadSummaryAsync;
@@ -400,7 +400,7 @@ public sealed class DashboardViewModel : ObservableObject
         try
         {
             var heatmap = await _heatmapService.GetHeatmapAsync(cancellationToken);
-            Heatmap = heatmap;
+            Heatmap = new HourActivityHeatmapViewModel(heatmap.Points, heatmap.Today);
         }
         catch
         {

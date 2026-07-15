@@ -1,24 +1,28 @@
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Data;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Models;
-using QuantifiedSelf.Windows.Core.Paths;
-using QuantifiedSelf.Windows.Infrastructure.Database;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Activity;
 
 /// <summary>
 /// Read-only service that aggregates today's activity from app_sessions and foreground_samples
 /// into a DailyActivitySummary. All queries are read-only — this service never writes to SQLite.
 /// </summary>
-public sealed class DailyStatsService
+public sealed class DailyStatsService : IDailyStatsService
 {
-    private readonly DailyStatsQueryService _statsQueryService;
-    private readonly AppUsageQueryService _appUsageQueryService;
+    private readonly IDailyStatsQueryPort _statsQueryPort;
+    private readonly IAppUsageQueryPort _appUsageQueryPort;
+    private readonly TimeProvider _timeProvider;
 
-    public DailyStatsService(WindowsAgentPaths paths)
+    public DailyStatsService(
+        IDailyStatsQueryPort statsQueryPort,
+        IAppUsageQueryPort appUsageQueryPort,
+        TimeProvider? timeProvider = null)
     {
-        _statsQueryService = new DailyStatsQueryService(paths.DatabasePath);
-        _appUsageQueryService = new AppUsageQueryService(paths.DatabasePath);
+        _statsQueryPort = statsQueryPort ?? throw new ArgumentNullException(nameof(statsQueryPort));
+        _appUsageQueryPort = appUsageQueryPort ?? throw new ArgumentNullException(nameof(appUsageQueryPort));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -32,7 +36,7 @@ public sealed class DailyStatsService
         CancellationToken cancellationToken = default)
     {
         return GetSummaryForDateAsync(
-            DateOnly.FromDateTime(DateTime.Now),
+            DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime),
             topAppsLimit,
             topWindowsLimit,
             cancellationToken);
@@ -51,17 +55,17 @@ public sealed class DailyStatsService
     {
         try
         {
-            var nowUtc = DateTime.UtcNow;
-            var (rangeStartUtc, rangeEndUtc) = DailyStatsQueryService.GetLocalDayRangeUtc(localDate);
+            var nowUtc = _timeProvider.GetUtcNow().UtcDateTime;
+            var (rangeStartUtc, rangeEndUtc) = GetLocalDayRangeUtc(localDate);
 
             // For past dates, treat end-of-day as "now" so open-ended sessions
             // are clipped to the day boundary rather than stretched to present.
-            var effectiveNow = localDate < DateOnly.FromDateTime(DateTime.Now)
+            var effectiveNow = localDate < DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime)
                 ? rangeEndUtc
                 : nowUtc;
 
             // Fetch overlapping sessions
-            var sessions = await _statsQueryService.GetSessionsOverlappingLocalDayAsync(localDate, cancellationToken);
+            var sessions = await _statsQueryPort.GetSessionsOverlappingLocalDayAsync(localDate, cancellationToken);
 
             // Compute overlap-scaled aggregate durations
             long totalDuration = 0;
@@ -72,7 +76,7 @@ public sealed class DailyStatsService
 
             foreach (var session in sessions)
             {
-                var (total, active, idle) = DailyStatsQueryService.ScaleSessionDurations(
+                var (total, active, idle) = ScaleSessionDurations(
                     session, rangeStartUtc, rangeEndUtc, effectiveNow);
 
                 totalDuration += total;
@@ -105,8 +109,8 @@ public sealed class DailyStatsService
             }
 
             // Fetch sample count and sample time range
-            var sampleCount = await _statsQueryService.GetSampleCountForLocalDayAsync(localDate, cancellationToken);
-            var (sampleFirstUtc, sampleLastUtc) = await _statsQueryService.GetSampleTimeRangeForLocalDayAsync(localDate, cancellationToken);
+            var sampleCount = await _statsQueryPort.GetSampleCountForLocalDayAsync(localDate, cancellationToken);
+            var (sampleFirstUtc, sampleLastUtc) = await _statsQueryPort.GetSampleTimeRangeForLocalDayAsync(localDate, cancellationToken);
 
             // Merge sample time range into first/last seen
             if (sampleFirstUtc.HasValue && (!firstSeenUtc.HasValue || sampleFirstUtc.Value < firstSeenUtc.Value))
@@ -120,9 +124,9 @@ public sealed class DailyStatsService
             }
 
             // Fetch top apps, top windows, and samples (run in parallel for efficiency)
-            var topAppsTask = _appUsageQueryService.GetAppUsageForLocalDayAsync(localDate, topAppsLimit, cancellationToken);
-            var topWindowsTask = _statsQueryService.GetTopWindowsForLocalDayAsync(localDate, topWindowsLimit, cancellationToken);
-            var samplesTask = _statsQueryService.GetSamplesForLocalDayAsync(localDate, cancellationToken);
+            var topAppsTask = _appUsageQueryPort.GetAppUsageForLocalDayAsync(localDate, topAppsLimit, cancellationToken);
+            var topWindowsTask = _statsQueryPort.GetTopWindowsForLocalDayAsync(localDate, topWindowsLimit, cancellationToken);
+            var samplesTask = _statsQueryPort.GetSamplesForLocalDayAsync(localDate, cancellationToken);
 
             await Task.WhenAll(topAppsTask, topWindowsTask, samplesTask);
 
@@ -175,6 +179,32 @@ public sealed class DailyStatsService
                 Date = localDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Local)
             };
         }
+    }
+
+    internal static (DateTime StartUtc, DateTime EndUtc) GetLocalDayRangeUtc(DateOnly localDate)
+    {
+        var localStart = localDate.ToDateTime(TimeOnly.MinValue, DateTimeKind.Local);
+        return (localStart.ToUniversalTime(), localStart.AddDays(1).ToUniversalTime());
+    }
+
+    internal static (long Total, long Active, long Idle) ScaleSessionDurations(
+        AppSession session,
+        DateTime rangeStartUtc,
+        DateTime rangeEndUtc,
+        DateTime nowUtc)
+    {
+        var sessionStart = session.StartedAtUtc.ToUniversalTime();
+        var sessionEnd = (session.EndedAtUtc ?? nowUtc).ToUniversalTime();
+        var overlapStart = sessionStart > rangeStartUtc ? sessionStart : rangeStartUtc;
+        var overlapEnd = sessionEnd < rangeEndUtc ? sessionEnd : rangeEndUtc;
+        var overlapSeconds = Math.Max(0, (overlapEnd - overlapStart).TotalSeconds);
+        var sessionSpanSeconds = Math.Max(1.0, (sessionEnd - sessionStart).TotalSeconds);
+        var scale = overlapSeconds / sessionSpanSeconds;
+
+        return (
+            Total: (long)Math.Round(session.TotalDurationSeconds * scale, MidpointRounding.AwayFromZero),
+            Active: (long)Math.Round(session.ActiveDurationSeconds * scale, MidpointRounding.AwayFromZero),
+            Idle: (long)Math.Round(session.IdleDurationSeconds * scale, MidpointRounding.AwayFromZero));
     }
 
     /// <summary>

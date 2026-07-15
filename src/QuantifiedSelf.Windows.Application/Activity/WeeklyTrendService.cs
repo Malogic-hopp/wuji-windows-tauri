@@ -1,20 +1,23 @@
 using QuantifiedSelf.Windows.Core.Models;
-using QuantifiedSelf.Windows.Core.Paths;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Activity;
 
 /// <summary>
 /// Read-only service that computes 7-day trend data from DailyStatsService.
 /// Fetches each day in parallel, fills missing days with zero, and compares today
 /// against the 7-day average. All operations are read-only — no SQLite writes.
 /// </summary>
-public sealed class WeeklyTrendService
+public sealed class WeeklyTrendService : IWeeklyTrendService
 {
-    private readonly DailyStatsService _dailyStatsService;
+    private readonly IDailyStatsService _dailyStatsService;
+    private readonly TimeProvider _timeProvider;
 
-    public WeeklyTrendService(WindowsAgentPaths paths)
+    public WeeklyTrendService(
+        IDailyStatsService dailyStatsService,
+        TimeProvider? timeProvider = null)
     {
-        _dailyStatsService = new DailyStatsService(paths);
+        _dailyStatsService = dailyStatsService ?? throw new ArgumentNullException(nameof(dailyStatsService));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
@@ -24,7 +27,7 @@ public sealed class WeeklyTrendService
     /// </summary>
     public async Task<WeeklyTrendResult> GetWeeklyTrendAsync(CancellationToken cancellationToken = default)
     {
-        var today = DateOnly.FromDateTime(DateTime.Now);
+        var today = DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime);
         var historyDays = Enumerable.Range(0, 14)
             .Select(i => today.AddDays(i - 13))
             .ToList(); // oldest first: today-13 ... today

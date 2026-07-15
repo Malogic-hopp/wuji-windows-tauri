@@ -1,37 +1,41 @@
-using QuantifiedSelf.Windows.Core.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Data;
 using QuantifiedSelf.Windows.Core.Display;
-using QuantifiedSelf.Windows.Core.Paths;
-using QuantifiedSelf.Windows.Infrastructure.Database;
+using QuantifiedSelf.Windows.Core.Models;
 
-namespace QuantifiedSelf.Windows.App.Services;
+namespace QuantifiedSelf.Windows.ApplicationLayer.Activity;
 
-public sealed class OverviewDataService
+public sealed class OverviewDataService : IOverviewDataService
 {
-    private readonly OverviewQueryService _queryService;
-    private readonly AppUsageQueryService _appUsageQueryService;
+    private readonly IOverviewQueryPort _overviewQueryPort;
+    private readonly IAppUsageQueryPort _appUsageQueryPort;
+    private readonly TimeProvider _timeProvider;
 
-    public OverviewDataService(WindowsAgentPaths paths)
+    public OverviewDataService(
+        IOverviewQueryPort overviewQueryPort,
+        IAppUsageQueryPort appUsageQueryPort,
+        TimeProvider? timeProvider = null)
     {
-        _queryService = new OverviewQueryService(paths.DatabasePath);
-        _appUsageQueryService = new AppUsageQueryService(paths.DatabasePath);
+        _overviewQueryPort = overviewQueryPort ?? throw new ArgumentNullException(nameof(overviewQueryPort));
+        _appUsageQueryPort = appUsageQueryPort ?? throw new ArgumentNullException(nameof(appUsageQueryPort));
+        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     public Task<DashboardSummary> GetDashboardSummaryAsync(CancellationToken cancellationToken = default)
     {
-        return _queryService.GetTodaySummaryAsync(cancellationToken);
+        return _overviewQueryPort.GetDashboardSummaryAsync(cancellationToken);
     }
 
     public Task<IReadOnlyList<AppUsageSummary>> GetTopAppsTodayAsync(int limit = 5, CancellationToken cancellationToken = default)
     {
-        return _appUsageQueryService.GetAppUsageForLocalDayAsync(
-            DateOnly.FromDateTime(DateTime.Now),
+        return _appUsageQueryPort.GetAppUsageForLocalDayAsync(
+            DateOnly.FromDateTime(_timeProvider.GetLocalNow().DateTime),
             limit,
             cancellationToken);
     }
 
     public Task<IReadOnlyList<AppSession>> GetRecentSessionsAsync(int limit = 5, CancellationToken cancellationToken = default)
     {
-        return MapDisplayNamesAsync(_queryService.GetRecentSessionsAsync(limit, cancellationToken));
+        return MapDisplayNamesAsync(_overviewQueryPort.GetRecentSessionsAsync(limit, cancellationToken));
     }
 
     private static async Task<IReadOnlyList<T>> MapDisplayNamesAsync<T>(Task<IReadOnlyList<T>> sourceTask)

@@ -1,6 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <ProjectReference Include="..\QuantifiedSelf.Windows.Application\QuantifiedSelf.Windows.Application.csproj" />
     <ProjectReference Include="..\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
   </ItemGroup>
 

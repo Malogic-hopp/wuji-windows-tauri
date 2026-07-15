@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows.Input;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Control;
@@ -120,7 +121,7 @@ public sealed partial class SettingsViewModel : ObservableObject
         SettingsService settingsService,
         AgentStatusService statusService,
         AgentControlService controlService,
-        DiagnosticsDataService diagnosticsDataService,
+        IDiagnosticsDataService diagnosticsDataService,
         WindowsAgentPaths paths)
         : this(
             settingsService.ReadAppSettingsAsync,
