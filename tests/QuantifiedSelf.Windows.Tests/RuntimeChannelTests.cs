@@ -1,5 +1,6 @@
 using System.IO;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Core.Ipc;
 using QuantifiedSelf.Windows.Core.Paths;
@@ -87,18 +88,17 @@ public sealed class RuntimeChannelTests
     }
 
     [Fact]
-    public void AgentProcessService_DevStartInfoPassesChannelToAgent()
+    public void WindowsAgentProcessController_DevStartInfoPassesChannelToAgent()
     {
         using var workspace = new TempWorkspace("wuji-runtime-channel-tests");
         var agentExe = Path.Combine(workspace.Path, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(agentExe, "fake");
 
         var paths = new WindowsAgentPaths(workspace.Path, "dev");
-        var service = new AgentProcessService(
+        var service = new WindowsAgentProcessController(
             paths,
             new RuntimeStateStore(),
-            new AgentControlFileStore(),
-            NullLogger<AgentProcessService>.Instance,
+            NullLogger<WindowsAgentProcessController>.Instance,
             channelName: "dev");
 
         var startInfo = service.ResolveStartInfo(workspace.Path);

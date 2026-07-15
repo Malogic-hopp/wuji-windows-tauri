@@ -1,13 +1,20 @@
 using System.IO;
 using System.Reflection;
 using System.Xml.Linq;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
+using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Data;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
+using QuantifiedSelf.Windows.ApplicationLayer.Contracts.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Contracts.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Infrastructure.Database;
+using QuantifiedSelf.Windows.Infrastructure.Ipc;
+using QuantifiedSelf.Windows.Infrastructure.RuntimeState;
 
 namespace QuantifiedSelf.Windows.Tests;
 
@@ -72,6 +79,16 @@ public sealed class ArchitectureBoundaryTests
                 "QuantifiedSelf.Windows.Infrastructure"
             ],
             GetProjectReferences(projectPath));
+    }
+
+    [Fact]
+    public void App_ProjectReferencesClientCompositionLayer()
+    {
+        var projectPath = GetProjectPath(
+            "QuantifiedSelf.Windows.App",
+            "QuantifiedSelf.Windows.App.csproj");
+
+        Assert.Contains("QuantifiedSelf.Windows.Client", GetProjectReferences(projectPath));
     }
 
     [Fact]
@@ -157,6 +174,47 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void AgentPortsContractsAndServices_AreOwnedByApplicationAssembly()
+    {
+        var applicationAssembly = typeof(AgentStatusSnapshot).Assembly;
+
+        Assert.Same(applicationAssembly, typeof(IAgentTransport).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentRuntimeStateReader).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentHealthStateReader).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentControlFallback).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentOptionsReader).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentProcessController).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentStatusService).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentControlService).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentProcessService).Assembly);
+        Assert.Same(applicationAssembly, typeof(IAgentTransportHealthService).Assembly);
+        Assert.Same(applicationAssembly, typeof(AgentStatusService).Assembly);
+        Assert.Same(applicationAssembly, typeof(AgentControlService).Assembly);
+        Assert.Same(applicationAssembly, typeof(AgentProcessService).Assembly);
+        Assert.Same(applicationAssembly, typeof(AgentTransportHealthService).Assembly);
+        Assert.Same(applicationAssembly, typeof(AgentTransportHealthSnapshot).Assembly);
+    }
+
+    [Fact]
+    public void WindowsAgentProcessController_IsOwnedByClientAndImplementsApplicationPort()
+    {
+        var controllerType = typeof(WindowsAgentProcessController);
+
+        Assert.Equal("QuantifiedSelf.Windows.Client", controllerType.Assembly.GetName().Name);
+        Assert.True(typeof(IAgentProcessController).IsAssignableFrom(controllerType));
+    }
+
+    [Fact]
+    public void InfrastructureAgentAdapters_ImplementApplicationPorts()
+    {
+        Assert.True(typeof(IAgentTransport).IsAssignableFrom(typeof(NamedPipeAgentControlClient)));
+        Assert.True(typeof(IAgentRuntimeStateReader).IsAssignableFrom(typeof(FileAgentStateAdapter)));
+        Assert.True(typeof(IAgentHealthStateReader).IsAssignableFrom(typeof(FileAgentStateAdapter)));
+        Assert.True(typeof(IAgentControlFallback).IsAssignableFrom(typeof(FileAgentStateAdapter)));
+        Assert.True(typeof(IAgentOptionsReader).IsAssignableFrom(typeof(FileAgentStateAdapter)));
+    }
+
+    [Fact]
     public void SqliteActivityAdapter_IsOwnedByInfrastructureAndImplementsAllQueryPorts()
     {
         var adapterType = typeof(SqliteActivityQueryAdapter);
@@ -211,6 +269,52 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void AppServicesDirectory_ContainsNoMigratedAgentServices()
+    {
+        string[] migratedServices =
+        [
+            "AgentControlService.cs",
+            "AgentIpcStatusService.cs",
+            "AgentProcessService.cs",
+            "AgentStatusService.cs"
+        ];
+
+        var servicesDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "Services");
+
+        foreach (var serviceFile in migratedServices)
+        {
+            Assert.False(
+                File.Exists(Path.Combine(servicesDirectory, serviceFile)),
+                $"Migrated Agent service must not remain in App: {serviceFile}");
+        }
+    }
+
+    [Fact]
+    public void AppSource_ContainsNoLegacyAgentIpcClientReference()
+    {
+        var appDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App");
+
+        var sourceFiles = Directory
+            .EnumerateFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path));
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            Assert.DoesNotContain(
+                "IAgentIpcClient",
+                File.ReadAllText(sourceFile),
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public void WpfActivityViewModels_AcceptApplicationUseCaseInterfaces()
     {
         AssertConstructorAccepts<AppsViewModel, IAppsDataService>();
@@ -223,6 +327,19 @@ public sealed class ArchitectureBoundaryTests
         AssertConstructorAccepts<MainWindowViewModel, IOverviewDataService>();
         AssertConstructorAccepts<MainWindowViewModel, IDiagnosticsDataService>();
         AssertConstructorAccepts<SettingsViewModel, IDiagnosticsDataService>();
+    }
+
+    [Fact]
+    public void WpfConsumers_AcceptApplicationAgentInterfaces()
+    {
+        AssertConstructorAccepts<MainWindowViewModel, IAgentProcessService>();
+        AssertConstructorAccepts<MainWindowViewModel, IAgentControlService>();
+        AssertConstructorAccepts<MainWindowViewModel, IAgentStatusService>();
+        AssertConstructorAccepts<MainWindowViewModel, IAgentTransportHealthService>();
+        AssertConstructorAccepts<SettingsViewModel, IAgentStatusService>();
+        AssertConstructorAccepts<SettingsViewModel, IAgentControlService>();
+        AssertConstructorAccepts<RefreshService, IAgentStatusService>();
+        AssertConstructorAccepts<RefreshService, IAgentProcessService>();
     }
 
     private static void AssertConstructorAccepts<TConsumer, TDependency>()

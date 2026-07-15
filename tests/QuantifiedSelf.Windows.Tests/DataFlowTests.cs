@@ -7,11 +7,14 @@ using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using QuantifiedSelf.Windows.ApplicationLayer.Abstractions.Agent;
+using QuantifiedSelf.Windows.ApplicationLayer.Agent;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Analytics;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.App.ViewModels;
+using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Agent.Events;
 using QuantifiedSelf.Windows.Agent.Services;
 using QuantifiedSelf.Windows.Agent.State;
@@ -1935,18 +1938,18 @@ public sealed class DataFlowTests
                 LastSelectedPage = "Dashboard"
             });
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths,
             runtimeStateStore,
             healthStateStore,
             controlFileStore,
             agentOptionsStore);
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths,
             runtimeStateStore,
             controlFileStore,
             NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, controlFileStore, statusService);
+        var controlService = AgentTestServices.CreateControl(paths, controlFileStore, statusService);
         var overviewDataService = ActivityTestServices.CreateOverview(paths);
         var diagnosticsDataService = ActivityTestServices.CreateDiagnostics(paths);
         var samplesViewModel = new SamplesViewModel((_, _) => Task.FromResult<IReadOnlyList<ForegroundSample>>([]));
@@ -5630,7 +5633,7 @@ public sealed class DataFlowTests
 
     // ── IPC Client & Fallback Tests (Phase 8.3) ──
 
-    private sealed class FakeIpcClient : IAgentIpcClient
+    private sealed class FakeIpcClient : IAgentTransport
     {
         private readonly AgentIpcResponse? _response;
         private readonly Exception? _exception;
@@ -5648,9 +5651,9 @@ public sealed class DataFlowTests
 
     [Trait("Category", "Integration")]
     [Fact]
-    public void AgentIpcStatusService_RecordsLastSuccessAndFallback()
+    public void AgentTransportHealthService_RecordsLastSuccessAndFallback()
     {
-        var service = new AgentIpcStatusService();
+        var service = new AgentTransportHealthService();
         var pipeName = new AgentPipeName("S-1-5-21-test");
 
         service.Initialize(pipeName);
@@ -5669,9 +5672,9 @@ public sealed class DataFlowTests
 
     [Trait("Category", "Integration")]
     [Fact]
-    public void AgentIpcStatusService_DoesNotExposeFullPipeNameInDisplayText()
+    public void AgentTransportHealthService_DoesNotExposeFullPipeNameInDisplayText()
     {
-        var service = new AgentIpcStatusService();
+        var service = new AgentTransportHealthService();
         var pipeName = new AgentPipeName("S-1-5-21-3623811015-3361044348-30300820-1013");
 
         service.Initialize(pipeName);
@@ -5706,9 +5709,9 @@ public sealed class DataFlowTests
             Status = status
         };
         var fakeClient = new FakeIpcClient(ipcResponse);
-        var ipcStatusService = new AgentIpcStatusService();
+        var ipcStatusService = new AgentTransportHealthService();
 
-        var service = new AgentStatusService(
+        var service = AgentTestServices.CreateStatus(
             paths,
             new RuntimeStateStore(),
             new AgentHealthStateStore(),
@@ -5745,9 +5748,9 @@ public sealed class DataFlowTests
         });
 
         var fakeClient = new FakeIpcClient(new TimeoutException("timeout"));
-        var ipcStatusService = new AgentIpcStatusService();
+        var ipcStatusService = new AgentTransportHealthService();
 
-        var service = new AgentStatusService(
+        var service = AgentTestServices.CreateStatus(
             paths,
             runtimeStore,
             new AgentHealthStateStore(),
@@ -5791,9 +5794,9 @@ public sealed class DataFlowTests
             Status = null
         };
         var fakeClient = new FakeIpcClient(ipcResponse);
-        var ipcStatusService = new AgentIpcStatusService();
+        var ipcStatusService = new AgentTransportHealthService();
 
-        var service = new AgentStatusService(
+        var service = AgentTestServices.CreateStatus(
             paths,
             runtimeStore,
             new AgentHealthStateStore(),
@@ -5848,7 +5851,7 @@ public sealed class DataFlowTests
         try { await serverTask; } catch (OperationCanceledException) { }
     }
 
-    private sealed class TestNamedPipeAgentControlClient : IAgentIpcClient
+    private sealed class TestNamedPipeAgentControlClient : IAgentTransport
     {
         private readonly string _pipeName;
         private readonly AgentIpcClientOptions _options;
@@ -5902,14 +5905,14 @@ public sealed class DataFlowTests
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths,
             new RuntimeStateStore(),
             new AgentHealthStateStore(),
             new AgentControlFileStore(),
             new WindowsAgentOptionsStore());
 
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
 
         // Pause should still write via file, not throw
         var result = await controlService.RequestPauseAsync();
@@ -6059,7 +6062,7 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_PauseUsesIpcWhenAvailable()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new AgentIpcResponse
         {
             Accepted = true,
@@ -6068,7 +6071,7 @@ public sealed class DataFlowTests
             Message = "Pause completed"
         });
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             new WindowsAgentPaths(Path.GetTempPath()),
             new AgentControlFileStore(),
             CreateMinimalStatusService(),
@@ -6087,14 +6090,14 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_PauseFallsBackToFileWhenIpcUnavailable()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new Exception("pipe broken"));
 
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths,
             new AgentControlFileStore(),
             CreateMinimalStatusService(),
@@ -6117,7 +6120,7 @@ public sealed class DataFlowTests
     public async Task AgentControlService_ReloadConfigPreservesNotRunningMessage()
     {
         // Fallback path: without IPC, NotRunning → rejected with expected message
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             new WindowsAgentPaths(Path.GetTempPath()),
             new AgentControlFileStore(),
             CreateMinimalStatusService());
@@ -6132,7 +6135,7 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_RequestTimeoutDoesNotDuplicate()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         // Client throws TimeoutException — should NOT fallback to file
         var fakeClient = new FakeIpcClient(new TimeoutException("timed out"));
 
@@ -6140,7 +6143,7 @@ public sealed class DataFlowTests
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths,
             new AgentControlFileStore(),
             CreateMinimalStatusService(),
@@ -6162,7 +6165,7 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_FallbackUsesSameRequestIdAsIpc()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var capturedRequestId = string.Empty;
         var fakeClient = new FakeIpcClient(new Exception("unavailable"));
 
@@ -6170,7 +6173,7 @@ public sealed class DataFlowTests
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths,
             new AgentControlFileStore(),
             CreateMinimalStatusService(),
@@ -6208,7 +6211,7 @@ public sealed class DataFlowTests
         });
 
         var fakeClient = new FakeIpcClient(new Exception("pipe unavailable"));
-        var service = new AgentProcessService(
+        var service = AgentTestServices.CreateProcess(
             paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance, fakeClient);
         service.StopPollMaxAttempts = 1;
@@ -6244,7 +6247,7 @@ public sealed class DataFlowTests
         });
 
         var fakeClient = new FakeIpcClient(new Exception("pipe broken"));
-        var service = new AgentProcessService(
+        var service = AgentTestServices.CreateProcess(
             paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance, fakeClient);
         service.StopPollMaxAttempts = 1;
@@ -6277,9 +6280,8 @@ public sealed class DataFlowTests
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
             Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", null);
 
-            var service = new AgentProcessService(
-                paths, new RuntimeStateStore(), new AgentControlFileStore(),
-                NullLogger<AgentProcessService>.Instance);
+            var service = AgentTestServices.CreateWindowsProcessController(
+                paths, new RuntimeStateStore());
 
             var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
@@ -6312,9 +6314,8 @@ public sealed class DataFlowTests
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
             Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", "1");
 
-            var service = new AgentProcessService(
-                paths, new RuntimeStateStore(), new AgentControlFileStore(),
-                NullLogger<AgentProcessService>.Instance);
+            var service = AgentTestServices.CreateWindowsProcessController(
+                paths, new RuntimeStateStore());
 
             var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
@@ -6347,10 +6348,8 @@ public sealed class DataFlowTests
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
             Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", null);
 
-            var service = new AgentProcessService(
-                paths, new RuntimeStateStore(), new AgentControlFileStore(),
-                NullLogger<AgentProcessService>.Instance,
-                showAgentConsole: true);
+            var service = AgentTestServices.CreateWindowsProcessController(
+                paths, new RuntimeStateStore(), showAgentConsole: true);
 
             var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
@@ -6383,9 +6382,8 @@ public sealed class DataFlowTests
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeDll);
             Environment.SetEnvironmentVariable("WUJI_AGENT_SHOW_CONSOLE", null);
 
-            var service = new AgentProcessService(
-                paths, new RuntimeStateStore(), new AgentControlFileStore(),
-                NullLogger<AgentProcessService>.Instance);
+            var service = AgentTestServices.CreateWindowsProcessController(
+                paths, new RuntimeStateStore());
 
             var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
 
@@ -6413,7 +6411,7 @@ public sealed class DataFlowTests
             ["WUJI_AGENT_SHOW_CONSOLE"] = "1"
         };
 
-        var sanitized = AgentProcessService.BuildSanitizedEnvironment(source);
+        var sanitized = WindowsAgentProcessController.BuildSanitizedEnvironment(source);
 
         Assert.Single(sanitized.Keys.Where(key =>
             string.Equals(key, "Path", StringComparison.OrdinalIgnoreCase)));
@@ -6437,9 +6435,8 @@ public sealed class DataFlowTests
         {
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", fakeExe);
 
-            var service = new AgentProcessService(
-                paths, new RuntimeStateStore(), new AgentControlFileStore(),
-                NullLogger<AgentProcessService>.Instance);
+            var service = AgentTestServices.CreateWindowsProcessController(
+                paths, new RuntimeStateStore());
 
             var startInfo = service.ResolveStartInfo(Path.Combine(workspace.Root, "empty_base"));
             var pathKeyCount = startInfo.Environment.Keys.Count(key =>
@@ -6530,7 +6527,7 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_PruneDataUsesIpcWhenAvailable()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new AgentIpcResponse
         {
             Accepted = true, Completed = true,
@@ -6538,7 +6535,7 @@ public sealed class DataFlowTests
             Message = "PruneData completed"
         });
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             new WindowsAgentPaths(Path.GetTempPath()),
             new AgentControlFileStore(),
             CreateMinimalStatusService(),
@@ -6554,7 +6551,7 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_ClearHistoryUsesIpcWhenAvailable()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new AgentIpcResponse
         {
             Accepted = true, Completed = true,
@@ -6562,7 +6559,7 @@ public sealed class DataFlowTests
             Message = "ClearHistory completed"
         });
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             new WindowsAgentPaths(Path.GetTempPath()),
             new AgentControlFileStore(),
             CreateMinimalStatusService(),
@@ -6578,7 +6575,7 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_PruneDataFallsBackToFileWhenIpcUnavailable()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new Exception("pipe broken"));
 
         using var workspace = new TempWorkspace();
@@ -6594,11 +6591,11 @@ public sealed class DataFlowTests
             LastHeartbeatUtc = DateTime.UtcNow
         });
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths, new AgentControlFileStore(), statusService, fakeClient, ipcStatus);
 
         var result = await service.PruneDataAsync();
@@ -6617,14 +6614,14 @@ public sealed class DataFlowTests
     [Fact]
     public async Task AgentControlService_ClearHistoryTimeoutDoesNotUseNewRequestId()
     {
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new TimeoutException("timed out"));
 
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths, new AgentControlFileStore(),
             CreateMinimalStatusService(),
             fakeClient, ipcStatus);
@@ -6645,7 +6642,7 @@ public sealed class DataFlowTests
     {
         // IPC returned a proper response with Completed=false (e.g. AlreadyInMaintenance)
         // Should NOT write a file fallback — the Agent already processed and rejected it
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new AgentIpcResponse
         {
             Accepted = false,
@@ -6658,7 +6655,7 @@ public sealed class DataFlowTests
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths, new AgentControlFileStore(),
             CreateMinimalStatusService(),
             fakeClient, ipcStatus);
@@ -6683,7 +6680,7 @@ public sealed class DataFlowTests
     public async Task MainWindowViewModel_ShowsIpcUnavailableInitially()
     {
         using var workspace = new TempWorkspace();
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var viewModel = await CreateMainWindowViewModelAsync(workspace, ipcStatusService: ipcStatus);
         await viewModel.InitializeAsync();
         // Navigate to Diagnostics to trigger RefreshDiagnosticsAsync
@@ -6698,7 +6695,7 @@ public sealed class DataFlowTests
     public async Task MainWindowViewModel_ShowsIpcSuccessState()
     {
         using var workspace = new TempWorkspace();
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         ipcStatus.Initialize(new AgentPipeName("S-1-5-21-test"));
         ipcStatus.RecordIpcSuccess();
 
@@ -6716,7 +6713,7 @@ public sealed class DataFlowTests
     public async Task MainWindowViewModel_ShowsIpcFallbackUsed()
     {
         using var workspace = new TempWorkspace();
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         ipcStatus.Initialize(new AgentPipeName("S-1-5-21-test"));
         ipcStatus.RecordIpcFallback("IPC unavailable; using file fallback.");
 
@@ -6734,7 +6731,7 @@ public sealed class DataFlowTests
     public async Task MainWindowViewModel_DoesNotExposeFullPipeNameOrSid()
     {
         using var workspace = new TempWorkspace();
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var pipeName = new AgentPipeName("S-1-5-21-3623811015-3361044348-30300820-1013");
         ipcStatus.Initialize(pipeName);
         ipcStatus.RecordIpcSuccess();
@@ -6756,7 +6753,7 @@ public sealed class DataFlowTests
     public async Task MainWindowViewModel_RedactsIpcErrorWithPathLikeString()
     {
         using var workspace = new TempWorkspace();
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         ipcStatus.Initialize(new AgentPipeName("S-1-5-21-test"));
         ipcStatus.RecordIpcFallback(@"C:\Users\test\error.log");
 
@@ -6775,14 +6772,14 @@ public sealed class DataFlowTests
     public async Task AgentControlService_HandlesCancellationWithoutFallback()
     {
         // When the caller cancels, don't fallback — just return a cancelled result
-        var ipcStatus = new AgentIpcStatusService();
+        var ipcStatus = new AgentTransportHealthService();
         var fakeClient = new FakeIpcClient(new OperationCanceledException());
 
         using var workspace = new TempWorkspace();
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
 
-        var service = new AgentControlService(
+        var service = AgentTestServices.CreateControl(
             paths, new AgentControlFileStore(),
             CreateMinimalStatusService(),
             fakeClient, ipcStatus);
@@ -6818,10 +6815,10 @@ public sealed class DataFlowTests
             LastHeartbeatUtc = DateTime.UtcNow
         });
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
         var refreshService = new RefreshService(statusService, processService);
@@ -6852,10 +6849,10 @@ public sealed class DataFlowTests
             LastHeartbeatUtc = DateTime.UtcNow
         });
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
         var refreshService = new RefreshService(statusService, processService);
@@ -6880,7 +6877,7 @@ public sealed class DataFlowTests
         // Instead, test via a malformed status service that throws.
         var statusService = new FailingStatusService(new InvalidOperationException(
             @"Access to C:\Users\malogic\secret\path.log is denied."));
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths, new RuntimeStateStore(), new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
         var refreshService = new RefreshService(statusService, processService);
@@ -6898,9 +6895,19 @@ public sealed class DataFlowTests
         private readonly Exception _exception;
 
         public FailingStatusService(Exception exception)
-            : base(new WindowsAgentPaths(Path.GetTempPath()),
-                new RuntimeStateStore(), new AgentHealthStateStore(),
-                new AgentControlFileStore(), new WindowsAgentOptionsStore())
+            : this(exception, AgentTestServices.CreateStatusDependencies())
+        {
+        }
+
+        private FailingStatusService(
+            Exception exception,
+            AgentStatusTestDependencies dependencies)
+            : base(
+                dependencies.State,
+                dependencies.State,
+                dependencies.State,
+                dependencies.State,
+                dependencies.ProcessController)
         {
             _exception = exception;
         }
@@ -6927,10 +6934,10 @@ public sealed class DataFlowTests
             LastHeartbeatUtc = DateTime.UtcNow
         });
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
         var refreshService = new RefreshService(statusService, processService);
@@ -6959,10 +6966,10 @@ public sealed class DataFlowTests
             LastHeartbeatUtc = DateTime.UtcNow
         });
 
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
         var refreshService = new RefreshService(statusService, processService);
@@ -6991,9 +6998,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7023,9 +7030,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var result = await refreshService.RefreshStatusAsync("Dashboard");
@@ -7052,9 +7059,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var r1 = await refreshService.RefreshStatusAsync("Dashboard");
@@ -7073,7 +7080,7 @@ public sealed class DataFlowTests
         var statusService = new FailingStatusService(new InvalidOperationException("test"));
         var refreshService = new RefreshService(
             statusService,
-            new AgentProcessService(paths, new RuntimeStateStore(),
+            AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
                 new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance));
 
         var result = await refreshService.RefreshStatusAsync("Dashboard");
@@ -7099,9 +7106,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7139,9 +7146,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         // Use a session loader that counts calls — status polling should NOT invoke it
@@ -7422,9 +7429,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var result = await refreshService.RefreshStatusAsync("Dashboard");
@@ -7451,9 +7458,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         // Use a slow session loader controlled by TaskCompletionSource
@@ -7502,9 +7509,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         // Hang on session loader
@@ -7554,9 +7561,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(
@@ -7589,9 +7596,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         // Do a successful refresh first
@@ -7602,7 +7609,7 @@ public sealed class DataFlowTests
         var failingStatusService = new FailingStatusService(new InvalidOperationException("fail"));
         var failingRefreshService = new RefreshService(
             failingStatusService,
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         await failingRefreshService.RefreshStatusAsync("Dashboard");
@@ -7628,9 +7635,9 @@ public sealed class DataFlowTests
         });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7662,9 +7669,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         refreshService.Health.RecordStatusSuccess();
@@ -7694,9 +7701,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         refreshService.Health.RecordStatusSkipped();
@@ -7724,9 +7731,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7754,9 +7761,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         refreshService.Health.RecordStatusSuccess();
@@ -7783,9 +7790,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         refreshService.Health.RecordStatusSuccess();
@@ -7815,7 +7822,7 @@ public sealed class DataFlowTests
         var failingService = new FailingStatusService(new InvalidOperationException("fail"));
         var refreshService = new RefreshService(
             failingService,
-            new AgentProcessService(paths, new RuntimeStateStore(),
+            AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
                 new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance));
 
         await refreshService.RefreshStatusAsync("Dashboard");
@@ -7837,9 +7844,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7868,9 +7875,9 @@ public sealed class DataFlowTests
         { ProcessId = Environment.ProcessId, State = AgentActualState.Paused, LastHeartbeatUtc = DateTime.UtcNow });
 
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+            AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
                 new AgentControlFileStore(), new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+            AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
                 NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7922,7 +7929,7 @@ public sealed class DataFlowTests
         var fakeStatusService = new SequenceStatusService(stateSequence);
         var refreshService = new RefreshService(
             fakeStatusService,
-            new AgentProcessService(paths, new RuntimeStateStore(),
+            AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
                 new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance));
 
         var viewModel = await CreateMainWindowViewModelAsync(workspace, refreshService: refreshService);
@@ -7942,9 +7949,19 @@ public sealed class DataFlowTests
         private readonly Queue<AgentStatusSnapshot> _snapshots;
 
         public SequenceStatusService(Queue<AgentStatusSnapshot> snapshots)
-            : base(new WindowsAgentPaths(Path.GetTempPath()),
-                new RuntimeStateStore(), new AgentHealthStateStore(),
-                new AgentControlFileStore(), new WindowsAgentOptionsStore())
+            : this(snapshots, AgentTestServices.CreateStatusDependencies())
+        {
+        }
+
+        private SequenceStatusService(
+            Queue<AgentStatusSnapshot> snapshots,
+            AgentStatusTestDependencies dependencies)
+            : base(
+                dependencies.State,
+                dependencies.State,
+                dependencies.State,
+                dependencies.State,
+                dependencies.ProcessController)
         {
             _snapshots = snapshots;
         }
@@ -8238,7 +8255,7 @@ public sealed class DataFlowTests
         await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
-        var statusService = new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var status = await statusService.GetStatusAsync();
 
@@ -8502,7 +8519,7 @@ public sealed class DataFlowTests
         await runtimeStore.WriteAsync(paths.RuntimeStatePath, new RuntimeState
         { ProcessId = Environment.ProcessId, State = AgentActualState.Running, LastHeartbeatUtc = DateTime.UtcNow });
 
-        var statusService = new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var sink = new FakeTrayStateSink();
         var viewModel = CreateMinimalMainWindowViewModel(statusService, sink);
@@ -8547,13 +8564,13 @@ public sealed class DataFlowTests
         await settingsViewModel.LoadAsync();
         settingsViewModel.ExcludedProcessesText = "notepad.exe";
 
-        var statusService = new AgentStatusService(paths, runtimeStore, new AgentHealthStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, runtimeStore, new AgentHealthStateStore(),
             new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var sink = new FakeTrayStateSink();
 
-        var processService = new AgentProcessService(paths, runtimeStore, new AgentControlFileStore(),
+        var processService = AgentTestServices.CreateProcess(paths, runtimeStore, new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
@@ -8584,9 +8601,9 @@ public sealed class DataFlowTests
         ITrayStateSink trayStateSink)
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());
-        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+        var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
         var settingsService = new SettingsService(paths, new AppSettingsStore(), new WindowsAgentOptionsStore());
@@ -8608,7 +8625,7 @@ public sealed class DataFlowTests
     private static AgentStatusService CreateMinimalStatusService()
     {
         var paths = new WindowsAgentPaths(Path.GetTempPath());
-        return new AgentStatusService(
+        return AgentTestServices.CreateStatus(
             paths,
             new RuntimeStateStore(),
             new AgentHealthStateStore(),
@@ -9215,7 +9232,7 @@ public sealed class DataFlowTests
         Func<string, int, CancellationToken, Task<IReadOnlyList<AppSession>>>? sessionLoader = null,
         Func<int, CancellationToken, Task<IReadOnlyList<AppUsageSummary>>>? appLoader = null,
         Func<CancellationToken, Task<AppSettings>>? settingsLoader = null,
-        AgentIpcStatusService? ipcStatusService = null,
+        AgentTransportHealthService? ipcStatusService = null,
         RefreshService? refreshService = null,
         IStartupRegistrationService? startupRegistrationService = null,
         StartupLaunchOptions? startupLaunchOptions = null,
@@ -9236,18 +9253,18 @@ public sealed class DataFlowTests
         var settingsViewModel = settingsLoader is null
             ? new SettingsViewModel(settingsService, paths)
             : new SettingsViewModel(settingsLoader, (_, _) => Task.CompletedTask, _ => Task.FromResult(new WindowsAgentOptions()), paths);
-        var statusService = new AgentStatusService(
+        var statusService = AgentTestServices.CreateStatus(
             paths,
             runtimeStateStore,
             healthStateStore,
             controlFileStore,
             agentOptionsStore);
-        var processService = new AgentProcessService(
+        var processService = AgentTestServices.CreateProcess(
             paths,
             runtimeStateStore,
             controlFileStore,
             NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, controlFileStore, statusService);
+        var controlService = AgentTestServices.CreateControl(paths, controlFileStore, statusService);
         var overviewDataService = ActivityTestServices.CreateOverview(paths);
         var diagnosticsDataService = ActivityTestServices.CreateDiagnostics(paths);
         var samplesViewModel = new SamplesViewModel(sampleLoader ?? ((_, _) =>
@@ -9492,9 +9509,9 @@ public sealed class DataFlowTests
         });
 
         var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
-        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
         var viewModel = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
 
@@ -9515,9 +9532,9 @@ public sealed class DataFlowTests
 
         var store = new AppSettingsStore();
         var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
-        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
         var viewModel = new SettingsViewModel(settingsService, statusService, controlService, diagService, paths);
 
@@ -10277,11 +10294,11 @@ public sealed class DataFlowTests
 
         var store = new AppSettingsStore();
         var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
-        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+        var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
@@ -10312,11 +10329,11 @@ public sealed class DataFlowTests
             new AppSettings { AutoStartAgentWhenAppStarts = true });
 
         var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
-        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+        var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
@@ -10348,11 +10365,11 @@ public sealed class DataFlowTests
             new AppSettings { AutoStartAgentWhenAppStarts = false });
 
         var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
-        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+        var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
@@ -10385,11 +10402,11 @@ public sealed class DataFlowTests
             new AppSettings { AutoStartAgentWhenAppStarts = true });
 
         var settingsService = new SettingsService(paths, store, new WindowsAgentOptionsStore());
-        var statusService = new AgentStatusService(paths, new RuntimeStateStore(),
+        var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
-        var processService = new AgentProcessService(paths, new RuntimeStateStore(),
+        var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
             new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
-        var controlService = new AgentControlService(paths, new AgentControlFileStore(), statusService);
+        var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
 
@@ -10569,8 +10586,8 @@ public sealed class DataFlowTests
         var healthStore = new AgentHealthStateStore();
         var controlStore = new AgentControlFileStore();
         var refreshService = new RefreshService(
-            new AgentStatusService(paths, runtimeStore, healthStore, controlStore, new WindowsAgentOptionsStore()),
-            new AgentProcessService(paths, runtimeStore, controlStore,
+            AgentTestServices.CreateStatus(paths, runtimeStore, healthStore, controlStore, new WindowsAgentOptionsStore()),
+            AgentTestServices.CreateProcess(paths, runtimeStore, controlStore,
                 NullLogger<AgentProcessService>.Instance));
 
         var fakeReg = new FakeStartupRegistrationService(
@@ -10745,7 +10762,7 @@ public sealed class DataFlowTests
         File.WriteAllText(agentExe, "dev");
 
         // ResolveAgentExecutablePath with baseDir 5 levels deep should find dev fallback
-        var result = AgentProcessService.ResolveAgentExecutablePath(binDir);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(binDir);
         Assert.NotNull(result);
         Assert.EndsWith("QuantifiedSelf.Windows.Agent.exe", result);
     }
@@ -10770,7 +10787,7 @@ public sealed class DataFlowTests
         File.WriteAllText(agentExe, "dev");
         File.WriteAllText(Path.Combine(agentBin, "QuantifiedSelf.Windows.Agent.dll"), "dev dll");
 
-        var result = AgentProcessService.ResolveAgentExecutablePath(binDir);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(binDir);
 
         Assert.Equal(agentExe, result);
     }
@@ -10784,7 +10801,7 @@ public sealed class DataFlowTests
         Directory.CreateDirectory(baseDir);
 
         // ResolveAgentExecutablePath returns null when no Agent exe is found.
-        var result = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(baseDir);
         Assert.Null(result);
 
         // ResolveStartInfo wraps null result in FileNotFoundException with safe message.
@@ -10792,7 +10809,7 @@ public sealed class DataFlowTests
         try
         {
             // Simulate what ResolveStartInfo does: check resolver output and throw
-            var exe = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+            var exe = WindowsAgentProcessController.ResolveAgentExecutablePath(baseDir);
             if (string.IsNullOrWhiteSpace(exe))
                 throw new FileNotFoundException(
                     "Unable to locate QuantifiedSelf.Windows.Agent executable.");
@@ -10824,11 +10841,11 @@ public sealed class DataFlowTests
 
         var paths = new WindowsAgentPaths(workspace.Root);
         paths.EnsureDirectories();
-        var service = new AgentProcessService(
+        var service = AgentTestServices.CreateProcess(
             paths, new RuntimeStateStore(), new AgentControlFileStore(),
             NullLogger<AgentProcessService>.Instance);
 
-        var resolved = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+        var resolved = WindowsAgentProcessController.ResolveAgentExecutablePath(baseDir);
         Assert.Equal(agentExe, resolved);
     }
 

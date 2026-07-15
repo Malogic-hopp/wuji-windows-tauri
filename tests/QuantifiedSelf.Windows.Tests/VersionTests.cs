@@ -1,4 +1,5 @@
 using System.Reflection;
+using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Options;
 
@@ -40,7 +41,7 @@ public sealed class VersionTests
     [Fact]
     public void AppAssemblyInformationalVersion_Contains_0_1_0()
     {
-        var assembly = typeof(QuantifiedSelf.Windows.App.Services.AgentProcessService).Assembly;
+        var assembly = typeof(WindowsAgentProcessController).Assembly;
         var infoVersionAttr = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>();
         Assert.NotNull(infoVersionAttr);
         Assert.StartsWith("0.1.0", infoVersionAttr!.InformationalVersion);

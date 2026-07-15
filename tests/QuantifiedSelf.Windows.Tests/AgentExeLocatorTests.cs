@@ -1,5 +1,6 @@
 using System.IO;
 using QuantifiedSelf.Windows.App.Services;
+using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Tests.TestHelpers;
 
 namespace QuantifiedSelf.Windows.Tests;
@@ -11,7 +12,7 @@ public sealed class AgentExeLocatorTests
     public void ResolveAgentExecutablePath_ReturnsNull_WhenNoCandidateFound()
     {
         using var workspace = new TempWorkspace("qsw-ael");
-        var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
         Assert.Null(result);
     }
 
@@ -22,7 +23,7 @@ public sealed class AgentExeLocatorTests
         var fakeExe = Path.Combine(workspace.Path, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(fakeExe, "");
 
-        var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
 
         Assert.NotNull(result);
         Assert.Equal(fakeExe, result, ignoreCase: true);
@@ -40,7 +41,7 @@ public sealed class AgentExeLocatorTests
         var isolatedExe = Path.Combine(isolatedDir, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(isolatedExe, "");
 
-        var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
 
         Assert.NotNull(result);
         Assert.Equal(isolatedExe, result, ignoreCase: true);
@@ -64,7 +65,7 @@ public sealed class AgentExeLocatorTests
             try
             {
                 Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", envExe);
-                var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+                var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
                 Assert.NotNull(result);
                 Assert.Equal(baseDirExe, result, ignoreCase: true);
             }
@@ -95,7 +96,7 @@ public sealed class AgentExeLocatorTests
             try
             {
                 Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", envExe);
-                var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+                var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
                 Assert.NotNull(result);
                 Assert.Equal(envExe, result, ignoreCase: true);
             }
@@ -121,7 +122,7 @@ public sealed class AgentExeLocatorTests
         try
         {
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", envExe);
-            var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+            var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
             Assert.Null(result);
         }
         finally
@@ -139,7 +140,7 @@ public sealed class AgentExeLocatorTests
         try
         {
             Environment.SetEnvironmentVariable("QUANTIFIEDSELF_WINDOWS_AGENT_EXE", "");
-            var result = AgentProcessService.ResolveAgentExecutablePath(workspace.Path);
+            var result = WindowsAgentProcessController.ResolveAgentExecutablePath(workspace.Path);
             Assert.Null(result);
         }
         finally
@@ -172,7 +173,7 @@ public sealed class AgentExeLocatorTests
         var agentExe = Path.Combine(agentBin, "QuantifiedSelf.Windows.Agent.exe");
         File.WriteAllText(agentExe, "dev");
 
-        var result = AgentProcessService.ResolveAgentExecutablePath(baseDir);
+        var result = WindowsAgentProcessController.ResolveAgentExecutablePath(baseDir);
 
         Assert.NotNull(result);
         Assert.Equal(agentExe, result, ignoreCase: true);
