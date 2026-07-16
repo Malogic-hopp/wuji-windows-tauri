@@ -1,0 +1,227 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://local.wuji/contracts/bridge/v1/bridge.schema.json",
+  "title": "WUJI Client Bridge API v1",
+  "type": "object",
+  "x-wuji-api-version": "1.0",
+  "x-wuji-methods": [
+    "bridge.hello",
+    "client.initialize",
+    "bridge.shutdown"
+  ],
+  "x-wuji-error-codes": [
+    "parse_error",
+    "invalid_request",
+    "payload_too_large",
+    "method_not_found",
+    "handshake_required",
+    "unsupported_api_version",
+    "request_timeout",
+    "request_cancelled",
+    "internal_error"
+  ],
+  "$defs": {
+    "BridgeErrorKind": {
+      "type": "string",
+      "enum": [
+        "validation",
+        "transient",
+        "conflict",
+        "not_found",
+        "unsupported",
+        "internal"
+      ]
+    },
+    "BridgeRequestMeta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "correlationId"
+      ],
+      "properties": {
+        "apiVersion": {
+          "type": "string"
+        },
+        "correlationId": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeRequestEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params",
+        "meta"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "meta": {
+          "$ref": "#/$defs/BridgeRequestMeta"
+        }
+      }
+    },
+    "BridgeErrorData": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "retryable",
+        "correlationId"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/BridgeErrorKind"
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "correlationId": {
+          "type": "string"
+        }
+      }
+    },
+    "BridgeError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "data": {
+          "$ref": "#/$defs/BridgeErrorData"
+        }
+      }
+    },
+    "BridgeResponseEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "jsonrpc",
+        "id"
+      ],
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "const": "2.0"
+        },
+        "id": {
+          "type": "string"
+        },
+        "result": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "error": {
+          "$ref": "#/$defs/BridgeError"
+        }
+      }
+    },
+    "BridgeHelloParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "BridgeHelloResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "bridgeVersion",
+        "capabilities"
+      ],
+      "properties": {
+        "apiVersion": {
+          "type": "string"
+        },
+        "bridgeVersion": {
+          "type": "string"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "ClientInitializeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "ClientInitializeResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "apiVersion",
+        "channelName",
+        "productDisplayName",
+        "isDefaultChannel",
+        "capabilities"
+      ],
+      "properties": {
+        "apiVersion": {
+          "type": "string"
+        },
+        "channelName": {
+          "type": "string"
+        },
+        "productDisplayName": {
+          "type": "string"
+        },
+        "isDefaultChannel": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "BridgeShutdownParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "BridgeShutdownResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        }
+      }
+    }
+  }
+}
