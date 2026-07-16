@@ -1,0 +1,206 @@
+using System.IO;
+using System.Linq;
+using System.Text.Json;
+
+namespace QuantifiedSelf.Windows.Tests;
+
+[Trait("Category", "Fast")]
+public sealed class TauriArchitectureBoundaryTests
+{
+    private static readonly string[] ForbiddenWebviewCapabilities =
+    [
+        "shell:",
+        "fs:",
+        "http:",
+        "sql:",
+        "process:",
+        "upload:",
+        "opener:"
+    ];
+
+    [Fact]
+    public void ToolchainAndFrontendDependencies_AreExactlyPinned()
+    {
+        using var package = JsonDocument.Parse(ReadTauriFile("package.json"));
+        var root = package.RootElement;
+
+        Assert.Equal("pnpm@11.9.0", root.GetProperty("packageManager").GetString());
+        Assert.Equal("24.14.0", root.GetProperty("engines").GetProperty("node").GetString());
+        Assert.Equal("11.9.0", root.GetProperty("engines").GetProperty("pnpm").GetString());
+        Assert.Equal("19.2.7", root.GetProperty("dependencies").GetProperty("react").GetString());
+        Assert.Equal("19.2.7", root.GetProperty("dependencies").GetProperty("react-dom").GetString());
+        Assert.Equal("2.11.1", root.GetProperty("dependencies").GetProperty("@tauri-apps/api").GetString());
+
+        var toolchain = ReadTauriFile("rust-toolchain.toml");
+        Assert.Contains("channel = \"1.97.0\"", toolchain, StringComparison.Ordinal);
+        Assert.Contains("x86_64-pc-windows-msvc", toolchain, StringComparison.Ordinal);
+        Assert.Contains("clippy", toolchain, StringComparison.Ordinal);
+        Assert.Contains("rustfmt", toolchain, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TauriShell_IsDevOnlyAndCspRejectsRemoteOrEvaluatedCode()
+    {
+        using var config = JsonDocument.Parse(ReadTauriFile("src-tauri", "tauri.conf.json"));
+        var root = config.RootElement;
+        var csp = root.GetProperty("app").GetProperty("security").GetProperty("csp").GetString()!;
+
+        Assert.Equal("com.wuji.windows.dev", root.GetProperty("identifier").GetString());
+        Assert.False(root.GetProperty("bundle").GetProperty("active").GetBoolean());
+        Assert.Contains("default-src 'self'", csp, StringComparison.Ordinal);
+        Assert.Contains("object-src 'none'", csp, StringComparison.Ordinal);
+        Assert.Contains("frame-src 'none'", csp, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsafe-eval", csp, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("https:", csp, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("http: ", csp, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TauriWindowsBuild_ReusesTheExistingWujiApplicationIcon()
+    {
+        var tauriIcon = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.Tauri",
+            "src-tauri",
+            "icons",
+            "icon.ico");
+        var wpfIcon = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "Resources",
+            "app.ico");
+
+        Assert.True(File.Exists(tauriIcon));
+        Assert.Equal(File.ReadAllBytes(wpfIcon), File.ReadAllBytes(tauriIcon));
+    }
+
+    [Fact]
+    public void MainCapability_GrantsNoGenericShellFileNetworkOrSqlAccess()
+    {
+        var capability = ReadTauriFile("src-tauri", "capabilities", "main.json");
+        foreach (var forbidden in ForbiddenWebviewCapabilities)
+        {
+            Assert.DoesNotContain(forbidden, capability, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.Contains("core:default", capability, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BridgeSupervisor_UsesFixedDevSidecarAndNoWebviewSuppliedPathOrChannel()
+    {
+        var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
+        Assert.Contains("QuantifiedSelf.Windows.Client.Bridge.exe", supervisor, StringComparison.Ordinal);
+        Assert.Contains(".arg(\"--channel\")", supervisor, StringComparison.Ordinal);
+        Assert.Contains(".arg(\"dev\")", supervisor, StringComparison.Ordinal);
+        Assert.DoesNotContain("std::env::args", supervisor, StringComparison.Ordinal);
+
+        var commands = ReadTauriFile("src-tauri", "src", "commands", "mod.rs");
+        Assert.DoesNotContain("PathBuf", commands, StringComparison.Ordinal);
+        Assert.DoesNotContain("channel:", commands, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("method:", commands, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RustAndTypeScript_ConsumeTheGeneratedContractSource()
+    {
+        var rust = ReadTauriFile("src-tauri", "src", "contracts.rs");
+        var typescript = ReadTauriFile("src", "bridge", "contracts.ts");
+        Assert.Contains("generated/rust/bridge_contracts.generated.rs", rust, StringComparison.Ordinal);
+        Assert.Contains("generated/typescript/bridge-contracts.generated", typescript, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BridgeAvailabilityNotification_IsFixedAndContainsNoRuntimePaths()
+    {
+        var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
+        var frontend = ReadTauriFile("src", "bridge", "availability.ts");
+
+        Assert.Contains("bridge://availability", supervisor, StringComparison.Ordinal);
+        Assert.Contains("bridge://availability", frontend, StringComparison.Ordinal);
+        Assert.Contains("generation", supervisor, StringComparison.Ordinal);
+        Assert.DoesNotContain("dataRoot", frontend, StringComparison.Ordinal);
+        Assert.DoesNotContain("executablePath", frontend, StringComparison.Ordinal);
+        Assert.DoesNotContain("channelName", frontend, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ReactBridgeClient_InvokesOnlyTheSemanticWhitelist()
+    {
+        var client = ReadTauriFile("src", "bridge", "client.ts");
+        string[] allowedCommands =
+        [
+            "app_initialize",
+            "agent_get_status",
+            "agent_start",
+            "agent_pause",
+            "agent_resume",
+            "agent_stop",
+            "bridge_retry"
+        ];
+
+        foreach (var command in allowedCommands)
+        {
+            Assert.Contains(command, client, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("channelName", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("dataRoot", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("execute(", client, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TauriSource_DoesNotAccessSqliteNamedPipeRegistryOrWpf()
+    {
+        string[] forbiddenMarkers =
+        [
+            "Microsoft.Data.Sqlite",
+            "rusqlite",
+            "NamedPipe",
+            "RegistryKey",
+            "System.Windows",
+            "QuantifiedSelf.Windows.Infrastructure"
+        ];
+        var projectDirectory = Path.Combine(FindRepositoryRoot(), "src", "QuantifiedSelf.Windows.Tauri");
+        var sources = Directory.EnumerateFiles(projectDirectory, "*", SearchOption.AllDirectories)
+            .Where(path => path.EndsWith(".rs", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".ts", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".tsx", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}target{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase)
+                && !path.Contains($"{Path.DirectorySeparatorChar}node_modules{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase));
+
+        foreach (var source in sources)
+        {
+            var content = File.ReadAllText(source);
+            foreach (var marker in forbiddenMarkers)
+            {
+                Assert.DoesNotContain(marker, content, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    private static string ReadTauriFile(params string[] segments)
+    {
+        var path = segments.Aggregate(
+            Path.Combine(FindRepositoryRoot(), "src", "QuantifiedSelf.Windows.Tauri"),
+            (current, segment) => Path.Combine(current, segment));
+        return File.ReadAllText(path);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        var current = new DirectoryInfo(AppContext.BaseDirectory);
+        while (current is not null)
+        {
+            if (File.Exists(Path.Combine(current.FullName, "QuantifiedSelf.Windows.sln")))
+            {
+                return current.FullName;
+            }
+            current = current.Parent;
+        }
+
+        throw new DirectoryNotFoundException("Could not locate repository root.");
+    }
+}
