@@ -1,0 +1,188 @@
+# ADR-001：Tauri 2 + React 19 Bridge 边界
+
+日期：2026-07-16
+
+状态：已接受
+
+关联规划：`docs/design/Tauri2-React19前端实施规划-2026-07-16.md`
+
+## 1. 决策
+
+WUJI 的第一个替代 UI 采用以下进程与依赖结构：
+
+```text
+React 19 WebView
+    -> 白名单 Tauri commands/events
+Tauri 2 Rust Shell
+    -> 私有 stdin/stdout NDJSON JSON-RPC
+QuantifiedSelf.Windows.Client.Bridge
+    -> IWujiClient
+Application + Client + Core
+    -> Infrastructure / Agent
+```
+
+Bridge、Tauri 宿主和 Agent 是三个独立生命周期。Bridge 或 Tauri 退出时默认不停止 Agent；只有显式 `agent.stop` 用例可以改变 Agent 的运行生命周期。
+
+## 2. 选择理由
+
+- 现有 `IWujiClient` 已封装 SQLite、Named Pipe、文件、进程和注册表实现；
+- stdio 只存在于父子进程之间，不新增可被同机进程探测的 TCP 或 Named Pipe 服务端点；
+- Rust 只承担 Windows 桌面宿主职责，不复制 Application 业务规则；
+- schema-first 合同能为 C#、Rust、TypeScript 生成同源类型，避免三端字段漂移；
+- WPF 可继续作为稳定参考实现和回滚入口。
+
+## 3. 强制边界
+
+- React 不得直接获得 shell、文件系统、SQL、HTTP 或任意进程执行能力；
+- Rust 不得访问 SQLite、Agent Named Pipe、设置/runtime 文件、注册表或 Agent executable；
+- Bridge 不得直接引用 Infrastructure、Agent、App 或 UI 框架；
+- Bridge 只能通过 `IWujiClient`/feature client 执行应用用例；
+- Application/Core DTO 必须显式投影为安全 Bridge DTO，不得直接序列化整个内部对象；
+- stdout 只输出协议消息，日志只写 stderr；
+- runtime channel 由宿主启动参数决定，React 不得传入 channel、data root 或可执行文件路径。
+
+## 4. 阶段 1 合同范围
+
+阶段 1 只实现：
+
+| 方法 | 用途 | 副作用 |
+|---|---|---:|
+| `bridge.hello` | 协商 API 版本和能力 | 否 |
+| `client.initialize` | 初始化 `IWujiClient` 并返回安全上下文 | 幂等 |
+| `bridge.shutdown` | 结束 Bridge，不停止 Agent | 幂等 |
+
+阶段 2 才加入 Agent status/start/pause/resume/stop；阶段 4、5 才加入 Dashboard 与 Settings。阶段 1 不提前暴露通用 method forwarding。
+
+## 5. 协议与版本
+
+- JSON-RPC 版本固定为 `2.0`；
+- Bridge API 初始版本为 `1.0`；
+- UTF-8 NDJSON，一行一条消息；
+- 单条消息默认最大 1 MiB；
+- request 使用字符串 id 和 correlation id；
+- 每个请求有宿主取消和超时；
+- 相同 request id + method 返回缓存响应，不重复执行幂等副作用；
+- 相同 request id 被用于不同 method 时拒绝；
+- 未完成 hello 前拒绝 initialize；
+- 不兼容 API major 立即返回稳定错误。
+
+## 6. 稳定错误模型
+
+阶段 1 固定以下错误码：
+
+| code | kind | retryable | 含义 |
+|---|---|---:|---|
+| `parse_error` | validation | false | 非法 JSON |
+| `invalid_request` | validation | false | 包络或参数非法 |
+| `payload_too_large` | validation | false | 超过消息上限 |
+| `method_not_found` | unsupported | false | 方法不在白名单 |
+| `handshake_required` | conflict | true | 尚未完成 hello |
+| `unsupported_api_version` | unsupported | false | API major 不兼容 |
+| `request_timeout` | transient | true | 请求超时 |
+| `request_cancelled` | transient | true | 宿主取消请求 |
+| `internal_error` | internal | true | 未分类安全错误 |
+
+错误 message 是安全中文说明。前端未来只能按 code/kind/retryable 决策，不解析 message 文本。
+
+## 7. 敏感字段 denylist
+
+Bridge 合同、错误和日志不得包含：
+
+- 绝对路径、`WujiClient.Paths` 和 data root；
+- Windows SID、用户名、机器名；
+- Named Pipe 完整名称；
+- Agent executable、SQLite、日志、runtime/control 文件路径；
+- 注册表 command/value；
+- raw exception、stack trace、SQL；
+- 未遮罩窗口标题；
+- 完整 settings payload。
+
+阶段 1 initialize 只返回：channel name、产品显示名、是否默认 channel、API version 和 capability 名称。
+
+## 8. dev-only 决策
+
+阶段 0～7 的 Bridge/Tauri 验证只允许 `dev` channel：
+
+- Bridge 默认 channel 为 `dev`；
+- 阶段 1 明确拒绝 `prod` 和自定义 channel；
+- React 不能传入 channel；
+- production 支持必须经过阶段 7 promotion gate 后单独修改；
+- 本阶段不读取生产数据、不创建生产目录、不修改生产启动项。
+
+## 9. 工具链版本策略
+
+当前基线：
+
+| 工具 | 仓库/本机状态 | 决策 |
+|---|---|---|
+| .NET SDK | `global.json` 8.0.422；本机 8.0.423 补丁前滚 | Bridge/生成器使用 .NET 8 |
+| Node.js | 本机 24.14.0 | 阶段 3 用仓库文件锁定 Node LTS |
+| Corepack | 本机 0.34.6 | 阶段 3 锁定 pnpm 与 lockfile |
+| Rust/Cargo | 当前未安装 | 阶段 3 前安装并以 `rust-toolchain.toml` 锁定 stable |
+| Tauri | 尚未引入 | 阶段 3 锁定 Tauri 2 minor 与 Cargo.lock |
+| React | 尚未引入 | 阶段 3 锁定 React 19 minor 与 pnpm-lock.yaml |
+
+阶段 1 的 Rust/TypeScript 文件是合同生成 staging artifact，不要求本机 Rust/Node 编译。合同生成器本身只使用 .NET 8 BCL，不增加外部生成器包或网络构建依赖。
+
+## 10. 合同生成决策
+
+- `contracts/wuji-bridge/v1/bridge.schema.json` 是唯一协议来源；
+- schema 使用 JSON Schema 2020-12 的 `$defs` 描述 DTO，并附带 method/error 元数据；
+- 仓库内 .NET 生成器读取受控 JSON Schema 子集，确定性生成 C#、Rust、TypeScript；
+- 生成文件提交到仓库，支持离线构建和审查；
+- `--write` 更新生成物；
+- `--check` 发现漂移时返回非零退出码；
+- 生成物不得手工修改；
+- 如果后续 DTO 需要超出当前生成器支持的 schema 能力，先扩展生成器和测试，不退回三端手写。
+
+这个决定替代规划中的 NJsonSchema/typify/json-schema-to-typescript 候选 spike：阶段 1 合同很小，仓库内生成器能避免引入三个额外工具链和不确定的跨版本输出；未来如改用成熟生成器，必须保持 schema 为唯一来源并通过 ADR 记录迁移。
+
+## 11. 生命周期
+
+正常启动：Bridge 解析 dev channel → 创建一个 `IWujiClient` → hello → initialize。
+
+正常退出：收到 shutdown 或 stdin EOF → 停止接收请求 → `IWujiClient.DisposeAsync()` → Bridge 退出。
+
+取消/异常：宿主取消、输入中断或未处理错误 → 取消 in-flight initialize → `IWujiClient.DisposeAsync()` → Bridge 退出。
+
+所有路径都禁止隐式调用 Agent stop、kill、pause 或其他控制命令。
+
+## 12. 当前基线与验证门禁
+
+阶段 7 已收口为独立提交，基线为：
+
+- Build：0 warning / 0 error；
+- Architecture：35/35；
+- Fast：114/114；
+- Integration：421/421；
+- Wpf：15/15；
+- Full：560/560。
+
+阶段 1 完成时必须重新运行完整 solution build/test，并新增：
+
+- Bridge 合同漂移检查；
+- Bridge 项目引用/UI marker 架构门禁；
+- hello/initialize/shutdown；
+- 非法 JSON、未知方法、超大 payload、版本不兼容；
+- 重复 request id；
+- timeout、宿主 cancellation、EOF；
+- stdout purity 与 stderr 日志隔离；
+- shutdown/Dispose 不访问 Agent 控制。
+
+WPF 可见 UI、Agent 控制、Dashboard、Settings 与托盘行为本阶段不修改。自动回归之外的 WPF 手动 smoke 保留为阶段 2 引入 Agent Bridge 命令前的对照门禁；本阶段不会把未执行的 GUI 操作声明为已通过。
+
+## 13. 后果
+
+正面结果：
+
+- 第一版 Bridge 无网络监听面；
+- 跨语言合同可离线、可审查、可检测漂移；
+- Bridge 生命周期不污染 Agent；
+- 后续 Rust/React 可以在稳定协议上增量实现。
+
+代价：
+
+- 仓库需要维护一个受控 JSON Schema 子集生成器；
+- Application/Core 到 Bridge DTO 需要显式 mapper；
+- Rust 工具链仍是阶段 3 的外部前置条件；
+- production channel、Tauri 打包和可见 UI 尚未实现。
