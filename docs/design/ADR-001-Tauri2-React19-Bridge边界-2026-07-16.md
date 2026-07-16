@@ -77,6 +77,18 @@ Agent 内部对象必须投影为 schema 生成的安全 `AgentStatus`/`CommandR
 
 Bridge 同时启动三个彼此独立的 Overview 查询并聚合为一次响应，不直接访问 Apps/Sessions feature client 或底层存储。安全 DTO 只包含显示名、UTC 时间和时长/计数；不包含会话数据库 ID、进程名、窗口标题、路径、数据库信息或内部异常。应用显示名即使意外包含路径，也会在 Bridge mapper 中去掉目录部分并限制长度。
 
+### 4.3 阶段 4B Rust command 扩展
+
+Tauri Rust Shell 增加单一语义 command `activity_get_overview`，React 白名单使用相同固定名称。command 不接收 method、路径、channel 或查询参数，只执行：
+
+```text
+supervisor.request("activity.getOverview")
+```
+
+Rust 将响应直接反序列化为 schema 生成的 `ActivityOverviewResult`。Bridge 内层 timeout 保持 10 秒，Rust 外层只读查询 timeout 为 12 秒，为 Bridge 返回安全 timeout 和 stdio 调度保留边界；该 timeout 可重试。Rust 不累加 duration、不排序 Top Apps、不推导 Agent/会话状态，也不改变 Bridge 返回的数组顺序。
+
+BridgeSupervisor 每次进入 `ready` 都发布带 generation 的固定 availability 事件。React 收到 `ready` 后使 `['activity', 'overview']` query 失效；手动重连成功也执行同一规则，避免继续展示旧 Bridge generation 的 Dashboard 缓存。失效只触发重新读取，不在 React 中重算业务数据。
+
 ## 5. 协议与版本
 
 - JSON-RPC 版本固定为 `2.0`；
