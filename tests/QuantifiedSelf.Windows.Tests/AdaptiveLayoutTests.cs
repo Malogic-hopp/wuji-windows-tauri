@@ -3,7 +3,7 @@ using Xunit;
 
 namespace QuantifiedSelf.Windows.Tests;
 
-[Trait("Category", "Fast")]
+[Trait("Category", "Wpf")]
 public sealed class AdaptiveLayoutTests
 {
     [Theory]

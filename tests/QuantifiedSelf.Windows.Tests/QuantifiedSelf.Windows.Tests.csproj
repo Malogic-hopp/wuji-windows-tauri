@@ -22,6 +22,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Remove="AdaptiveLayoutTests.cs" />
+    <Compile Remove="AgentExeLocatorTests.cs" />
+    <Compile Remove="InsightsTests.cs" />
+    <Compile Remove="TodayPageTests.cs" />
+    <Compile Remove="WujiClientTests.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Application\QuantifiedSelf.Windows.Application.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Client\QuantifiedSelf.Windows.Client.csproj" />

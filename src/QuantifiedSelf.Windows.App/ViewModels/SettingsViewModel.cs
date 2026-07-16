@@ -15,6 +15,7 @@ using QuantifiedSelf.Windows.Client.Startup;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Events;
 using QuantifiedSelf.Windows.Core.Options;
+using QuantifiedSelf.Windows.Core.Paths;
 
 namespace QuantifiedSelf.Windows.App.ViewModels;
 
@@ -158,6 +159,91 @@ public sealed partial class SettingsViewModel : ObservableObject
         StartupRegistrationService = startupClient;
     }
 
+    internal SettingsViewModel(ISettingsService settingsService, WindowsAgentPaths paths)
+        : this(settingsService, ToClientPaths(paths))
+    {
+    }
+
+    internal SettingsViewModel(
+        ISettingsService settingsService,
+        IAgentStatusService statusService,
+        IAgentControlService controlService,
+        IDiagnosticsDataService diagnosticsDataService,
+        WindowsAgentPaths paths)
+        : this(settingsService, statusService, controlService, diagnosticsDataService, ToClientPaths(paths))
+    {
+    }
+
+    internal SettingsViewModel(
+        Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
+        Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
+        Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
+        WindowsAgentPaths paths)
+        : this(readAppSettingsAsync, saveAppSettingsAsync, readAgentOptionsAsync, ToClientPaths(paths))
+    {
+    }
+
+    internal SettingsViewModel(
+        Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
+        Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
+        Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
+        AgentOptionsValidator agentOptionsValidator,
+        WindowsAgentPaths paths)
+        : this(
+            readAppSettingsAsync,
+            saveAppSettingsAsync,
+            readAgentOptionsAsync,
+            agentOptionsValidator,
+            ToClientPaths(paths))
+    {
+    }
+
+    internal SettingsViewModel(
+        Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
+        Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
+        Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
+        Func<WindowsAgentOptions, CancellationToken, Task> saveAgentOptionsAsync,
+        Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
+        WindowsAgentPaths paths)
+        : this(
+            readAppSettingsAsync,
+            saveAppSettingsAsync,
+            readAgentOptionsAsync,
+            saveAgentOptionsAsync,
+            restoreAgentOptionsBackupAsync,
+            ToClientPaths(paths))
+    {
+    }
+
+    internal SettingsViewModel(
+        Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
+        Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
+        Func<CancellationToken, Task<WindowsAgentOptions>> readAgentOptionsAsync,
+        Func<WindowsAgentOptions, CancellationToken, Task> saveAgentOptionsAsync,
+        Func<CancellationToken, Task> restoreAgentOptionsBackupAsync,
+        Func<CancellationToken, Task<AgentStatusSnapshot>>? getAgentStatusAsync,
+        Func<CancellationToken, Task<AgentCommandResult>>? requestReloadConfigAsync,
+        Func<CancellationToken, Task<AgentCommandResult>>? requestPruneDataAsync,
+        Func<CancellationToken, Task<AgentCommandResult>>? requestClearHistoryAsync,
+        Func<CancellationToken, Task<IReadOnlyList<AgentEvent>>>? getRecentAgentEventsAsync,
+        AgentOptionsValidator agentOptionsValidator,
+        WindowsAgentPaths paths)
+        : this(
+            readAppSettingsAsync,
+            saveAppSettingsAsync,
+            readAgentOptionsAsync,
+            saveAgentOptionsAsync,
+            restoreAgentOptionsBackupAsync,
+            getAgentStatusAsync,
+            requestReloadConfigAsync,
+            requestPruneDataAsync,
+            requestClearHistoryAsync,
+            getRecentAgentEventsAsync,
+            agentOptionsValidator,
+            ToClientPaths(paths))
+    {
+    }
+
     public SettingsViewModel(
         Func<CancellationToken, Task<AppSettings>> readAppSettingsAsync,
         Func<AppSettings, CancellationToken, Task> saveAppSettingsAsync,
@@ -263,6 +349,12 @@ public sealed partial class SettingsViewModel : ObservableObject
         OpenDataFolderCommand = new RelayCommand(() => OpenFolder(_paths.Root));
         OpenLogsFolderCommand = new RelayCommand(() => OpenFolder(_paths.LogsDirectory));
         OpenConfigFolderCommand = new RelayCommand(() => OpenFolder(_paths.ConfigDirectory));
+    }
+
+    private static WujiClientPaths ToClientPaths(WindowsAgentPaths paths)
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+        return WujiClientPaths.FromRoot(paths.Root, paths.ChannelName);
     }
 
     public AppSettings AppSettings

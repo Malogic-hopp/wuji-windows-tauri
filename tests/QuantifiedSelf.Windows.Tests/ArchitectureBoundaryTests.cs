@@ -57,6 +57,110 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void Solution_IncludesLayeredTestProjects()
+    {
+        var solution = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "QuantifiedSelf.Windows.sln"));
+        string[] projectNames =
+        [
+            "QuantifiedSelf.Windows.Core.Tests",
+            "QuantifiedSelf.Windows.Application.Tests",
+            "QuantifiedSelf.Windows.Infrastructure.Tests",
+            "QuantifiedSelf.Windows.Client.Tests",
+            "QuantifiedSelf.Windows.App.Tests",
+            "QuantifiedSelf.Windows.Agent.Tests"
+        ];
+
+        foreach (var projectName in projectNames)
+        {
+            Assert.Contains(projectName, solution, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void LayeredTestProjects_HaveExpectedTargetsAndReferences()
+    {
+        var expectations = new[]
+        {
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.Core.Tests",
+                "net8.0",
+                ["QuantifiedSelf.Windows.Core"]),
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.Application.Tests",
+                "net8.0",
+                ["QuantifiedSelf.Windows.Application", "QuantifiedSelf.Windows.Core"]),
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.Infrastructure.Tests",
+                "net8.0-windows",
+                ["QuantifiedSelf.Windows.Core", "QuantifiedSelf.Windows.Infrastructure"]),
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.Client.Tests",
+                "net8.0-windows10.0.19041",
+                ["QuantifiedSelf.Windows.Client", "QuantifiedSelf.Windows.Core"]),
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.App.Tests",
+                "net8.0-windows10.0.19041",
+                ["QuantifiedSelf.Windows.App", "QuantifiedSelf.Windows.Core"]),
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.Agent.Tests",
+                "net8.0-windows",
+                ["QuantifiedSelf.Windows.Agent", "QuantifiedSelf.Windows.Core"])
+        };
+
+        foreach (var expectation in expectations)
+        {
+            var projectPath = GetTestProjectPath(expectation.ProjectName);
+            Assert.Equal(expectation.TargetFramework, GetTargetFramework(projectPath));
+            Assert.Equal(expectation.ProjectReferences, GetProjectReferences(projectPath));
+        }
+    }
+
+    [Theory]
+    [InlineData("QuantifiedSelf.Windows.Core.Tests")]
+    [InlineData("QuantifiedSelf.Windows.Application.Tests")]
+    public void HeadlessFastTestProjects_ContainNoUiFrameworkMarkers(string projectName)
+    {
+        var projectPath = GetTestProjectPath(projectName);
+        var projectDirectory = Path.GetDirectoryName(projectPath)!;
+        var files = Directory
+            .EnumerateFiles(projectDirectory, "*", SearchOption.AllDirectories)
+            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
+            .Where(path => !IsBuildOutput(path));
+
+        foreach (var file in files)
+        {
+            var content = File.ReadAllText(file);
+            foreach (var marker in UiSourceMarkers)
+            {
+                Assert.DoesNotContain(marker, content, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+    }
+
+    [Fact]
+    public void LegacyMixedTestProject_ExcludesMigratedClientAndAppFiles()
+    {
+        var projectPath = Path.Combine(
+            FindRepositoryRoot(),
+            "tests",
+            "QuantifiedSelf.Windows.Tests",
+            "QuantifiedSelf.Windows.Tests.csproj");
+        var document = XDocument.Load(projectPath);
+        var removedFiles = document
+            .Descendants("Compile")
+            .Select(element => element.Attribute("Remove")?.Value)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        Assert.Contains("AdaptiveLayoutTests.cs", removedFiles);
+        Assert.Contains("AgentExeLocatorTests.cs", removedFiles);
+        Assert.Contains("InsightsTests.cs", removedFiles);
+        Assert.Contains("TodayPageTests.cs", removedFiles);
+        Assert.Contains("WujiClientTests.cs", removedFiles);
+    }
+
+    [Fact]
     public void Application_ProjectTargetsNet8AndReferencesOnlyCore()
     {
         var projectPath = GetProjectPath(
@@ -264,6 +368,19 @@ public sealed class ArchitectureBoundaryTests
         Assert.Same(clientAssembly, typeof(WujiClientOptions).Assembly);
         Assert.Same(clientAssembly, typeof(WujiClientContext).Assembly);
         Assert.Same(clientAssembly, typeof(WujiClientPaths).Assembly);
+    }
+
+    [Fact]
+    public void ClientPublicPathContract_DoesNotExposeCorePathImplementation()
+    {
+        var publicMethods = typeof(WujiClientPaths)
+            .GetMethods(BindingFlags.Public | BindingFlags.Static | BindingFlags.Instance);
+
+        Assert.DoesNotContain(
+            publicMethods,
+            method => method.ReturnType.FullName == "QuantifiedSelf.Windows.Core.Paths.WindowsAgentPaths"
+                || method.GetParameters().Any(parameter =>
+                    parameter.ParameterType.FullName == "QuantifiedSelf.Windows.Core.Paths.WindowsAgentPaths"));
     }
 
     [Fact]
@@ -530,6 +647,9 @@ public sealed class ArchitectureBoundaryTests
     private static string GetProjectPath(string projectDirectory, string projectFileName)
         => Path.Combine(FindRepositoryRoot(), "src", projectDirectory, projectFileName);
 
+    private static string GetTestProjectPath(string projectName)
+        => Path.Combine(FindRepositoryRoot(), "tests", projectName, $"{projectName}.csproj");
+
     private static string GetTargetFramework(string projectPath)
     {
         var document = XDocument.Load(projectPath);
@@ -571,4 +691,9 @@ public sealed class ArchitectureBoundaryTests
 
         throw new DirectoryNotFoundException("Unable to locate the repository root from the test output directory.");
     }
+
+    private sealed record TestProjectExpectation(
+        string ProjectName,
+        string TargetFramework,
+        string[] ProjectReferences);
 }

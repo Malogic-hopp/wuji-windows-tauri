@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows10.0.19041</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="coverlet.collector" Version="6.0.0" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.App\QuantifiedSelf.Windows.App.csproj" />
+    <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\QuantifiedSelf.Windows.Tests\AdaptiveLayoutTests.cs" Link="AdaptiveLayoutTests.cs" />
+    <Compile Include="..\QuantifiedSelf.Windows.Tests\InsightsTests.cs" Link="InsightsTests.cs" />
+    <Compile Include="..\QuantifiedSelf.Windows.Tests\TodayPageTests.cs" Link="TodayPageTests.cs" />
+  </ItemGroup>
+
+</Project>

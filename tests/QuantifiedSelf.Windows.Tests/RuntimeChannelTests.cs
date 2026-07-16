@@ -13,9 +13,9 @@ using QuantifiedSelf.Windows.Tests.TestHelpers;
 
 namespace QuantifiedSelf.Windows.Tests;
 
-[Trait("Category", "Fast")]
 public sealed class RuntimeChannelTests
 {
+    [Trait("Category", "Fast")]
     [Fact]
     public void RuntimeChannel_DevUsesSeparateProductNames()
     {
@@ -28,6 +28,7 @@ public sealed class RuntimeChannelTests
         Assert.Equal("--channel dev", channel.AgentLaunchArguments);
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void WindowsAgentPaths_DevUsesSeparateLocalAppDataRoot()
     {
@@ -55,6 +56,7 @@ public sealed class RuntimeChannelTests
         }
     }
 
+    [Trait("Category", "Fast")]
     [Fact]
     public void AgentPipeName_DevDoesNotCollideWithDefaultPipe()
     {
@@ -66,6 +68,7 @@ public sealed class RuntimeChannelTests
         Assert.DoesNotContain(".prod.", defaultPipe.FullPipeName, StringComparison.Ordinal);
     }
 
+    [Trait("Category", "Fast")]
     [Fact]
     public void StartupLaunchOptions_ParsesChannelAndPreviewFlags()
     {
@@ -76,6 +79,7 @@ public sealed class RuntimeChannelTests
         Assert.True(options.ShowAgentConsole);
     }
 
+    [Trait("Category", "Fast")]
     [Fact]
     public void StartupCommandBuilder_DevCommandRequiresChannel()
     {
@@ -88,6 +92,7 @@ public sealed class RuntimeChannelTests
         Assert.False(builder.CommandsMatch(@"""C:\WUJI\QuantifiedSelf.Windows.App.exe"" --from-autostart --start-hidden"));
     }
 
+    [Trait("Category", "Fast")]
     [Fact]
     public void StartupCommandBuilder_DefaultDoesNotMatchDevCommand()
     {
@@ -97,6 +102,7 @@ public sealed class RuntimeChannelTests
         Assert.False(builder.CommandsMatch(devCommand));
     }
 
+    [Trait("Category", "Fast")]
     [Fact]
     public async Task StartupRegistrationService_DevUsesSeparateValueAndChannelCommand()
     {
@@ -119,6 +125,7 @@ public sealed class RuntimeChannelTests
             registry.ReadValue(channel.StartupRegistryValueName));
     }
 
+    [Trait("Category", "Integration")]
     [Fact]
     public void WindowsAgentProcessController_DevStartInfoPassesChannelToAgent()
     {

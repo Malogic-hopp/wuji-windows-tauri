@@ -44,5 +44,4 @@ public sealed class WujiClientPaths
     public static WujiClientPaths FromRoot(string root, string? channelName = null) =>
         new(new WindowsAgentPaths(root, channelName));
 
-    public static implicit operator WujiClientPaths(WindowsAgentPaths paths) => new(paths);
 }

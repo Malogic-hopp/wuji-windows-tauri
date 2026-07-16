@@ -1,11 +1,10 @@
 using System.IO;
-using QuantifiedSelf.Windows.App.Services;
 using QuantifiedSelf.Windows.Client.Agent;
 using QuantifiedSelf.Windows.Tests.TestHelpers;
 
 namespace QuantifiedSelf.Windows.Tests;
 
-[Trait("Category", "Fast")]
+[Trait("Category", "Integration")]
 public sealed class AgentExeLocatorTests
 {
     [Fact]

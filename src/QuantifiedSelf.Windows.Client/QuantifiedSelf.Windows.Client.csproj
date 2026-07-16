@@ -7,6 +7,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="QuantifiedSelf.Windows.Client.Tests" />
     <InternalsVisibleTo Include="QuantifiedSelf.Windows.Tests" />
   </ItemGroup>
 
