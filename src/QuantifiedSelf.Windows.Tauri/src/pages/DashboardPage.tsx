@@ -1,23 +1,56 @@
-import { ArrowRightIcon, ChartLineUpIcon } from '@phosphor-icons/react';
+import { useQuery } from '@tanstack/react-query';
+import { bridgeClient, toCommandError } from '../bridge/client';
+import {
+  activityOverviewQueryKey,
+  initializeQueryKey,
+} from '../bridge/queryInvalidation';
+import { DashboardView } from '../features/dashboard/DashboardView';
+import {
+  getOverviewRefreshInterval,
+  isOverviewEmpty,
+  type DashboardViewState,
+} from '../features/dashboard/dashboardModel';
+import { useDocumentVisibility } from '../features/dashboard/useDocumentVisibility';
 
 export default function DashboardPage() {
+  const visible = useDocumentVisibility();
+  const initialize = useQuery({
+    queryKey: initializeQueryKey,
+    queryFn: bridgeClient.initialize,
+  });
+  const overview = useQuery({
+    queryKey: activityOverviewQueryKey,
+    queryFn: bridgeClient.getActivityOverview,
+    enabled: initialize.isSuccess,
+    refetchInterval: getOverviewRefreshInterval(visible),
+    refetchIntervalInBackground: true,
+  });
+
+  const error = initialize.error ?? overview.error;
+  let state: DashboardViewState;
+  if (error) {
+    state = { kind: 'error', message: toCommandError(error).message };
+  } else if (initialize.isPending || overview.isPending || overview.data === undefined) {
+    state = { kind: 'loading' };
+  } else if (isOverviewEmpty(overview.data)) {
+    state = { kind: 'empty', updatedAt: overview.dataUpdatedAt };
+  } else {
+    state = { kind: 'ready', overview: overview.data, updatedAt: overview.dataUpdatedAt };
+  }
+
+  const refresh = async () => {
+    if (!initialize.isSuccess) {
+      const initialization = await initialize.refetch();
+      if (initialization.isError) return;
+    }
+    await overview.refetch();
+  };
+
   return (
-    <div className="page page-enter">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">今日概览</p>
-          <h1 tabIndex={-1}>把时间，看清楚一点</h1>
-          <p>当前阶段已接通本地 Bridge 与 Agent。真实活动摘要将在阶段 4 迁入。</p>
-        </div>
-      </header>
-      <section className="placeholder-card" aria-labelledby="dashboard-placeholder-title">
-        <div className="placeholder-card__icon"><ChartLineUpIcon size={24} aria-hidden="true" /></div>
-        <div>
-          <h2 id="dashboard-placeholder-title">Dashboard 数据切片尚未启用</h2>
-          <p>这里将复用现有 Application 层的概览用例，不会从浏览器直接读取 SQLite。</p>
-        </div>
-        <span className="phase-label">阶段 4 <ArrowRightIcon size={16} aria-hidden="true" /></span>
-      </section>
-    </div>
+    <DashboardView
+      state={state}
+      refreshing={initialize.isFetching || overview.isFetching}
+      onRefresh={() => { void refresh(); }}
+    />
   );
 }

@@ -218,6 +218,44 @@ public sealed class TauriArchitectureBoundaryTests
     }
 
     [Fact]
+    public void ReactDashboard_UsesTypedOverviewAndOwnsOnlyPresentationState()
+    {
+        var page = ReadTauriFile("src", "pages", "DashboardPage.tsx");
+        var view = ReadTauriFile("src", "features", "dashboard", "DashboardView.tsx");
+        var model = ReadTauriFile("src", "features", "dashboard", "dashboardModel.ts");
+
+        Assert.Contains("bridgeClient.getActivityOverview", page, StringComparison.Ordinal);
+        Assert.Contains("activityOverviewQueryKey", page, StringComparison.Ordinal);
+        Assert.Contains("kind: 'loading'", model, StringComparison.Ordinal);
+        Assert.Contains("kind: 'empty'", model, StringComparison.Ordinal);
+        Assert.Contains("kind: 'ready'", model, StringComparison.Ordinal);
+        Assert.Contains("kind: 'error'", model, StringComparison.Ordinal);
+        Assert.Contains("role=\"status\"", view, StringComparison.Ordinal);
+        Assert.Contains("role=\"alert\"", view, StringComparison.Ordinal);
+        Assert.DoesNotContain("invoke(", page, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("windowTitle", view, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("processName", view, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ReactDashboard_ReducesHiddenRefreshAndSupportsSystemAccessibilityModes()
+    {
+        var page = ReadTauriFile("src", "pages", "DashboardPage.tsx");
+        var model = ReadTauriFile("src", "features", "dashboard", "dashboardModel.ts");
+        var visibility = ReadTauriFile("src", "features", "dashboard", "useDocumentVisibility.ts");
+        var styles = ReadTauriFile("src", "design-system", "global.css");
+
+        Assert.Contains("refetchIntervalInBackground: true", page, StringComparison.Ordinal);
+        Assert.Contains("overviewVisibleRefreshInterval = 15_000", model, StringComparison.Ordinal);
+        Assert.Contains("overviewHiddenRefreshInterval = 60_000", model, StringComparison.Ordinal);
+        Assert.Contains("visibilitychange", visibility, StringComparison.Ordinal);
+        Assert.Contains("@media (prefers-reduced-motion: reduce)", styles, StringComparison.Ordinal);
+        Assert.Contains("@media (forced-colors: active)", styles, StringComparison.Ordinal);
+        Assert.Contains(".dashboard-state", styles, StringComparison.Ordinal);
+        Assert.Contains(".dashboard-module", styles, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TauriSource_DoesNotAccessSqliteNamedPipeRegistryOrWpf()
     {
         string[] forbiddenMarkers =
