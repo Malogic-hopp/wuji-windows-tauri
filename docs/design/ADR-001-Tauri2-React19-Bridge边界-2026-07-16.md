@@ -67,6 +67,16 @@ Bridge、Tauri 宿主和 Agent 是三个独立生命周期。Bridge 或 Tauri �
 
 Agent 内部对象必须投影为 schema 生成的安全 `AgentStatus`/`CommandResult`。合同不包含 PID、用户名、机器名、路径、Pipe 名、内部 request id、raw exception 或内部 runtime/health 对象。
 
+### 4.2 阶段 4A 合同扩展
+
+阶段 4A 增加一个只读白名单方法：
+
+| 方法 | `IWujiClient` 用例 | 副作用 | timeout |
+|---|---|---:|---:|
+| `activity.getOverview` | `Activity.Overview` 的今日摘要、Top Apps、最近会话 | 否 | 10 秒 |
+
+Bridge 同时启动三个彼此独立的 Overview 查询并聚合为一次响应，不直接访问 Apps/Sessions feature client 或底层存储。安全 DTO 只包含显示名、UTC 时间和时长/计数；不包含会话数据库 ID、进程名、窗口标题、路径、数据库信息或内部异常。应用显示名即使意外包含路径，也会在 Bridge mapper 中去掉目录部分并限制长度。
+
 ## 5. 协议与版本
 
 - JSON-RPC 版本固定为 `2.0`；
