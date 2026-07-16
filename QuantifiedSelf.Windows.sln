@@ -43,6 +43,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{60861D2E
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.Bridge.ContractGen", "tools\QuantifiedSelf.Windows.Bridge.ContractGen\QuantifiedSelf.Windows.Bridge.ContractGen.csproj", "{9BA0BB3D-5889-4488-916D-9364DDD312D5}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.DashboardParity", "tools\QuantifiedSelf.Windows.DashboardParity\QuantifiedSelf.Windows.DashboardParity.csproj", "{7959164A-FD97-4A96-ACE7-108D014F3A2C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -120,6 +122,10 @@ Global
 		{9BA0BB3D-5889-4488-916D-9364DDD312D5}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9BA0BB3D-5889-4488-916D-9364DDD312D5}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9BA0BB3D-5889-4488-916D-9364DDD312D5}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7959164A-FD97-4A96-ACE7-108D014F3A2C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7959164A-FD97-4A96-ACE7-108D014F3A2C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7959164A-FD97-4A96-ACE7-108D014F3A2C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7959164A-FD97-4A96-ACE7-108D014F3A2C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{E7172585-3E42-4EDF-8879-CD7986F11642} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
@@ -139,5 +145,6 @@ Global
 		{72E2460A-D55B-456A-90A9-2454D2C58525} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
 		{4B452E9B-6F03-4937-9717-682EB9165F28} = {8D34E531-5B72-40C1-81FD-8B659B4A4629}
 		{9BA0BB3D-5889-4488-916D-9364DDD312D5} = {60861D2E-B566-400D-B0EC-6E314A6F0769}
+		{7959164A-FD97-4A96-ACE7-108D014F3A2C} = {60861D2E-B566-400D-B0EC-6E314A6F0769}
 	EndGlobalSection
 EndGlobal

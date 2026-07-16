@@ -16,7 +16,9 @@
     "lint": "eslint . --max-warnings 0",
     "test": "vitest run",
     "test:watch": "vitest",
+    "bundle:check": "node ./scripts/check-bundle-budget.mjs",
     "smoke:bridge-recovery": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/bridge-recovery-smoke.ps1",
+    "smoke:dashboard-parity": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dashboard-parity-smoke.ps1",
     "contracts:generate": "dotnet run --project ../../tools/QuantifiedSelf.Windows.Bridge.ContractGen -- --write --repo-root ../..",
     "contracts:check": "dotnet run --project ../../tools/QuantifiedSelf.Windows.Bridge.ContractGen -- --check --repo-root ../..",
     "tauri": "tauri"
