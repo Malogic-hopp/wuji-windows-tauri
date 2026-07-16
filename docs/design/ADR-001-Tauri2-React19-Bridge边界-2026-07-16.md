@@ -53,6 +53,20 @@ Bridge、Tauri 宿主和 Agent 是三个独立生命周期。Bridge 或 Tauri �
 
 阶段 2 才加入 Agent status/start/pause/resume/stop；阶段 4、5 才加入 Dashboard 与 Settings。阶段 1 不提前暴露通用 method forwarding。
 
+### 4.1 阶段 2 合同扩展
+
+阶段 2 已按原决策增加以下白名单方法：
+
+| 方法 | `IWujiClient` 用例 | 副作用 | timeout |
+|---|---|---:|---:|
+| `agent.getStatus` | `Agent.Status.GetStatusAsync` | 否 | 5 秒 |
+| `agent.start` | `Agent.Process.StartAgentAsync` | 是 | 15 秒 |
+| `agent.pause` | `Agent.Control.RequestPauseAsync` | 是 | 10 秒 |
+| `agent.resume` | `Agent.Control.RequestResumeAsync` | 是 | 10 秒 |
+| `agent.stop` | `Agent.Process.StopAgentAsync` 统一停止用例 | 是 | 20 秒 |
+
+Agent 内部对象必须投影为 schema 生成的安全 `AgentStatus`/`CommandResult`。合同不包含 PID、用户名、机器名、路径、Pipe 名、内部 request id、raw exception 或内部 runtime/health 对象。
+
 ## 5. 协议与版本
 
 - JSON-RPC 版本固定为 `2.0`；
@@ -61,7 +75,7 @@ Bridge、Tauri 宿主和 Agent 是三个独立生命周期。Bridge 或 Tauri �
 - 单条消息默认最大 1 MiB；
 - request 使用字符串 id 和 correlation id；
 - 每个请求有宿主取消和超时；
-- 相同 request id + method 返回缓存响应，不重复执行幂等副作用；
+- 相同 request id + method 在 5 分钟去重窗口内返回缓存响应，不重复执行副作用；
 - 相同 request id 被用于不同 method 时拒绝；
 - 未完成 hello 前拒绝 initialize；
 - 不兼容 API major 立即返回稳定错误。
@@ -77,6 +91,7 @@ Bridge、Tauri 宿主和 Agent 是三个独立生命周期。Bridge 或 Tauri �
 | `payload_too_large` | validation | false | 超过消息上限 |
 | `method_not_found` | unsupported | false | 方法不在白名单 |
 | `handshake_required` | conflict | true | 尚未完成 hello |
+| `initialization_required` | conflict | true | Agent 方法调用前尚未 initialize |
 | `unsupported_api_version` | unsupported | false | API major 不兼容 |
 | `request_timeout` | transient | true | 请求超时 |
 | `request_cancelled` | transient | true | 宿主取消请求 |
@@ -143,7 +158,7 @@ Bridge 合同、错误和日志不得包含：
 
 正常退出：收到 shutdown 或 stdin EOF → 停止接收请求 → `IWujiClient.DisposeAsync()` → Bridge 退出。
 
-取消/异常：宿主取消、输入中断或未处理错误 → 取消 in-flight initialize → `IWujiClient.DisposeAsync()` → Bridge 退出。
+取消/异常：宿主取消、输入中断或未处理错误 → 取消 in-flight request → `IWujiClient.DisposeAsync()` → Bridge 退出。
 
 所有路径都禁止隐式调用 Agent stop、kill、pause 或其他控制命令。
 
@@ -169,7 +184,7 @@ Bridge 合同、错误和日志不得包含：
 - stdout purity 与 stderr 日志隔离；
 - shutdown/Dispose 不访问 Agent 控制。
 
-WPF 可见 UI、Agent 控制、Dashboard、Settings 与托盘行为本阶段不修改。自动回归之外的 WPF 手动 smoke 保留为阶段 2 引入 Agent Bridge 命令前的对照门禁；本阶段不会把未执行的 GUI 操作声明为已通过。
+阶段 2 已完成 Agent Bridge method、统一 stop、安全 DTO 和自动门禁：Release Build 0 warning / 0 error，Full 607/607。WPF 可见 UI、Dashboard、Settings 与托盘实现仍未修改。WPF dev GUI 对照 smoke 已由人工确认通过，覆盖 Agent 生命周期、页面刷新、托盘退出、UI/Agent 生命周期独立和 dev/prod 隔离；阶段 3 前置门禁已解除。
 
 ## 13. 后果
 
