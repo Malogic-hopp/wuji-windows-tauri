@@ -1,7 +1,7 @@
 # WUJI Application / Client SDK 抽取方案
 
 日期：2026-07-16  
-状态：阶段 0～6 已完成，阶段 7～8 待实施
+状态：阶段 0～7 已完成，阶段 8 待实施
 适用范围：`QuantifiedSelf.Windows.Core`、`Infrastructure`、`Agent`、`App`
 
 ## 1. 结论与目标
@@ -66,7 +66,7 @@ flowchart LR
     Agent --> Infrastructure
     Wpf --> Application
     Wpf --> Client
-    Wpf -. "过渡：Core 稳定领域合同" .-> Core
+    Wpf --> Core
     OtherDotNetUi --> Application
     OtherDotNetUi --> Client
     Bridge --> Application
@@ -83,7 +83,7 @@ flowchart LR
 - `Infrastructure` 可以引用 `Core + Application`，实现 Application 定义的端口；
 - `Client` 引用 `Core + Application + Infrastructure`，但不引用任何 UI 框架；
 - `Agent` 不引用 `App`、`Client` 或 UI 框架；
-- `App` 最终只引用 `Application + Client`，不直接引用 `Infrastructure` 或 `Agent`；阶段 6 已移除 Infrastructure/Agent，Core 作为 Application 公开签名使用的无 UI 领域合同暂时保留，待阶段 7 完成 DTO 投影后移除；
+- `App` 引用 `Application + Client + Core`，不直接引用 `Infrastructure` 或 `Agent`；阶段 7 确认 Core 中的设置、状态、事件和活动模型是稳定的无 UI 领域合同，不再为形式上的两项目引用重复投影同义 DTO；
 - 最终应移除 App 对 Agent 的 `ReferenceOutputAssembly="false"` 引用，App/Agent 的发布顺序由 solution 和 `publish.ps1` 负责；
 - `Application` 和 `Client` 的公开 API 中禁止出现 `System.Windows.*`、`System.Windows.Forms.*`、LiveCharts、Skia、`Dispatcher`、`Brush`、`Visibility`、`IValueConverter`、ViewModel 类型。
 
@@ -531,9 +531,11 @@ startup.unregister
 - 发布脚本继续独立发布 Agent 并复制到 `App/Agent/`；
 - 保留 Legacy/Preview 双 shell。
 
-本阶段退出结果：App 源码不再出现 `using QuantifiedSelf.Windows.Infrastructure.*`、`using QuantifiedSelf.Windows.Agent.*` 或底层 composition 类型；Client facade、生命周期、prod/dev channel 和 WPF feature-client 接线均有回归测试。直接 Core 引用尚未完全被 Application DTO 取代，这是阶段 7 的显式残留项；Core 本身为 `net8.0`、无 UI 框架依赖，不破坏当前无头边界或替代 UI 的可行性。
+本阶段退出结果：App 源码不再出现 `using QuantifiedSelf.Windows.Infrastructure.*`、`using QuantifiedSelf.Windows.Agent.*` 或底层 composition 类型；Client facade、生命周期、prod/dev channel 和 WPF feature-client 接线均有回归测试。阶段 7 已完成 Core 合同审计：App 的 Core 引用保留为稳定无 UI 领域合同，而不是底层实现依赖。
 
 ### 阶段 7：测试拆分与架构收口
+
+实施状态：已完成（2026-07-16），详见 `docs/devlog/Application-Client-SDK抽取阶段7完成说明-2026-07-16.md`。
 
 建议测试项目：
 
@@ -546,9 +548,9 @@ QuantifiedSelf.Windows.App.Tests              WPF / Wpf
 QuantifiedSelf.Windows.Agent.Tests            Agent lifecycle / Integration
 ```
 
-短期可保留现有单一测试项目，但所有新 Application 单元测试必须避免 WPF target/runtime。
+现有 `QuantifiedSelf.Windows.Tests` 暂时保留 `DataFlowTests`、架构门禁和尚未拆出的混合回归；独立 App/Client 文件已从该项目排除并由分层测试程序集编译。所有新 Core/Application 单元测试使用 `net8.0`，不加载 WPF target/runtime。
 
-退出条件：架构门禁、Fast、Integration、Wpf 和 full suite 全部通过；无旧 compatibility wrapper。
+退出结果：六个分层测试项目、架构门禁、Fast、Integration、Wpf 和 full suite 全部通过；Client 公开路径合同不再包含 `WindowsAgentPaths` 隐式转换，也没有公开的旧 forwarding wrapper。Legacy 大型回归通过 internal 测试构造入口继续运行，不进入 Client SDK 公共 API。
 
 ### 阶段 8：可选 Bridge 和替代前端试点
 
@@ -645,7 +647,7 @@ dotnet run --project .\src\QuantifiedSelf.Windows.App\QuantifiedSelf.Windows.App
 - App.csproj 不引用 Infrastructure 或 Agent；
 - App 中没有 SQLite、Named Pipe、runtime file、控制文件或 Agent executable 定位实现；
 - App 中没有统计/洞察核心算法；
-- App 只通过 `IWujiClient`/feature client 获取和修改数据；
+- App 只通过 `IWujiClient`/feature client 获取和修改数据；允许直接使用 Core 中稳定、无行为的领域合同，但不允许从 Core 组装路径、IPC、文件或进程实现；
 - Application 和 Client 没有 WPF/WinForms/LiveCharts/Skia 依赖；
 - ViewModel 可替换而不会改变 Agent、数据和应用用例；
 - WinUI/Avalonia 项目能够直接引用 Client SDK；
