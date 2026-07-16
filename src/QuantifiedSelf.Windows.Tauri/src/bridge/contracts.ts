@@ -1,4 +1,5 @@
 export type {
+  ActivityOverviewResult,
   AgentState,
   AgentStatus,
   BridgeError,

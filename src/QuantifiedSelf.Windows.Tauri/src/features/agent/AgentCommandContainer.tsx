@@ -5,10 +5,12 @@ import {
   type BridgeAvailabilityState,
 } from '../../bridge/availability';
 import { bridgeClient, toCommandError, type AgentCommand } from '../../bridge/client';
+import {
+  agentStatusQueryKey,
+  initializeQueryKey,
+  refreshQueriesAfterBridgeReady,
+} from '../../bridge/queryInvalidation';
 import { AgentCommandBar } from './AgentCommandBar';
-
-const initializeKey = ['app', 'initialize'] as const;
-const agentStatusKey = ['agent', 'status'] as const;
 
 export function AgentCommandContainer() {
   const queryClient = useQueryClient();
@@ -21,10 +23,7 @@ export function AgentCommandContainer() {
     void listenToBridgeAvailability((event) => {
       setAvailability(event.state);
       if (event.state === 'ready') {
-        void Promise.all([
-          queryClient.resetQueries({ queryKey: initializeKey }),
-          queryClient.resetQueries({ queryKey: agentStatusKey }),
-        ]);
+        void refreshQueriesAfterBridgeReady(queryClient);
       }
     }).then((stopListening) => {
       if (disposed) {
@@ -40,24 +39,23 @@ export function AgentCommandContainer() {
     };
   }, [queryClient]);
   const initialize = useQuery({
-    queryKey: initializeKey,
+    queryKey: initializeQueryKey,
     queryFn: bridgeClient.initialize,
   });
   const status = useQuery({
-    queryKey: agentStatusKey,
+    queryKey: agentStatusQueryKey,
     queryFn: bridgeClient.getAgentStatus,
     enabled: initialize.isSuccess,
     refetchInterval: 4_000,
   });
   const command = useMutation({
     mutationFn: (value: AgentCommand) => bridgeClient.runAgentCommand(value),
-    onSuccess: async () => queryClient.invalidateQueries({ queryKey: agentStatusKey }),
+    onSuccess: async () => queryClient.invalidateQueries({ queryKey: agentStatusQueryKey }),
   });
   const retry = useMutation({
     mutationFn: bridgeClient.retry,
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: initializeKey });
-      await queryClient.invalidateQueries({ queryKey: agentStatusKey });
+      await refreshQueriesAfterBridgeReady(queryClient);
     },
   });
 

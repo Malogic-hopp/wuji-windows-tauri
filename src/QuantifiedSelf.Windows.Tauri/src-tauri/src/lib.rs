@@ -14,8 +14,8 @@ use std::sync::{
 
 use bridge::{BridgeSupervisor, fixed_bridge_path};
 use commands::{
-    agent_get_status, agent_pause, agent_resume, agent_start, agent_stop, app_initialize,
-    bridge_retry,
+    activity_get_overview, agent_get_status, agent_pause, agent_resume, agent_start, agent_stop,
+    app_initialize, bridge_retry,
 };
 use tauri::{Manager, RunEvent};
 
@@ -36,6 +36,7 @@ pub fn run() {
             agent_pause,
             agent_resume,
             agent_stop,
+            activity_get_overview,
             bridge_retry,
         ])
         .build(tauri::generate_context!())
@@ -67,6 +68,7 @@ mod tests {
                 "agent_pause",
                 "agent_resume",
                 "agent_stop",
+                "activity_get_overview",
                 "bridge_retry",
             ]
         );

@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::{
     bridge::{BridgeSupervisor, CommandError},
-    contracts::{AgentStatus, ClientInitializeResult, CommandResult},
+    contracts::{ActivityOverviewResult, AgentStatus, ClientInitializeResult, CommandResult},
 };
 
 #[cfg(test)]
@@ -13,6 +13,7 @@ pub const COMMAND_WHITELIST: &[&str] = &[
     "agent_pause",
     "agent_resume",
     "agent_stop",
+    "activity_get_overview",
     "bridge_retry",
 ];
 
@@ -59,6 +60,13 @@ pub async fn agent_stop(
 }
 
 #[tauri::command]
+pub async fn activity_get_overview(
+    supervisor: State<'_, BridgeSupervisor>,
+) -> Result<ActivityOverviewResult, CommandError> {
+    supervisor.request("activity.getOverview").await
+}
+
+#[tauri::command]
 pub async fn bridge_retry(
     supervisor: State<'_, BridgeSupervisor>,
 ) -> Result<ClientInitializeResult, CommandError> {
@@ -71,7 +79,7 @@ mod tests {
 
     #[test]
     fn exposes_only_semantic_commands() {
-        assert_eq!(COMMAND_WHITELIST.len(), 7);
+        assert_eq!(COMMAND_WHITELIST.len(), 8);
         assert!(COMMAND_WHITELIST.iter().all(|command| {
             !command.contains("shell")
                 && !command.contains("file")

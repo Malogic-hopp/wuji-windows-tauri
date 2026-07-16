@@ -22,6 +22,7 @@ const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const RESTART_BACKOFF: Duration = Duration::from_millis(350);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
+const READ_ONLY_QUERY_TIMEOUT: Duration = Duration::from_secs(12);
 const STOP_TIMEOUT: Duration = Duration::from_secs(22);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const STABILITY_WINDOW: Duration = Duration::from_secs(30);
@@ -438,7 +439,7 @@ async fn run_session(
                                     fail_pending(&mut pending, CommandError::unavailable());
                                     return SessionEnd::Crashed(started_at.elapsed());
                                 }
-                                let timeout = if method == "agent.stop" { STOP_TIMEOUT } else { REQUEST_TIMEOUT };
+                                let timeout = request_timeout(method);
                                 pending.insert(id, PendingRequest {
                                     method,
                                     deadline: Instant::now() + timeout,
@@ -623,6 +624,14 @@ fn can_automatically_restart(previous_restarts: u8, uptime: Duration) -> bool {
     previous_restarts == 0 || uptime >= STABILITY_WINDOW
 }
 
+fn request_timeout(method: &str) -> Duration {
+    match method {
+        "activity.getOverview" => READ_ONLY_QUERY_TIMEOUT,
+        "agent.stop" => STOP_TIMEOUT,
+        _ => REQUEST_TIMEOUT,
+    }
+}
+
 fn fail_pending(pending: &mut HashMap<String, PendingRequest>, error: CommandError) {
     for (_, request) in pending.drain() {
         let _ = request.response_tx.send(Err(error.clone()));
@@ -684,6 +693,17 @@ mod tests {
     fn side_effect_timeout_is_not_retryable() {
         assert!(!CommandError::timeout("agent.start").retryable);
         assert!(CommandError::timeout("agent.getStatus").retryable);
+        assert!(CommandError::timeout("activity.getOverview").retryable);
+    }
+
+    #[test]
+    fn activity_overview_uses_the_bounded_read_only_timeout() {
+        assert_eq!(
+            request_timeout("activity.getOverview"),
+            READ_ONLY_QUERY_TIMEOUT
+        );
+        assert_eq!(READ_ONLY_QUERY_TIMEOUT, Duration::from_secs(12));
+        assert_eq!(request_timeout("agent.stop"), STOP_TIMEOUT);
     }
 
     #[test]

@@ -1,5 +1,10 @@
 import { invoke } from '@tauri-apps/api/core';
-import type { AgentStatus, ClientInitializeResult, CommandResult } from './contracts';
+import type {
+  ActivityOverviewResult,
+  AgentStatus,
+  ClientInitializeResult,
+  CommandResult,
+} from './contracts';
 
 export type AgentCommand = 'start' | 'pause' | 'resume' | 'stop';
 
@@ -10,19 +15,32 @@ export interface CommandError {
   readonly correlationId?: string;
 }
 
+export const commandWhitelist = {
+  initialize: 'app_initialize',
+  agentStatus: 'agent_get_status',
+  agentStart: 'agent_start',
+  agentPause: 'agent_pause',
+  agentResume: 'agent_resume',
+  agentStop: 'agent_stop',
+  activityOverview: 'activity_get_overview',
+  bridgeRetry: 'bridge_retry',
+} as const;
+
 const agentCommands: Record<AgentCommand, string> = {
-  start: 'agent_start',
-  pause: 'agent_pause',
-  resume: 'agent_resume',
-  stop: 'agent_stop',
+  start: commandWhitelist.agentStart,
+  pause: commandWhitelist.agentPause,
+  resume: commandWhitelist.agentResume,
+  stop: commandWhitelist.agentStop,
 };
 
 export const bridgeClient = {
-  initialize: () => invoke<ClientInitializeResult>('app_initialize'),
-  getAgentStatus: () => invoke<AgentStatus>('agent_get_status'),
+  initialize: () => invoke<ClientInitializeResult>(commandWhitelist.initialize),
+  getAgentStatus: () => invoke<AgentStatus>(commandWhitelist.agentStatus),
   runAgentCommand: (command: AgentCommand) =>
     invoke<CommandResult>(agentCommands[command]),
-  retry: () => invoke<ClientInitializeResult>('bridge_retry'),
+  getActivityOverview: () =>
+    invoke<ActivityOverviewResult>(commandWhitelist.activityOverview),
+  retry: () => invoke<ClientInitializeResult>(commandWhitelist.bridgeRetry),
 };
 
 export function toCommandError(error: unknown): CommandError {

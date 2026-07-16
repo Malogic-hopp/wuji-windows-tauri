@@ -160,6 +160,7 @@ public sealed class TauriArchitectureBoundaryTests
             "agent_pause",
             "agent_resume",
             "agent_stop",
+            "activity_get_overview",
             "bridge_retry"
         ];
 
@@ -171,6 +172,49 @@ public sealed class TauriArchitectureBoundaryTests
         Assert.DoesNotContain("channelName", client, StringComparison.Ordinal);
         Assert.DoesNotContain("dataRoot", client, StringComparison.Ordinal);
         Assert.DoesNotContain("execute(", client, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ActivityOverviewCommand_IsTypedPassThroughWithoutRustBusinessSemantics()
+    {
+        var commands = ReadTauriFile("src-tauri", "src", "commands", "mod.rs");
+        var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
+
+        Assert.Contains("pub async fn activity_get_overview", commands, StringComparison.Ordinal);
+        Assert.Contains("Result<ActivityOverviewResult, CommandError>", commands, StringComparison.Ordinal);
+        Assert.Contains("supervisor.request(\"activity.getOverview\").await", commands, StringComparison.Ordinal);
+        Assert.Contains("READ_ONLY_QUERY_TIMEOUT", supervisor, StringComparison.Ordinal);
+        Assert.Contains("\"activity.getOverview\" => READ_ONLY_QUERY_TIMEOUT", supervisor, StringComparison.Ordinal);
+
+        string[] forbiddenBusinessOperations =
+        [
+            "sort_by",
+            "sort_unstable",
+            ".sum(",
+            "total_duration_seconds +",
+            "active_duration_seconds +",
+            "actual_state =="
+        ];
+        foreach (var operation in forbiddenBusinessOperations)
+        {
+            Assert.DoesNotContain(operation, commands, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(operation, supervisor, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void BridgeReady_InvalidatesTheDashboardOverviewQuery()
+    {
+        var container = ReadTauriFile("src", "features", "agent", "AgentCommandContainer.tsx");
+        var invalidation = ReadTauriFile("src", "bridge", "queryInvalidation.ts");
+
+        Assert.Contains("event.state === 'ready'", container, StringComparison.Ordinal);
+        Assert.Contains("refreshQueriesAfterBridgeReady(queryClient)", container, StringComparison.Ordinal);
+        Assert.Contains("['activity', 'overview']", invalidation, StringComparison.Ordinal);
+        Assert.Contains(
+            "invalidateQueries({ queryKey: activityOverviewQueryKey })",
+            invalidation,
+            StringComparison.Ordinal);
     }
 
     [Fact]
