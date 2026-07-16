@@ -42,7 +42,7 @@ public sealed class BridgeContractTests
     }
 
     [Fact]
-    public void Schema_ContainsStageTwoMethodsAndStableErrors()
+    public void Schema_ContainsStageFourMethodsAndStableErrors()
     {
         var schemaPath = Path.Combine(
             FindRepositoryRoot(),
@@ -63,6 +63,7 @@ public sealed class BridgeContractTests
                 "agent.pause",
                 "agent.resume",
                 "agent.stop",
+                "activity.getOverview",
                 "bridge.shutdown"
             ],
             root.GetProperty("x-wuji-methods")
@@ -112,6 +113,99 @@ public sealed class BridgeContractTests
         {
             Assert.DoesNotContain(forbiddenField, generatedSource, StringComparison.Ordinal);
         }
+    }
+
+    [Fact]
+    public void ActivityOverviewContracts_ExposeOnlyApprovedDashboardFields()
+    {
+        Assert.Equal(
+            ["ActiveDurationSeconds", "DateUtc", "IdleDurationSeconds", "SessionCount", "TotalDurationSeconds", "UnknownDurationSeconds"],
+            typeof(ActivityOverviewSummary).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["ActiveDurationSeconds", "DisplayName", "IdleDurationSeconds", "LastUsedAtUtc", "SessionCount", "TotalDurationSeconds", "UnknownDurationSeconds"],
+            typeof(ActivityOverviewApp).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["ActiveDurationSeconds", "DisplayName", "EndedAtUtc", "IdleDurationSeconds", "StartedAtUtc", "TotalDurationSeconds", "UnknownDurationSeconds"],
+            typeof(ActivityOverviewSession).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["RecentSessions", "Summary", "TopApps"],
+            typeof(ActivityOverviewResult).GetProperties().Select(property => property.Name).Order().ToArray());
+
+        var activityContractSource = string.Join(
+            Environment.NewLine,
+            typeof(ActivityOverviewSummary).GetProperties().Select(property => property.Name)
+                .Concat(typeof(ActivityOverviewApp).GetProperties().Select(property => property.Name))
+                .Concat(typeof(ActivityOverviewSession).GetProperties().Select(property => property.Name)));
+        string[] forbiddenFields =
+        [
+            "WindowTitle",
+            "ProcessName",
+            "DatabasePath",
+            "DataRoot",
+            "ExecutablePath",
+            "Exception",
+            "StackTrace"
+        ];
+
+        foreach (var forbiddenField in forbiddenFields)
+        {
+            Assert.DoesNotContain(forbiddenField, activityContractSource, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var schemaPath = Path.Combine(
+            FindRepositoryRoot(),
+            "contracts",
+            "wuji-bridge",
+            "v1",
+            "bridge.schema.json");
+        using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+        var definitions = schema.RootElement.GetProperty("$defs");
+        Assert.Equal(
+            128,
+            definitions.GetProperty("ActivityOverviewApp")
+                .GetProperty("properties")
+                .GetProperty("displayName")
+                .GetProperty("maxLength")
+                .GetInt32());
+        Assert.Equal(
+            0,
+            definitions.GetProperty("ActivityOverviewSummary")
+                .GetProperty("properties")
+                .GetProperty("totalDurationSeconds")
+                .GetProperty("minimum")
+                .GetInt32());
+        Assert.Equal(
+            "date-time",
+            definitions.GetProperty("ActivityOverviewSession")
+                .GetProperty("properties")
+                .GetProperty("startedAtUtc")
+                .GetProperty("format")
+                .GetString());
+    }
+
+    [Fact]
+    public void ActivityOverviewHandler_UsesOnlyWujiClientOverviewAndExplicitSafeMapper()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var host = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "QuantifiedSelf.Windows.Client.Bridge",
+            "BridgeHost.cs"));
+        var mapper = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "QuantifiedSelf.Windows.Client.Bridge",
+            "BridgeActivityMapper.cs"));
+
+        Assert.Contains("_client.Activity.Overview", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("_client.Activity.Apps", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("_client.Activity.Sessions", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sqlite", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Infrastructure", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("WindowTitle", mapper, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("ProcessName", mapper, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Database", mapper, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

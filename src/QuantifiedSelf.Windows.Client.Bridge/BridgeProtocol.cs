@@ -16,6 +16,7 @@ internal static class BridgeProtocol
     public const string AgentPauseMethod = "agent.pause";
     public const string AgentResumeMethod = "agent.resume";
     public const string AgentStopMethod = "agent.stop";
+    public const string ActivityGetOverviewMethod = "activity.getOverview";
     public const string ShutdownMethod = "bridge.shutdown";
 
     public static readonly IReadOnlyList<string> Capabilities =
@@ -27,11 +28,15 @@ internal static class BridgeProtocol
         AgentPauseMethod,
         AgentResumeMethod,
         AgentStopMethod,
+        ActivityGetOverviewMethod,
         ShutdownMethod
     ];
 
     public static bool IsAgentMethod(string method) => method is
         AgentGetStatusMethod or AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod;
+
+    public static bool RequiresInitialization(string method) =>
+        IsAgentMethod(method) || method is ActivityGetOverviewMethod;
 
     public static bool IsSideEffectMethod(string method) => method is
         AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod;

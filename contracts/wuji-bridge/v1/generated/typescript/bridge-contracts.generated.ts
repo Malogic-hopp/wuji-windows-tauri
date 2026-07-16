@@ -3,6 +3,43 @@
 // API version: 1.0
 // Regenerate with: dotnet run --project tools/QuantifiedSelf.Windows.Bridge.ContractGen -- --write
 
+export type ActivityGetOverviewParams = Record<string, never>;
+
+export interface ActivityOverviewApp {
+  readonly displayName: string;
+  readonly totalDurationSeconds: number;
+  readonly activeDurationSeconds: number;
+  readonly idleDurationSeconds: number;
+  readonly unknownDurationSeconds: number;
+  readonly sessionCount: number;
+  readonly lastUsedAtUtc?: string;
+}
+
+export interface ActivityOverviewResult {
+  readonly summary: ActivityOverviewSummary;
+  readonly topApps: ReadonlyArray<ActivityOverviewApp>;
+  readonly recentSessions: ReadonlyArray<ActivityOverviewSession>;
+}
+
+export interface ActivityOverviewSession {
+  readonly displayName: string;
+  readonly startedAtUtc: string;
+  readonly endedAtUtc?: string;
+  readonly totalDurationSeconds: number;
+  readonly activeDurationSeconds: number;
+  readonly idleDurationSeconds: number;
+  readonly unknownDurationSeconds: number;
+}
+
+export interface ActivityOverviewSummary {
+  readonly dateUtc: string;
+  readonly totalDurationSeconds: number;
+  readonly activeDurationSeconds: number;
+  readonly idleDurationSeconds: number;
+  readonly unknownDurationSeconds: number;
+  readonly sessionCount: number;
+}
+
 export type AgentGetStatusParams = Record<string, never>;
 
 export type AgentPauseParams = Record<string, never>;

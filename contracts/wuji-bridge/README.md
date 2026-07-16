@@ -20,4 +20,12 @@ dotnet run --project .\tools\QuantifiedSelf.Windows.Bridge.ContractGen -- --chec
 - TypeScript：`contracts/wuji-bridge/v1/generated/typescript/bridge-contracts.generated.ts`；
 - Rust：`contracts/wuji-bridge/v1/generated/rust/bridge_contracts.generated.rs`。
 
-阶段 1 只包含 `bridge.hello`、`client.initialize` 和 `bridge.shutdown`。新增方法必须先修改 schema、重新生成三端类型、补合同/协议测试，再实现 Bridge handler。
+方法演进必须遵循：先修改 schema、重新生成三端类型、补合同/协议测试，再实现 Bridge handler。
+
+当前 v1 白名单包含：
+
+- Bridge 生命周期：`bridge.hello`、`client.initialize`、`bridge.shutdown`；
+- Agent 生命周期：`agent.getStatus`、`agent.start`、`agent.pause`、`agent.resume`、`agent.stop`；
+- Dashboard：`activity.getOverview`。
+
+`activity.getOverview` 只返回今日摘要、Top Apps 和最近会话的安全投影，不包含窗口标题、进程名、数据库 ID、路径或内部异常。

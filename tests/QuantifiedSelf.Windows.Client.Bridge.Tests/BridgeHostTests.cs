@@ -1,8 +1,10 @@
 using System.Text;
 using System.Text.Json;
+using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Client.Bridge.Generated;
 using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Models;
 using QuantifiedSelf.Windows.Core.Runtime;
 
 namespace QuantifiedSelf.Windows.Client.Bridge.Tests;
@@ -235,6 +237,141 @@ public sealed class BridgeHostTests
 
         Assert.Equal("initialization_required", Error(result.Responses[1]).GetProperty("code").GetString());
         Assert.Equal(0, client.AgentAccessCount);
+    }
+
+    [Fact]
+    public async Task ActivityMethodBeforeInitialize_IsRejectedWithoutAccessingActivity()
+    {
+        var client = new FakeWujiClient(activity: new FakeBridgeActivityClient());
+        var result = await RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("overview-1", BridgeProtocol.ActivityGetOverviewMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal("initialization_required", Error(result.Responses[1]).GetProperty("code").GetString());
+        Assert.Equal(0, client.ActivityAccessCount);
+    }
+
+    [Fact]
+    public async Task ActivityGetOverview_QueriesInParallelAndReturnsOnlySafeFields()
+    {
+        const string PrivatePath = "C:\\Users\\private\\apps\\Safe App.exe";
+        const string PrivateProcess = "private-process.exe";
+        const string PrivateWindowTitle = "Private document title";
+        var releaseQueries = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var allQueriesStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var startedCount = 0;
+        var activity = new FakeBridgeActivityClient
+        {
+            Summary = new DashboardSummary
+            {
+                DateUtc = new DateTime(2026, 7, 16, 0, 0, 0, DateTimeKind.Utc),
+                TotalDurationSeconds = 3600,
+                ActiveDurationSeconds = 3000,
+                IdleDurationSeconds = 500,
+                UnknownDurationSeconds = -100,
+                SessionCount = 4
+            },
+            TopApps =
+            [
+                new AppUsageSummary
+                {
+                    ProcessName = PrivateProcess,
+                    DisplayName = PrivatePath,
+                    TotalDurationSeconds = 1800,
+                    ActiveDurationSeconds = 1600,
+                    IdleDurationSeconds = -150,
+                    UnknownDurationSeconds = 50,
+                    SessionCount = 2,
+                    LastUsedAtUtc = new DateTime(2026, 7, 16, 8, 30, 0, DateTimeKind.Utc)
+                }
+            ],
+            RecentSessions =
+            [
+                new AppSession
+                {
+                    Id = 987654,
+                    ProcessName = PrivateProcess,
+                    DisplayName = "安全应用",
+                    WindowTitle = PrivateWindowTitle,
+                    StartedAtUtc = new DateTime(2026, 7, 16, 8, 0, 0, DateTimeKind.Utc),
+                    EndedAtUtc = new DateTime(2026, 7, 16, 8, 20, 0, DateTimeKind.Utc),
+                    TotalDurationSeconds = 1200,
+                    ActiveDurationSeconds = 1000,
+                    IdleDurationSeconds = 150,
+                    UnknownDurationSeconds = -50
+                }
+            ]
+        };
+
+        activity.SummaryHandler = cancellationToken => HoldAsync(activity.Summary, cancellationToken);
+        activity.TopAppsHandler = cancellationToken => HoldAsync(activity.TopApps, cancellationToken);
+        activity.RecentSessionsHandler = cancellationToken => HoldAsync(activity.RecentSessions, cancellationToken);
+
+        var client = new FakeWujiClient(activity: activity);
+        var runTask = RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("overview-1", BridgeProtocol.ActivityGetOverviewMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        await allQueriesStarted.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        releaseQueries.SetResult();
+        var result = await runTask;
+
+        var overview = Result(result.Responses[2]);
+        Assert.Equal(3600, overview.GetProperty("summary").GetProperty("totalDurationSeconds").GetInt64());
+        Assert.Equal(0, overview.GetProperty("summary").GetProperty("unknownDurationSeconds").GetInt64());
+        Assert.Equal("Safe App.exe", overview.GetProperty("topApps")[0].GetProperty("displayName").GetString());
+        Assert.Equal(0, overview.GetProperty("topApps")[0].GetProperty("idleDurationSeconds").GetInt64());
+        Assert.Equal("安全应用", overview.GetProperty("recentSessions")[0].GetProperty("displayName").GetString());
+        Assert.Equal("2026-07-16T08:00:00.0000000Z", overview.GetProperty("recentSessions")[0].GetProperty("startedAtUtc").GetString());
+        Assert.Equal(0, overview.GetProperty("recentSessions")[0].GetProperty("unknownDurationSeconds").GetInt64());
+        Assert.DoesNotContain(PrivatePath, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(PrivateProcess, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(PrivateWindowTitle, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("987654", result.RawOutput, StringComparison.Ordinal);
+        Assert.Equal(1, activity.SummaryCount);
+        Assert.Equal(1, activity.TopAppsCount);
+        Assert.Equal(1, activity.RecentSessionsCount);
+        Assert.Equal(1, client.ActivityAccessCount);
+        Assert.Equal(0, client.AgentAccessCount);
+
+        async Task<T> HoldAsync<T>(T value, CancellationToken cancellationToken)
+        {
+            if (Interlocked.Increment(ref startedCount) == 3)
+            {
+                allQueriesStarted.SetResult();
+            }
+
+            await releaseQueries.Task.WaitAsync(cancellationToken);
+            return value;
+        }
+    }
+
+    [Fact]
+    public async Task ActivityGetOverviewFailure_ReturnsSafeErrorWithoutInternalDetails()
+    {
+        const string Secret = "C:\\Users\\private\\activity.db Private window title";
+        var activity = new FakeBridgeActivityClient
+        {
+            SummaryHandler = _ => Task.FromException<DashboardSummary>(new IOException(Secret))
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(activity: activity),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("overview-1", BridgeProtocol.ActivityGetOverviewMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var error = Error(result.Responses[2]);
+        Assert.Equal("internal_error", error.GetProperty("code").GetString());
+        Assert.Equal("Bridge 暂时无法完成请求。", error.GetProperty("message").GetString());
+        Assert.DoesNotContain(Secret, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Secret, result.Log, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("method=activity.getOverview", result.Log, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -577,13 +714,16 @@ public sealed class BridgeHostTests
     {
         private readonly Func<CancellationToken, Task> _initialize;
         private readonly IAgentClient? _agent;
+        private readonly IActivityClient? _activity;
 
         public FakeWujiClient(
             Func<CancellationToken, Task>? initialize = null,
-            IAgentClient? agent = null)
+            IAgentClient? agent = null,
+            IActivityClient? activity = null)
         {
             _initialize = initialize ?? (_ => Task.CompletedTask);
             _agent = agent;
+            _activity = activity;
         }
 
         public int InitializeCount { get; private set; }
@@ -591,6 +731,8 @@ public sealed class BridgeHostTests
         public int DisposeCount { get; private set; }
 
         public int AgentAccessCount { get; private set; }
+
+        public int ActivityAccessCount { get; private set; }
 
         public IAgentClient Agent
         {
@@ -602,7 +744,15 @@ public sealed class BridgeHostTests
             }
         }
 
-        public IActivityClient Activity => throw new InvalidOperationException("Activity is not part of stage 1.");
+        public IActivityClient Activity
+        {
+            get
+            {
+                ActivityAccessCount++;
+                return _activity
+                    ?? throw new InvalidOperationException("Activity must not be accessed by this Bridge test.");
+            }
+        }
 
         public IDiagnosticsClient Diagnostics => throw new InvalidOperationException("Diagnostics is not part of stage 1.");
 

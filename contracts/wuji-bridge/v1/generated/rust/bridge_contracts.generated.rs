@@ -7,6 +7,56 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct ActivityGetOverviewParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityOverviewApp {
+    pub display_name: String,
+    pub total_duration_seconds: i64,
+    pub active_duration_seconds: i64,
+    pub idle_duration_seconds: i64,
+    pub unknown_duration_seconds: i64,
+    pub session_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_used_at_utc: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityOverviewResult {
+    pub summary: ActivityOverviewSummary,
+    pub top_apps: Vec<ActivityOverviewApp>,
+    pub recent_sessions: Vec<ActivityOverviewSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityOverviewSession {
+    pub display_name: String,
+    pub started_at_utc: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ended_at_utc: Option<String>,
+    pub total_duration_seconds: i64,
+    pub active_duration_seconds: i64,
+    pub idle_duration_seconds: i64,
+    pub unknown_duration_seconds: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityOverviewSummary {
+    pub date_utc: String,
+    pub total_duration_seconds: i64,
+    pub active_duration_seconds: i64,
+    pub idle_duration_seconds: i64,
+    pub unknown_duration_seconds: i64,
+    pub session_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AgentGetStatusParams {
 }
 

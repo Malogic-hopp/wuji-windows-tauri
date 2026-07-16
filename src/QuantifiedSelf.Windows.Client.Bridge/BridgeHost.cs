@@ -194,7 +194,7 @@ internal sealed class BridgeHost
                 retryable: true));
         }
 
-        if (BridgeProtocol.IsAgentMethod(request.Method) && !_initialized)
+        if (BridgeProtocol.RequiresInitialization(request.Method) && !_initialized)
         {
             return SerializeAndCache(request, BridgeProtocol.Failure(
                 request.Id,
@@ -229,6 +229,9 @@ internal sealed class BridgeHost
                     request,
                     requestCancellation.Token).ConfigureAwait(false),
                 BridgeProtocol.AgentStopMethod => await HandleAgentStopAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.ActivityGetOverviewMethod => await HandleActivityGetOverviewAsync(
                     request,
                     requestCancellation.Token).ConfigureAwait(false),
                 BridgeProtocol.ShutdownMethod => HandleShutdown(request),
@@ -367,6 +370,25 @@ internal sealed class BridgeHost
         return SerializeAndCache(request, BridgeProtocol.Success(
             request.Id,
             BridgeAgentMapper.ToStopResult(result)));
+    }
+
+    private async Task<ResponseOutcome> HandleActivityGetOverviewAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var overview = _client.Activity.Overview;
+        var summaryTask = overview.GetDashboardSummaryAsync(cancellationToken);
+        var topAppsTask = overview.GetTopAppsTodayAsync(limit: 5, cancellationToken: cancellationToken);
+        var recentSessionsTask = overview.GetRecentSessionsAsync(limit: 5, cancellationToken: cancellationToken);
+
+        await Task.WhenAll(summaryTask, topAppsTask, recentSessionsTask).ConfigureAwait(false);
+
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            BridgeActivityMapper.ToOverview(
+                await summaryTask.ConfigureAwait(false),
+                await topAppsTask.ConfigureAwait(false),
+                await recentSessionsTask.ConfigureAwait(false))));
     }
 
     private ResponseOutcome SerializeAndCache(

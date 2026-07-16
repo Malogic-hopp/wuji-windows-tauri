@@ -12,6 +12,7 @@
     "agent.pause",
     "agent.resume",
     "agent.stop",
+    "activity.getOverview",
     "bridge.shutdown"
   ],
   "x-wuji-error-codes": [
@@ -299,6 +300,159 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {}
+    },
+    "ActivityGetOverviewParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "ActivityOverviewSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dateUtc",
+        "totalDurationSeconds",
+        "activeDurationSeconds",
+        "idleDurationSeconds",
+        "unknownDurationSeconds",
+        "sessionCount"
+      ],
+      "properties": {
+        "dateUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "totalDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idleDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknownDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sessionCount": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ActivityOverviewApp": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "displayName",
+        "totalDurationSeconds",
+        "activeDurationSeconds",
+        "idleDurationSeconds",
+        "unknownDurationSeconds",
+        "sessionCount"
+      ],
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "totalDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idleDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknownDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "sessionCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "lastUsedAtUtc": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "ActivityOverviewSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "displayName",
+        "startedAtUtc",
+        "totalDurationSeconds",
+        "activeDurationSeconds",
+        "idleDurationSeconds",
+        "unknownDurationSeconds"
+      ],
+      "properties": {
+        "displayName": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "startedAtUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "endedAtUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "totalDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "activeDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "idleDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknownDurationSeconds": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ActivityOverviewResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "summary",
+        "topApps",
+        "recentSessions"
+      ],
+      "properties": {
+        "summary": {
+          "$ref": "#/$defs/ActivityOverviewSummary"
+        },
+        "topApps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActivityOverviewApp"
+          }
+        },
+        "recentSessions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ActivityOverviewSession"
+          }
+        }
+      }
     },
     "CommandResult": {
       "type": "object",

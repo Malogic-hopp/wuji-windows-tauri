@@ -9,6 +9,49 @@ using System.Text.Json;
 
 namespace QuantifiedSelf.Windows.Client.Bridge.Generated;
 
+public sealed class ActivityGetOverviewParams
+{
+}
+
+public sealed class ActivityOverviewApp
+{
+    public required string DisplayName { get; init; }
+    public required long TotalDurationSeconds { get; init; }
+    public required long ActiveDurationSeconds { get; init; }
+    public required long IdleDurationSeconds { get; init; }
+    public required long UnknownDurationSeconds { get; init; }
+    public required long SessionCount { get; init; }
+    public string? LastUsedAtUtc { get; init; }
+}
+
+public sealed class ActivityOverviewResult
+{
+    public required ActivityOverviewSummary Summary { get; init; }
+    public required IReadOnlyList<ActivityOverviewApp> TopApps { get; init; }
+    public required IReadOnlyList<ActivityOverviewSession> RecentSessions { get; init; }
+}
+
+public sealed class ActivityOverviewSession
+{
+    public required string DisplayName { get; init; }
+    public required string StartedAtUtc { get; init; }
+    public string? EndedAtUtc { get; init; }
+    public required long TotalDurationSeconds { get; init; }
+    public required long ActiveDurationSeconds { get; init; }
+    public required long IdleDurationSeconds { get; init; }
+    public required long UnknownDurationSeconds { get; init; }
+}
+
+public sealed class ActivityOverviewSummary
+{
+    public required string DateUtc { get; init; }
+    public required long TotalDurationSeconds { get; init; }
+    public required long ActiveDurationSeconds { get; init; }
+    public required long IdleDurationSeconds { get; init; }
+    public required long UnknownDurationSeconds { get; init; }
+    public required long SessionCount { get; init; }
+}
+
 public sealed class AgentGetStatusParams
 {
 }
