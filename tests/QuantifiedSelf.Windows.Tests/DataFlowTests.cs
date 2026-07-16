@@ -10335,7 +10335,8 @@ public sealed class DataFlowTests
         var statusService = AgentTestServices.CreateStatus(paths, new RuntimeStateStore(),
             new AgentHealthStateStore(), new AgentControlFileStore(), new WindowsAgentOptionsStore());
         var processService = AgentTestServices.CreateProcess(paths, new RuntimeStateStore(),
-            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance);
+            new AgentControlFileStore(), NullLogger<AgentProcessService>.Instance,
+            out var processController);
         var controlService = AgentTestServices.CreateControl(paths, new AgentControlFileStore(), statusService);
         var overviewService = ActivityTestServices.CreateOverview(paths);
         var diagService = ActivityTestServices.CreateDiagnostics(paths);
@@ -10351,7 +10352,10 @@ public sealed class DataFlowTests
 
         // AutoStartAgentWhenAppStarts=true + CanStart=true → should trigger auto-start
         Assert.True(viewModel.AutoStartAgentWasTriggered);
-        // VM should remain functional even if the Agent executable is absent
+        Assert.Equal(1, processController.StartCount);
+        Assert.Equal(0, processController.KillCount);
+        Assert.True(processController.Current?.IsRunning == true);
+        // VM should remain functional without starting an operating-system process.
         Assert.False(string.IsNullOrEmpty(viewModel.AgentStatusText));
     }
 

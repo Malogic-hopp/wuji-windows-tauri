@@ -61,14 +61,26 @@ internal static class AgentTestServices
         string? channelName = null)
     {
         _ = logger;
+        _ = showAgentConsole;
+        _ = channelName;
         var state = new FileAgentStateAdapter(
             paths, runtimeStateStore: runtimeStateStore, controlFileStore: controlFileStore);
-        var controller = new WindowsAgentProcessController(
-            paths,
-            runtimeStateStore,
-            NullLogger<WindowsAgentProcessController>.Instance,
-            showAgentConsole,
-            channelName);
+        var controller = new FakeAgentProcessController(paths, runtimeStateStore);
+        return new AgentProcessService(controller, state, state, transport);
+    }
+
+    public static AgentProcessService CreateProcess(
+        WindowsAgentPaths paths,
+        RuntimeStateStore runtimeStateStore,
+        AgentControlFileStore controlFileStore,
+        ILogger<AgentProcessService> logger,
+        out FakeAgentProcessController controller,
+        IAgentTransport? transport = null)
+    {
+        _ = logger;
+        var state = new FileAgentStateAdapter(
+            paths, runtimeStateStore: runtimeStateStore, controlFileStore: controlFileStore);
+        controller = new FakeAgentProcessController(paths, runtimeStateStore);
         return new AgentProcessService(controller, state, state, transport);
     }
 
@@ -132,6 +144,106 @@ internal static class AgentTestServices
             {
                 return null;
             }
+        }
+    }
+}
+
+internal sealed class FakeAgentProcessController : IAgentProcessController
+{
+    private readonly WindowsAgentPaths _paths;
+    private readonly RuntimeStateStore _runtimeStateStore;
+    private AgentProcessInfo? _current;
+
+    public FakeAgentProcessController(
+        WindowsAgentPaths paths,
+        RuntimeStateStore runtimeStateStore)
+    {
+        _paths = paths;
+        _runtimeStateStore = runtimeStateStore;
+    }
+
+    public int StartCount { get; private set; }
+
+    public int KillCount { get; private set; }
+
+    public AgentProcessInfo? Current => _current;
+
+    public Task<AgentProcessInfo> StartAgentAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        StartCount++;
+
+        if (_current?.IsRunning == true)
+        {
+            return Task.FromResult(_current);
+        }
+
+        _current = new AgentProcessInfo
+        {
+            ProcessId = 900_000 + StartCount,
+            IsRunning = true,
+            StartedAtUtc = DateTime.UtcNow,
+            Version = "test-fake"
+        };
+        return Task.FromResult(_current);
+    }
+
+    public Task KillAgentAsFallbackAsync(CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        KillCount++;
+
+        if (_current is not null)
+        {
+            _current = new AgentProcessInfo
+            {
+                ProcessId = _current.ProcessId,
+                IsRunning = false,
+                StartedAtUtc = _current.StartedAtUtc,
+                Version = _current.Version,
+                MachineName = _current.MachineName,
+                UserName = _current.UserName
+            };
+        }
+
+        return Task.CompletedTask;
+    }
+
+    public async Task<bool> IsAgentProcessRunningAsync(CancellationToken cancellationToken = default) =>
+        (await GetAgentProcessInfoAsync(cancellationToken))?.IsRunning == true;
+
+    public async Task<AgentProcessInfo?> GetAgentProcessInfoAsync(
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (_current is not null)
+        {
+            return _current;
+        }
+
+        var state = await _runtimeStateStore.ReadAsync(_paths.RuntimeStatePath, cancellationToken);
+        if (state is null || state.ProcessId <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(state.ProcessId);
+            return new AgentProcessInfo
+            {
+                ProcessId = state.ProcessId,
+                IsRunning = !process.HasExited,
+                StartedAtUtc = state.StartedAtUtc,
+                Version = state.Version,
+                MachineName = state.MachineName,
+                UserName = state.UserName
+            };
+        }
+        catch
+        {
+            return null;
         }
     }
 }

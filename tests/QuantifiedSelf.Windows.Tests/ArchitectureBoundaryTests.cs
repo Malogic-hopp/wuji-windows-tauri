@@ -55,6 +55,7 @@ public sealed class ArchitectureBoundaryTests
         Assert.Contains("QuantifiedSelf.Windows.Application", solution, StringComparison.Ordinal);
         Assert.Contains("QuantifiedSelf.Windows.Client", solution, StringComparison.Ordinal);
         Assert.Contains("QuantifiedSelf.Windows.Client.Bridge", solution, StringComparison.Ordinal);
+        Assert.Contains("QuantifiedSelf.Windows.Agent.Runtime", solution, StringComparison.Ordinal);
         Assert.Contains("QuantifiedSelf.Windows.Bridge.ContractGen", solution, StringComparison.Ordinal);
     }
 
@@ -115,7 +116,11 @@ public sealed class ArchitectureBoundaryTests
             new TestProjectExpectation(
                 "QuantifiedSelf.Windows.Agent.Tests",
                 "net8.0-windows",
-                ["QuantifiedSelf.Windows.Agent", "QuantifiedSelf.Windows.Core"])
+                [
+                    "QuantifiedSelf.Windows.Agent",
+                    "QuantifiedSelf.Windows.Agent.Runtime",
+                    "QuantifiedSelf.Windows.Core"
+                ])
         };
 
         foreach (var expectation in expectations)
@@ -169,6 +174,53 @@ public sealed class ArchitectureBoundaryTests
         Assert.Contains("InsightsTests.cs", removedFiles);
         Assert.Contains("TodayPageTests.cs", removedFiles);
         Assert.Contains("WujiClientTests.cs", removedFiles);
+    }
+
+    [Fact]
+    public void OrdinaryTestProjects_DoNotReferenceAgentExecutableProject()
+    {
+        var testsDirectory = Path.Combine(FindRepositoryRoot(), "tests");
+        var ordinaryProjects = Directory
+            .EnumerateFiles(testsDirectory, "*.csproj", SearchOption.AllDirectories)
+            .Where(path => !path.Contains(
+                $"{Path.DirectorySeparatorChar}QuantifiedSelf.Windows.Agent.Tests{Path.DirectorySeparatorChar}",
+                StringComparison.OrdinalIgnoreCase));
+
+        foreach (var projectPath in ordinaryProjects)
+        {
+            Assert.DoesNotContain(
+                "QuantifiedSelf.Windows.Agent",
+                GetProjectReferences(projectPath));
+        }
+    }
+
+    [Fact]
+    public void OrdinaryTestSources_DoNotStartOperatingSystemProcesses()
+    {
+        var testsDirectory = Path.Combine(FindRepositoryRoot(), "tests");
+        var forbiddenCall = string.Concat("Process", ".Start(");
+        var sourceFiles = Directory
+            .EnumerateFiles(testsDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains(
+                $"{Path.DirectorySeparatorChar}QuantifiedSelf.Windows.Agent.Tests{Path.DirectorySeparatorChar}",
+                StringComparison.OrdinalIgnoreCase))
+            .Where(path => !IsBuildOutput(path));
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            Assert.DoesNotContain(
+                forbiddenCall,
+                File.ReadAllText(sourceFile),
+                StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void LegacyMixedTestOutput_DoesNotContainAgentAppHost()
+    {
+        Assert.False(File.Exists(Path.Combine(
+            AppContext.BaseDirectory,
+            "QuantifiedSelf.Windows.Agent.exe")));
     }
 
     [Fact]
@@ -258,11 +310,36 @@ public sealed class ArchitectureBoundaryTests
             GetProjectReferences(projectPath));
     }
 
+    [Fact]
+    public void AgentRuntime_IsHeadlessLibraryWithNoExecutableAppHost()
+    {
+        var projectPath = GetProjectPath(
+            "QuantifiedSelf.Windows.Agent.Runtime",
+            "QuantifiedSelf.Windows.Agent.Runtime.csproj");
+
+        Assert.Equal("net8.0-windows", GetTargetFramework(projectPath));
+        Assert.Equal(
+            [
+                "QuantifiedSelf.Windows.Core",
+                "QuantifiedSelf.Windows.Infrastructure"
+            ],
+            GetProjectReferences(projectPath));
+
+        var document = XDocument.Load(projectPath);
+        var outputType = document
+            .Descendants("OutputType")
+            .Select(element => element.Value)
+            .SingleOrDefault();
+        Assert.True(string.IsNullOrWhiteSpace(outputType)
+            || string.Equals(outputType, "Library", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Theory]
     [InlineData("QuantifiedSelf.Windows.Application", "QuantifiedSelf.Windows.Application.csproj")]
     [InlineData("QuantifiedSelf.Windows.Client", "QuantifiedSelf.Windows.Client.csproj")]
     [InlineData("QuantifiedSelf.Windows.Infrastructure", "QuantifiedSelf.Windows.Infrastructure.csproj")]
     [InlineData("QuantifiedSelf.Windows.Client.Bridge", "QuantifiedSelf.Windows.Client.Bridge.csproj")]
+    [InlineData("QuantifiedSelf.Windows.Agent.Runtime", "QuantifiedSelf.Windows.Agent.Runtime.csproj")]
     public void HeadlessProjects_SourceAndProjectFilesContainNoUiFrameworkReferences(
         string projectDirectory,
         string projectFileName)
