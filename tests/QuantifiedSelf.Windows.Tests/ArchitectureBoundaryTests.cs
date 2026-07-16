@@ -54,6 +54,8 @@ public sealed class ArchitectureBoundaryTests
 
         Assert.Contains("QuantifiedSelf.Windows.Application", solution, StringComparison.Ordinal);
         Assert.Contains("QuantifiedSelf.Windows.Client", solution, StringComparison.Ordinal);
+        Assert.Contains("QuantifiedSelf.Windows.Client.Bridge", solution, StringComparison.Ordinal);
+        Assert.Contains("QuantifiedSelf.Windows.Bridge.ContractGen", solution, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -66,6 +68,7 @@ public sealed class ArchitectureBoundaryTests
             "QuantifiedSelf.Windows.Application.Tests",
             "QuantifiedSelf.Windows.Infrastructure.Tests",
             "QuantifiedSelf.Windows.Client.Tests",
+            "QuantifiedSelf.Windows.Client.Bridge.Tests",
             "QuantifiedSelf.Windows.App.Tests",
             "QuantifiedSelf.Windows.Agent.Tests"
         ];
@@ -97,6 +100,14 @@ public sealed class ArchitectureBoundaryTests
                 "QuantifiedSelf.Windows.Client.Tests",
                 "net8.0-windows10.0.19041",
                 ["QuantifiedSelf.Windows.Client", "QuantifiedSelf.Windows.Core"]),
+            new TestProjectExpectation(
+                "QuantifiedSelf.Windows.Client.Bridge.Tests",
+                "net8.0-windows10.0.19041",
+                [
+                    "QuantifiedSelf.Windows.Bridge.ContractGen",
+                    "QuantifiedSelf.Windows.Client",
+                    "QuantifiedSelf.Windows.Client.Bridge"
+                ]),
             new TestProjectExpectation(
                 "QuantifiedSelf.Windows.App.Tests",
                 "net8.0-windows10.0.19041",
@@ -191,6 +202,32 @@ public sealed class ArchitectureBoundaryTests
     }
 
     [Fact]
+    public void Bridge_ProjectTargetsWindowsAndReferencesOnlyClient()
+    {
+        var projectPath = GetProjectPath(
+            "QuantifiedSelf.Windows.Client.Bridge",
+            "QuantifiedSelf.Windows.Client.Bridge.csproj");
+
+        Assert.Equal("net8.0-windows10.0.19041", GetTargetFramework(projectPath));
+        Assert.Equal(
+            ["QuantifiedSelf.Windows.Client"],
+            GetProjectReferences(projectPath));
+    }
+
+    [Fact]
+    public void ContractGenerator_TargetsNet8AndHasNoProjectReferences()
+    {
+        var projectPath = Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "QuantifiedSelf.Windows.Bridge.ContractGen",
+            "QuantifiedSelf.Windows.Bridge.ContractGen.csproj");
+
+        Assert.Equal("net8.0", GetTargetFramework(projectPath));
+        Assert.Empty(GetProjectReferences(projectPath));
+    }
+
+    [Fact]
     public void App_ProjectReferencesOnlyPresentationContracts()
     {
         var projectPath = GetProjectPath(
@@ -225,6 +262,7 @@ public sealed class ArchitectureBoundaryTests
     [InlineData("QuantifiedSelf.Windows.Application", "QuantifiedSelf.Windows.Application.csproj")]
     [InlineData("QuantifiedSelf.Windows.Client", "QuantifiedSelf.Windows.Client.csproj")]
     [InlineData("QuantifiedSelf.Windows.Infrastructure", "QuantifiedSelf.Windows.Infrastructure.csproj")]
+    [InlineData("QuantifiedSelf.Windows.Client.Bridge", "QuantifiedSelf.Windows.Client.Bridge.csproj")]
     public void HeadlessProjects_SourceAndProjectFilesContainNoUiFrameworkReferences(
         string projectDirectory,
         string projectFileName)
@@ -552,6 +590,40 @@ public sealed class ArchitectureBoundaryTests
             "QuantifiedSelf.Windows.App");
         var sourceFiles = Directory
             .EnumerateFiles(appDirectory, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path));
+
+        foreach (var sourceFile in sourceFiles)
+        {
+            var source = File.ReadAllText(sourceFile);
+            foreach (var marker in forbiddenMarkers)
+            {
+                Assert.DoesNotContain(marker, source, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
+    public void BridgeSource_ContainsNoInfrastructureAgentAppOrUiReferences()
+    {
+        string[] forbiddenMarkers =
+        [
+            "QuantifiedSelf.Windows.Infrastructure",
+            "QuantifiedSelf.Windows.Agent",
+            "QuantifiedSelf.Windows.App",
+            "System.Windows",
+            "System.Windows.Forms",
+            "LiveChartsCore",
+            "SkiaSharp"
+        ];
+
+        var bridgeDirectory = Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.Client.Bridge");
+        var sourceFiles = Directory
+            .EnumerateFiles(bridgeDirectory, "*", SearchOption.AllDirectories)
+            .Where(path => path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".csproj", StringComparison.OrdinalIgnoreCase))
             .Where(path => !IsBuildOutput(path));
 
         foreach (var sourceFile in sourceFiles)
