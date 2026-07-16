@@ -686,7 +686,8 @@ public sealed class ArchitectureBoundaryTests
         [
             "QuantifiedSelf.Windows.Infrastructure",
             "QuantifiedSelf.Windows.Agent",
-            "QuantifiedSelf.Windows.App",
+            "QuantifiedSelf.Windows.App.",
+            "QuantifiedSelf.Windows.App\\",
             "System.Windows",
             "System.Windows.Forms",
             "LiveChartsCore",
@@ -739,6 +740,26 @@ public sealed class ArchitectureBoundaryTests
         AssertConstructorAccepts<SettingsViewModel, IAgentControlService>();
         AssertConstructorAccepts<RefreshService, IAgentStatusService>();
         AssertConstructorAccepts<RefreshService, IAgentProcessService>();
+    }
+
+    [Fact]
+    public void AgentStopOrchestration_IsOwnedByApplicationAndWpfUsesUnifiedMethod()
+    {
+        var stopMethod = typeof(IAgentProcessService).GetMethod(nameof(IAgentProcessService.StopAgentAsync));
+        Assert.NotNull(stopMethod);
+        Assert.Equal(typeof(Task<AgentStopResult>), stopMethod!.ReturnType);
+        Assert.Null(typeof(IAgentProcessService).GetMethod("StopAgentGracefullyAsync"));
+        Assert.Null(typeof(IAgentProcessService).GetMethod("KillAgentAsFallbackAsync"));
+
+        var viewModelSource = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "ViewModels",
+            "MainWindowViewModel.cs"));
+        Assert.Contains("_processService.StopAgentAsync()", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("StopAgentGracefullyAsync", viewModelSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("KillAgentAsFallbackAsync", viewModelSource, StringComparison.Ordinal);
     }
 
     [Fact]

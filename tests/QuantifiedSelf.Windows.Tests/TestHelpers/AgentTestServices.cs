@@ -166,6 +166,8 @@ internal sealed class FakeAgentProcessController : IAgentProcessController
 
     public int KillCount { get; private set; }
 
+    public bool KeepRunningAfterKill { get; set; }
+
     public AgentProcessInfo? Current => _current;
 
     public Task<AgentProcessInfo> StartAgentAsync(CancellationToken cancellationToken = default)
@@ -192,6 +194,11 @@ internal sealed class FakeAgentProcessController : IAgentProcessController
     {
         cancellationToken.ThrowIfCancellationRequested();
         KillCount++;
+
+        if (KeepRunningAfterKill)
+        {
+            return Task.CompletedTask;
+        }
 
         if (_current is not null)
         {

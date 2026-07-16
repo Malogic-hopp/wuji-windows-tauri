@@ -26,8 +26,7 @@ public interface IAgentControlService
 public interface IAgentProcessService
 {
     Task<AgentProcessInfo> StartAgentAsync(CancellationToken cancellationToken = default);
-    Task<bool> StopAgentGracefullyAsync(CancellationToken cancellationToken = default);
-    Task KillAgentAsFallbackAsync(CancellationToken cancellationToken = default);
+    Task<AgentStopResult> StopAgentAsync(CancellationToken cancellationToken = default);
     Task<bool> IsAgentProcessRunningAsync(CancellationToken cancellationToken = default);
     Task<AgentProcessInfo?> GetAgentProcessInfoAsync(CancellationToken cancellationToken = default);
 }

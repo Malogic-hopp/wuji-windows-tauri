@@ -1094,14 +1094,11 @@ public sealed partial class MainWindowViewModel : ObservableObject
         try
         {
             IsBusy = true;
-            var stopped = await _processService.StopAgentGracefullyAsync();
-            if (!stopped)
-            {
-                await _processService.KillAgentAsFallbackAsync();
-            }
-
+            var result = await _processService.StopAgentAsync();
             await RefreshAsync();
-            Messages.Add(stopped ? "Stop requested." : "Stop fallback used.");
+            Messages.Add(!result.IsStopped
+                ? "Stop did not complete."
+                : result.UsedKillFallback ? "Stop fallback used." : "Stop requested.");
         }
         catch (Exception ex)
         {

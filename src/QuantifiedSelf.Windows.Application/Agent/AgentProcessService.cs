@@ -30,6 +30,27 @@ public sealed class AgentProcessService : IAgentProcessService
     public Task<AgentProcessInfo> StartAgentAsync(CancellationToken cancellationToken = default) =>
         _processController.StartAgentAsync(cancellationToken);
 
+    public async Task<AgentStopResult> StopAgentAsync(CancellationToken cancellationToken = default)
+    {
+        var stoppedGracefully = await StopAgentGracefullyAsync(cancellationToken);
+        if (stoppedGracefully)
+        {
+            return new AgentStopResult
+            {
+                IsStopped = true,
+                UsedKillFallback = false
+            };
+        }
+
+        await KillAgentAsFallbackAsync(cancellationToken);
+        var isStillRunning = await IsAgentProcessRunningAsync(cancellationToken);
+        return new AgentStopResult
+        {
+            IsStopped = !isStillRunning,
+            UsedKillFallback = true
+        };
+    }
+
     public async Task<bool> StopAgentGracefullyAsync(CancellationToken cancellationToken = default)
     {
         var requestId = $"ipc-stop-{Guid.NewGuid():N}";
