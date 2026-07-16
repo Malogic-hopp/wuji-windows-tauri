@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="QuantifiedSelf.Windows.Agent.Tests" />
+    <InternalsVisibleTo Include="QuantifiedSelf.Windows.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
+    <ProjectReference Include="..\QuantifiedSelf.Windows.Infrastructure\QuantifiedSelf.Windows.Infrastructure.csproj" />
+  </ItemGroup>
+
+</Project>

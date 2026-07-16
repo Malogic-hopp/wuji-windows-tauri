@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Agent\QuantifiedSelf.Windows.Agent.csproj" />
+    <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Agent.Runtime\QuantifiedSelf.Windows.Agent.Runtime.csproj" />
     <ProjectReference Include="..\..\src\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj" />
   </ItemGroup>
 

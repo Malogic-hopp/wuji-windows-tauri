@@ -9,6 +9,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.App"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.Agent", "src\QuantifiedSelf.Windows.Agent\QuantifiedSelf.Windows.Agent.csproj", "{851AA084-3105-45C8-AD8B-B064634932E4}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.Agent.Runtime", "src\QuantifiedSelf.Windows.Agent.Runtime\QuantifiedSelf.Windows.Agent.Runtime.csproj", "{5E4D8B9D-3D46-4B66-AE09-E0E817F4926D}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.Core", "src\QuantifiedSelf.Windows.Core\QuantifiedSelf.Windows.Core.csproj", "{3E45DC3F-D26D-4131-AFF6-767FFBD1857D}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "QuantifiedSelf.Windows.Infrastructure", "src\QuantifiedSelf.Windows.Infrastructure\QuantifiedSelf.Windows.Infrastructure.csproj", "{74E654AC-1780-4156-A320-085B74F40956}"
@@ -58,6 +60,10 @@ Global
 		{851AA084-3105-45C8-AD8B-B064634932E4}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{851AA084-3105-45C8-AD8B-B064634932E4}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{851AA084-3105-45C8-AD8B-B064634932E4}.Release|Any CPU.Build.0 = Release|Any CPU
+		{5E4D8B9D-3D46-4B66-AE09-E0E817F4926D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{5E4D8B9D-3D46-4B66-AE09-E0E817F4926D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{5E4D8B9D-3D46-4B66-AE09-E0E817F4926D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{5E4D8B9D-3D46-4B66-AE09-E0E817F4926D}.Release|Any CPU.Build.0 = Release|Any CPU
 		{3E45DC3F-D26D-4131-AFF6-767FFBD1857D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{3E45DC3F-D26D-4131-AFF6-767FFBD1857D}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{3E45DC3F-D26D-4131-AFF6-767FFBD1857D}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -118,6 +124,7 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{E7172585-3E42-4EDF-8879-CD7986F11642} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
 		{851AA084-3105-45C8-AD8B-B064634932E4} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
+		{5E4D8B9D-3D46-4B66-AE09-E0E817F4926D} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
 		{3E45DC3F-D26D-4131-AFF6-767FFBD1857D} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
 		{74E654AC-1780-4156-A320-085B74F40956} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
 		{B37A9B7C-7080-4A15-A693-CC980E7C4391} = {5AD10CEE-08F2-4805-8E4E-0001AC6E31C3}
