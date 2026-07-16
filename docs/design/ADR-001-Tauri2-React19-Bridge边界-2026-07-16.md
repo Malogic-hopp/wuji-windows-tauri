@@ -89,6 +89,18 @@ Rust 将响应直接反序列化为 schema 生成的 `ActivityOverviewResult`。
 
 BridgeSupervisor 每次进入 `ready` 都发布带 generation 的固定 availability 事件。React 收到 `ready` 后使 `['activity', 'overview']` query 失效；手动重连成功也执行同一规则，避免继续展示旧 Bridge generation 的 Dashboard 缓存。失效只触发重新读取，不在 React 中重算业务数据。
 
+### 4.4 阶段 4C React Dashboard 状态与刷新
+
+React Dashboard 只通过 `bridgeClient.getActivityOverview()` 读取生成的 `ActivityOverviewResult`，不直接调用 `invoke`，也不接收路径、SQL、原始窗口标题或进程名。页面状态固定为：
+
+```text
+Loading | Empty | Ready | Error
+```
+
+Empty 仅在摘要的全部 duration/session count 为零且 Top Apps、最近会话都为空时成立。Ready 按 Bridge 返回顺序呈现 Top Apps，不在 TypeScript 重排；duration 的时/分/秒拆分和 UTC 到本地时间转换仅属于 locale-aware 显示，不改变业务数值。
+
+页面可见时 Overview 每 15 秒刷新；`document.visibilityState` 为 hidden 时降至 60 秒，并允许 background interval 继续以低频运行。手动刷新在已 initialize 时只重取 Overview；initialize 失败时先恢复 initialize 再查询。Loading 使用 polite status，Error 使用 alert 和安全错误文案，刷新完成通过 live region 通知读屏。原生 button、全局 focus-visible、forced-colors 和 prefers-reduced-motion 规则覆盖键盘、High Contrast 与减少动画要求。
+
 ## 5. 协议与版本
 
 - JSON-RPC 版本固定为 `2.0`；
