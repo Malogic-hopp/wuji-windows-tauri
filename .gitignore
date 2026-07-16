@@ -19,3 +19,4 @@ publish/release/
 ref/
 scripts/*.png
 .agents/
+.pnpm-store/
