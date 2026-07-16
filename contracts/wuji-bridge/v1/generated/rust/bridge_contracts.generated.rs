@@ -7,6 +7,60 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct AgentGetStatusParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentPauseParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentResumeParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStartParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentState {
+    NotRunning,
+    Starting,
+    Running,
+    Pausing,
+    Paused,
+    Resuming,
+    Stopping,
+    Stopped,
+    Stale,
+    Error,
+    Maintenance,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStatus {
+    pub actual_state: AgentState,
+    pub is_running: bool,
+    pub is_healthy: bool,
+    pub is_stale: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_heartbeat_utc: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_sample_utc: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentStopParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct BridgeError {
     pub code: String,
     pub message: String,
@@ -97,4 +151,17 @@ pub struct ClientInitializeResult {
     pub product_display_name: String,
     pub is_default_channel: bool,
     pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommandResult {
+    pub accepted: bool,
+    pub completed: bool,
+    pub actual_state: AgentState,
+    pub used_fallback: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<String>,
 }

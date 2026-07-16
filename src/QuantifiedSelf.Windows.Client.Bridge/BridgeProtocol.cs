@@ -11,14 +11,30 @@ internal static class BridgeProtocol
 
     public const string HelloMethod = "bridge.hello";
     public const string InitializeMethod = "client.initialize";
+    public const string AgentGetStatusMethod = "agent.getStatus";
+    public const string AgentStartMethod = "agent.start";
+    public const string AgentPauseMethod = "agent.pause";
+    public const string AgentResumeMethod = "agent.resume";
+    public const string AgentStopMethod = "agent.stop";
     public const string ShutdownMethod = "bridge.shutdown";
 
     public static readonly IReadOnlyList<string> Capabilities =
     [
         HelloMethod,
         InitializeMethod,
+        AgentGetStatusMethod,
+        AgentStartMethod,
+        AgentPauseMethod,
+        AgentResumeMethod,
+        AgentStopMethod,
         ShutdownMethod
     ];
+
+    public static bool IsAgentMethod(string method) => method is
+        AgentGetStatusMethod or AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod;
+
+    public static bool IsSideEffectMethod(string method) => method is
+        AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod;
 
     public static readonly JsonSerializerOptions SerializerOptions = new()
     {

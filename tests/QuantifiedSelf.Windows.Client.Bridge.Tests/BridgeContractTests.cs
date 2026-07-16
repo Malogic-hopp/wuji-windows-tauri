@@ -1,5 +1,6 @@
 using System.Text.Json;
 using QuantifiedSelf.Windows.Bridge.ContractGen;
+using QuantifiedSelf.Windows.Client.Bridge.Generated;
 
 namespace QuantifiedSelf.Windows.Client.Bridge.Tests;
 
@@ -41,7 +42,7 @@ public sealed class BridgeContractTests
     }
 
     [Fact]
-    public void Schema_ContainsOnlyStageOneMethodsAndStableErrors()
+    public void Schema_ContainsStageTwoMethodsAndStableErrors()
     {
         var schemaPath = Path.Combine(
             FindRepositoryRoot(),
@@ -54,7 +55,16 @@ public sealed class BridgeContractTests
 
         Assert.Equal("1.0", root.GetProperty("x-wuji-api-version").GetString());
         Assert.Equal(
-            ["bridge.hello", "client.initialize", "bridge.shutdown"],
+            [
+                "bridge.hello",
+                "client.initialize",
+                "agent.getStatus",
+                "agent.start",
+                "agent.pause",
+                "agent.resume",
+                "agent.stop",
+                "bridge.shutdown"
+            ],
             root.GetProperty("x-wuji-methods")
                 .EnumerateArray()
                 .Select(value => value.GetString())
@@ -64,6 +74,44 @@ public sealed class BridgeContractTests
             root.GetProperty("x-wuji-error-codes")
                 .EnumerateArray()
                 .Select(value => value.GetString()));
+        Assert.Contains(
+            "initialization_required",
+            root.GetProperty("x-wuji-error-codes")
+                .EnumerateArray()
+                .Select(value => value.GetString()));
+    }
+
+    [Fact]
+    public void AgentContracts_ExposeOnlyApprovedSafeFields()
+    {
+        Assert.Equal(
+            ["ActualState", "IsHealthy", "IsRunning", "IsStale", "LastHeartbeatUtc", "LastSampleUtc"],
+            typeof(AgentStatus).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["Accepted", "ActualState", "Completed", "ErrorCode", "Message", "UsedFallback"],
+            typeof(CommandResult).GetProperties().Select(property => property.Name).Order().ToArray());
+
+        var generatedSource = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.Client.Bridge",
+            "Generated",
+            "BridgeContracts.g.cs"));
+        string[] forbiddenFields =
+        [
+            "MachineName",
+            "UserName",
+            "ProcessId",
+            "FullPipeName",
+            "ExecutablePath",
+            "DatabasePath",
+            "DataRoot"
+        ];
+
+        foreach (var forbiddenField in forbiddenFields)
+        {
+            Assert.DoesNotContain(forbiddenField, generatedSource, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

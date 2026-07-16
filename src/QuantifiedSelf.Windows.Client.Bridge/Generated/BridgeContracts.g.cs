@@ -9,6 +9,51 @@ using System.Text.Json;
 
 namespace QuantifiedSelf.Windows.Client.Bridge.Generated;
 
+public sealed class AgentGetStatusParams
+{
+}
+
+public sealed class AgentPauseParams
+{
+}
+
+public sealed class AgentResumeParams
+{
+}
+
+public sealed class AgentStartParams
+{
+}
+
+public enum AgentState
+{
+    NotRunning,
+    Starting,
+    Running,
+    Pausing,
+    Paused,
+    Resuming,
+    Stopping,
+    Stopped,
+    Stale,
+    Error,
+    Maintenance,
+}
+
+public sealed class AgentStatus
+{
+    public required AgentState ActualState { get; init; }
+    public required bool IsRunning { get; init; }
+    public required bool IsHealthy { get; init; }
+    public required bool IsStale { get; init; }
+    public string? LastHeartbeatUtc { get; init; }
+    public string? LastSampleUtc { get; init; }
+}
+
+public sealed class AgentStopParams
+{
+}
+
 public sealed class BridgeError
 {
     public required string Code { get; init; }
@@ -87,4 +132,14 @@ public sealed class ClientInitializeResult
     public required string ProductDisplayName { get; init; }
     public required bool IsDefaultChannel { get; init; }
     public required IReadOnlyList<string> Capabilities { get; init; }
+}
+
+public sealed class CommandResult
+{
+    public required bool Accepted { get; init; }
+    public required bool Completed { get; init; }
+    public required AgentState ActualState { get; init; }
+    public required bool UsedFallback { get; init; }
+    public string? Message { get; init; }
+    public string? ErrorCode { get; init; }
 }

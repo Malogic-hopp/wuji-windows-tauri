@@ -7,6 +7,11 @@
   "x-wuji-methods": [
     "bridge.hello",
     "client.initialize",
+    "agent.getStatus",
+    "agent.start",
+    "agent.pause",
+    "agent.resume",
+    "agent.stop",
     "bridge.shutdown"
   ],
   "x-wuji-error-codes": [
@@ -15,6 +20,7 @@
     "payload_too_large",
     "method_not_found",
     "handshake_required",
+    "initialization_required",
     "unsupported_api_version",
     "request_timeout",
     "request_cancelled",
@@ -220,6 +226,107 @@
       "properties": {
         "accepted": {
           "type": "boolean"
+        }
+      }
+    },
+    "AgentState": {
+      "type": "string",
+      "enum": [
+        "not_running",
+        "starting",
+        "running",
+        "pausing",
+        "paused",
+        "resuming",
+        "stopping",
+        "stopped",
+        "stale",
+        "error",
+        "maintenance"
+      ]
+    },
+    "AgentGetStatusParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "AgentStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "actualState",
+        "isRunning",
+        "isHealthy",
+        "isStale"
+      ],
+      "properties": {
+        "actualState": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "isRunning": {
+          "type": "boolean"
+        },
+        "isHealthy": {
+          "type": "boolean"
+        },
+        "isStale": {
+          "type": "boolean"
+        },
+        "lastHeartbeatUtc": {
+          "type": "string"
+        },
+        "lastSampleUtc": {
+          "type": "string"
+        }
+      }
+    },
+    "AgentStartParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "AgentPauseParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "AgentResumeParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "AgentStopParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "CommandResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "accepted",
+        "completed",
+        "actualState",
+        "usedFallback"
+      ],
+      "properties": {
+        "accepted": {
+          "type": "boolean"
+        },
+        "completed": {
+          "type": "boolean"
+        },
+        "actualState": {
+          "$ref": "#/$defs/AgentState"
+        },
+        "usedFallback": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": "string"
+        },
+        "errorCode": {
+          "type": "string"
         }
       }
     }

@@ -153,7 +153,8 @@ internal sealed class BridgeHost
                 retryable: false));
         }
 
-        if (_completedRequests.TryGetValue(request.Id, out var cached))
+        if (_completedRequests.TryGetValue(request.Id, out var cached)
+            && DateTimeOffset.UtcNow - cached.CompletedAtUtc <= _options.CompletedRequestTtl)
         {
             if (string.Equals(cached.Method, request.Method, StringComparison.Ordinal))
             {
@@ -168,6 +169,7 @@ internal sealed class BridgeHost
                 BridgeErrorKind.Validation,
                 retryable: false));
         }
+        _completedRequests.Remove(request.Id);
 
         if (!BridgeProtocol.IsSupportedApiVersion(request.Meta.ApiVersion))
         {
@@ -192,8 +194,19 @@ internal sealed class BridgeHost
                 retryable: true));
         }
 
+        if (BridgeProtocol.IsAgentMethod(request.Method) && !_initialized)
+        {
+            return SerializeAndCache(request, BridgeProtocol.Failure(
+                request.Id,
+                request.Meta.CorrelationId,
+                "initialization_required",
+                "请先初始化 WUJI Client。",
+                BridgeErrorKind.Conflict,
+                retryable: true));
+        }
+
         using var requestCancellation = CancellationTokenSource.CreateLinkedTokenSource(hostCancellationToken);
-        requestCancellation.CancelAfter(_options.RequestTimeout);
+        requestCancellation.CancelAfter(_options.GetRequestTimeout(request.Method));
 
         try
         {
@@ -201,6 +214,21 @@ internal sealed class BridgeHost
             {
                 BridgeProtocol.HelloMethod => HandleHello(request),
                 BridgeProtocol.InitializeMethod => await HandleInitializeAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.AgentGetStatusMethod => await HandleAgentGetStatusAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.AgentStartMethod => await HandleAgentStartAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.AgentPauseMethod => await HandleAgentPauseAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.AgentResumeMethod => await HandleAgentResumeAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.AgentStopMethod => await HandleAgentStopAsync(
                     request,
                     requestCancellation.Token).ConfigureAwait(false),
                 BridgeProtocol.ShutdownMethod => HandleShutdown(request),
@@ -223,9 +251,11 @@ internal sealed class BridgeHost
                 request.Id,
                 request.Meta.CorrelationId,
                 "request_timeout",
-                "请求超时，请稍后重试。",
+                BridgeProtocol.IsSideEffectMethod(request.Method)
+                    ? "请求超时；命令可能已经执行，请先查询 Agent 状态。"
+                    : "请求超时，请稍后重试。",
                 BridgeErrorKind.Transient,
-                retryable: true));
+                retryable: !BridgeProtocol.IsSideEffectMethod(request.Method)));
         }
         catch
         {
@@ -288,6 +318,57 @@ internal sealed class BridgeHost
         return outcome with { ShouldShutdown = true };
     }
 
+    private async Task<ResponseOutcome> HandleAgentGetStatusAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var status = await _client.Agent.Status.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            BridgeAgentMapper.ToStatus(status)));
+    }
+
+    private async Task<ResponseOutcome> HandleAgentStartAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var process = await _client.Agent.Process.StartAgentAsync(cancellationToken).ConfigureAwait(false);
+        var status = await _client.Agent.Status.GetStatusAsync(cancellationToken).ConfigureAwait(false);
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            BridgeAgentMapper.ToStartResult(process, status)));
+    }
+
+    private async Task<ResponseOutcome> HandleAgentPauseAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _client.Agent.Control.RequestPauseAsync(cancellationToken).ConfigureAwait(false);
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            BridgeAgentMapper.ToCommandResult(result)));
+    }
+
+    private async Task<ResponseOutcome> HandleAgentResumeAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _client.Agent.Control.RequestResumeAsync(cancellationToken).ConfigureAwait(false);
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            BridgeAgentMapper.ToCommandResult(result)));
+    }
+
+    private async Task<ResponseOutcome> HandleAgentStopAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var result = await _client.Agent.Process.StopAgentAsync(cancellationToken).ConfigureAwait(false);
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            BridgeAgentMapper.ToStopResult(result)));
+    }
+
     private ResponseOutcome SerializeAndCache(
         BridgeRequestEnvelope request,
         BridgeResponseEnvelope response)
@@ -299,7 +380,10 @@ internal sealed class BridgeHost
             _completedRequests.Remove(oldestKey);
         }
 
-        _completedRequests[request.Id] = new CachedResponse(request.Method, outcome.SerializedResponse);
+        _completedRequests[request.Id] = new CachedResponse(
+            request.Method,
+            outcome.SerializedResponse,
+            DateTimeOffset.UtcNow);
         return outcome;
     }
 
@@ -405,7 +489,10 @@ internal sealed class BridgeHost
         return "unknown";
     }
 
-    private sealed record CachedResponse(string Method, string SerializedResponse);
+    private sealed record CachedResponse(
+        string Method,
+        string SerializedResponse,
+        DateTimeOffset CompletedAtUtc);
 
     private sealed record ResponseOutcome(string SerializedResponse, bool ShouldShutdown);
 }

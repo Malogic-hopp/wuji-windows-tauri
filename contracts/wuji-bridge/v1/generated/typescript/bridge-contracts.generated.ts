@@ -3,6 +3,38 @@
 // API version: 1.0
 // Regenerate with: dotnet run --project tools/QuantifiedSelf.Windows.Bridge.ContractGen -- --write
 
+export type AgentGetStatusParams = Record<string, never>;
+
+export type AgentPauseParams = Record<string, never>;
+
+export type AgentResumeParams = Record<string, never>;
+
+export type AgentStartParams = Record<string, never>;
+
+export type AgentState =
+  | 'not_running'
+  | 'starting'
+  | 'running'
+  | 'pausing'
+  | 'paused'
+  | 'resuming'
+  | 'stopping'
+  | 'stopped'
+  | 'stale'
+  | 'error'
+  | 'maintenance';
+
+export interface AgentStatus {
+  readonly actualState: AgentState;
+  readonly isRunning: boolean;
+  readonly isHealthy: boolean;
+  readonly isStale: boolean;
+  readonly lastHeartbeatUtc?: string;
+  readonly lastSampleUtc?: string;
+}
+
+export type AgentStopParams = Record<string, never>;
+
 export interface BridgeError {
   readonly code: string;
   readonly message: string;
@@ -65,4 +97,13 @@ export interface ClientInitializeResult {
   readonly productDisplayName: string;
   readonly isDefaultChannel: boolean;
   readonly capabilities: ReadonlyArray<string>;
+}
+
+export interface CommandResult {
+  readonly accepted: boolean;
+  readonly completed: boolean;
+  readonly actualState: AgentState;
+  readonly usedFallback: boolean;
+  readonly message?: string;
+  readonly errorCode?: string;
 }

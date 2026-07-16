@@ -1,6 +1,9 @@
 using System.Text;
 using System.Text.Json;
+using QuantifiedSelf.Windows.ApplicationLayer.Models;
 using QuantifiedSelf.Windows.Client.Bridge.Generated;
+using QuantifiedSelf.Windows.Core.Control;
+using QuantifiedSelf.Windows.Core.Runtime;
 
 namespace QuantifiedSelf.Windows.Client.Bridge.Tests;
 
@@ -221,6 +224,247 @@ public sealed class BridgeHostTests
     }
 
     [Fact]
+    public async Task AgentMethodBeforeInitialize_IsRejectedWithoutAccessingAgent()
+    {
+        var client = new FakeWujiClient(agent: new FakeBridgeAgentClient());
+        var result = await RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("status-1", BridgeProtocol.AgentGetStatusMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal("initialization_required", Error(result.Responses[1]).GetProperty("code").GetString());
+        Assert.Equal(0, client.AgentAccessCount);
+    }
+
+    [Theory]
+    [InlineData(AgentActualState.NotRunning, false, false, "not_running")]
+    [InlineData(AgentActualState.Running, true, false, "running")]
+    [InlineData(AgentActualState.Paused, true, false, "paused")]
+    [InlineData(AgentActualState.Stale, true, true, "stale")]
+    public async Task AgentGetStatus_MapsOnlySafeFields(
+        AgentActualState actualState,
+        bool isRunning,
+        bool isStale,
+        string expectedState)
+    {
+        var agent = new FakeBridgeAgentClient
+        {
+            CurrentStatus = new AgentStatusSnapshot
+            {
+                ActualState = actualState,
+                IsRunning = isRunning,
+                IsHealthy = !isStale,
+                IsStale = isStale,
+                ProcessText = "PID 12345 PRIVATE-MACHINE PrivateUser",
+                RuntimeState = new RuntimeState
+                {
+                    ProcessId = 12345,
+                    State = actualState,
+                    LastHeartbeatUtc = new DateTime(2026, 7, 16, 8, 30, 0, DateTimeKind.Utc),
+                    LastSampleUtc = new DateTime(2026, 7, 16, 8, 29, 0, DateTimeKind.Utc),
+                    MachineName = "PRIVATE-MACHINE",
+                    UserName = "PrivateUser"
+                }
+            }
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(agent: agent),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("status-1", BridgeProtocol.AgentGetStatusMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var status = Result(result.Responses[2]);
+        Assert.Equal(expectedState, status.GetProperty("actualState").GetString());
+        Assert.Equal(isRunning, status.GetProperty("isRunning").GetBoolean());
+        Assert.Equal(!isStale, status.GetProperty("isHealthy").GetBoolean());
+        Assert.Equal(isStale, status.GetProperty("isStale").GetBoolean());
+        Assert.Equal("2026-07-16T08:30:00.0000000Z", status.GetProperty("lastHeartbeatUtc").GetString());
+        Assert.DoesNotContain("PRIVATE-MACHINE", result.RawOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("PrivateUser", result.RawOutput, StringComparison.Ordinal);
+        Assert.DoesNotContain("12345", result.RawOutput, StringComparison.Ordinal);
+        Assert.Equal(1, agent.StatusCount);
+    }
+
+    [Fact]
+    public async Task AgentLifecycleMethods_CallClientUseCasesAndReturnCommandResults()
+    {
+        var agent = new FakeBridgeAgentClient
+        {
+            StopResult = new AgentStopResult
+            {
+                IsStopped = true,
+                UsedKillFallback = true
+            }
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(agent: agent),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("start-1", BridgeProtocol.AgentStartMethod),
+            Request("pause-1", BridgeProtocol.AgentPauseMethod),
+            Request("resume-1", BridgeProtocol.AgentResumeMethod),
+            Request("stop-1", BridgeProtocol.AgentStopMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal("running", Result(result.Responses[2]).GetProperty("actualState").GetString());
+        Assert.Equal("paused", Result(result.Responses[3]).GetProperty("actualState").GetString());
+        Assert.Equal("running", Result(result.Responses[4]).GetProperty("actualState").GetString());
+        Assert.Equal("stopped", Result(result.Responses[5]).GetProperty("actualState").GetString());
+        Assert.True(Result(result.Responses[5]).GetProperty("usedFallback").GetBoolean());
+        Assert.Equal(1, agent.StartCount);
+        Assert.Equal(1, agent.PauseCount);
+        Assert.Equal(1, agent.ResumeCount);
+        Assert.Equal(1, agent.StopCount);
+    }
+
+    [Fact]
+    public async Task DuplicateSideEffectRequest_ReturnsCachedResponseWithoutStartingAgain()
+    {
+        var agent = new FakeBridgeAgentClient();
+        var result = await RunHostAsync(
+            new FakeWujiClient(agent: agent),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("start-1", BridgeProtocol.AgentStartMethod),
+            Request("start-1", BridgeProtocol.AgentStartMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal(result.Responses[2].GetRawText(), result.Responses[3].GetRawText());
+        Assert.Equal(1, agent.StartCount);
+    }
+
+    [Fact]
+    public async Task SideEffectTimeout_IsNotRetryableAndDoesNotLeakInternalDetails()
+    {
+        const string Secret = "C:\\Users\\private\\agent_control.json";
+        var agent = new FakeBridgeAgentClient
+        {
+            PauseHandler = async cancellationToken =>
+            {
+                _ = Secret;
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException(Secret);
+            }
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(agent: agent),
+            new BridgeHostOptions
+            {
+                AgentPauseTimeout = TimeSpan.FromMilliseconds(25)
+            },
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("pause-1", BridgeProtocol.AgentPauseMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var error = Error(result.Responses[2]);
+        Assert.Equal("request_timeout", error.GetProperty("code").GetString());
+        Assert.False(error.GetProperty("data").GetProperty("retryable").GetBoolean());
+        Assert.DoesNotContain(Secret, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Secret, result.Log, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, agent.PauseCount);
+    }
+
+    [Fact]
+    public async Task IpcTimeoutCommandResult_IsSanitizedAndRequiresStatusReconciliation()
+    {
+        const string Secret = "C:\\Users\\private\\pipe-name";
+        var agent = new FakeBridgeAgentClient
+        {
+            PauseHandler = _ => Task.FromResult(new AgentCommandResult
+            {
+                Accepted = true,
+                Completed = false,
+                ActualState = AgentActualState.Running,
+                Message = Secret,
+                ErrorCode = "IpcTimeout"
+            })
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(agent: agent),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("pause-1", BridgeProtocol.AgentPauseMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var command = Result(result.Responses[2]);
+        Assert.Equal("ipc_timeout", command.GetProperty("errorCode").GetString());
+        Assert.False(command.GetProperty("completed").GetBoolean());
+        Assert.DoesNotContain(Secret, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ShutdownWhileAgentIsRunning_DisposesClientWithoutStoppingAgent()
+    {
+        var agent = new FakeBridgeAgentClient
+        {
+            CurrentStatus = new AgentStatusSnapshot
+            {
+                ActualState = AgentActualState.Running,
+                IsRunning = true
+            }
+        };
+        var client = new FakeWujiClient(agent: agent);
+
+        await RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal(1, client.DisposeCount);
+        Assert.Equal(0, agent.StopCount);
+    }
+
+    [Fact]
+    public async Task EndOfInputWhileAgentIsRunning_DisposesClientWithoutStoppingAgent()
+    {
+        var agent = new FakeBridgeAgentClient
+        {
+            CurrentStatus = new AgentStatusSnapshot
+            {
+                ActualState = AgentActualState.Running,
+                IsRunning = true
+            }
+        };
+        var client = new FakeWujiClient(agent: agent);
+        await using var input = Input(
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod));
+        await using var output = new MemoryStream();
+        var host = new BridgeHost(client, new BridgeHostOptions(), TextWriter.Null);
+
+        await host.RunAsync(input, output);
+
+        Assert.Equal(1, client.DisposeCount);
+        Assert.Equal(0, agent.StopCount);
+    }
+
+    [Fact]
+    public async Task AgentRequestFailure_ReturnsSafeErrorAndNeverStopsAgentDuringDisposal()
+    {
+        const string Secret = "C:\\Users\\private\\runtime_state.json";
+        var agent = new FakeBridgeAgentClient
+        {
+            StatusHandler = _ => throw new IOException(Secret)
+        };
+        var client = new FakeWujiClient(agent: agent);
+        var result = await RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("status-1", BridgeProtocol.AgentGetStatusMethod));
+
+        Assert.Equal("internal_error", Error(result.Responses[2]).GetProperty("code").GetString());
+        Assert.DoesNotContain(Secret, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(Secret, result.Log, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, client.DisposeCount);
+        Assert.Equal(0, agent.StopCount);
+    }
+
+    [Fact]
     public async Task InternalFailure_DoesNotLeakExceptionOrPathsToStdoutOrStderr()
     {
         const string Secret = "C:\\Users\\private\\runtime.json";
@@ -332,10 +576,14 @@ public sealed class BridgeHostTests
     private sealed class FakeWujiClient : IWujiClient
     {
         private readonly Func<CancellationToken, Task> _initialize;
+        private readonly IAgentClient? _agent;
 
-        public FakeWujiClient(Func<CancellationToken, Task>? initialize = null)
+        public FakeWujiClient(
+            Func<CancellationToken, Task>? initialize = null,
+            IAgentClient? agent = null)
         {
             _initialize = initialize ?? (_ => Task.CompletedTask);
+            _agent = agent;
         }
 
         public int InitializeCount { get; private set; }
@@ -349,7 +597,8 @@ public sealed class BridgeHostTests
             get
             {
                 AgentAccessCount++;
-                throw new InvalidOperationException("Agent must not be accessed by the stage 1 Bridge.");
+                return _agent
+                    ?? throw new InvalidOperationException("Agent must not be accessed by this Bridge test.");
             }
         }
 
