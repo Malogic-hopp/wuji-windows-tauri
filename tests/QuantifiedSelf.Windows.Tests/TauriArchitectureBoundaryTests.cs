@@ -104,6 +104,28 @@ public sealed class TauriArchitectureBoundaryTests
     }
 
     [Fact]
+    public void BridgeRecoverySmoke_KillsOnlyTheValidatedDevBridge()
+    {
+        using var package = JsonDocument.Parse(ReadTauriFile("package.json"));
+        var smokeCommand = package.RootElement
+            .GetProperty("scripts")
+            .GetProperty("smoke:bridge-recovery")
+            .GetString();
+        var smoke = ReadTauriFile("scripts", "bridge-recovery-smoke.ps1");
+
+        Assert.Equal(
+            "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/bridge-recovery-smoke.ps1",
+            smokeCommand);
+        Assert.Contains("Stop-ValidatedBridge", smoke, StringComparison.Ordinal);
+        Assert.Contains("$bridge.ParentProcessId -ne $TauriProcessId", smoke, StringComparison.Ordinal);
+        Assert.Contains("--channel\\s+dev", smoke, StringComparison.Ordinal);
+        Assert.Equal(1, smoke.Split("Stop-Process -Id", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("Stop-Process -Name", smoke, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Stop-Process -Id $agent", smoke, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GetTempPath", smoke, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RustAndTypeScript_ConsumeTheGeneratedContractSource()
     {
         var rust = ReadTauriFile("src-tauri", "src", "contracts.rs");
