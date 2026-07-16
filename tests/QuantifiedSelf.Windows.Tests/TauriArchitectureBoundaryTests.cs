@@ -256,6 +256,46 @@ public sealed class TauriArchitectureBoundaryTests
     }
 
     [Fact]
+    public void DashboardParitySmoke_UsesFixedDevBridgeAndEnforcesBundleBudgets()
+    {
+        using var package = JsonDocument.Parse(ReadTauriFile("package.json"));
+        var scripts = package.RootElement.GetProperty("scripts");
+        var smoke = ReadTauriFile("scripts", "dashboard-parity-smoke.ps1");
+        var budget = ReadTauriFile("scripts", "check-bundle-budget.mjs");
+
+        Assert.Equal("node ./scripts/check-bundle-budget.mjs", scripts.GetProperty("bundle:check").GetString());
+        Assert.Equal(
+            "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dashboard-parity-smoke.ps1",
+            scripts.GetProperty("smoke:dashboard-parity").GetString());
+        Assert.Contains("src-tauri\\sidecars\\bridge\\QuantifiedSelf.Windows.Client.Bridge.exe", smoke, StringComparison.Ordinal);
+        Assert.Contains("Compare the same dev data", smoke, StringComparison.Ordinal);
+        Assert.DoesNotContain("--channel prod", smoke, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Dashboard route chunk", budget, StringComparison.Ordinal);
+        Assert.Contains("Settings route chunk", budget, StringComparison.Ordinal);
+        Assert.Contains("gzipSync", budget, StringComparison.Ordinal);
+        Assert.Contains("rawKiB: 400", budget, StringComparison.Ordinal);
+        Assert.Contains("gzipKiB: 120", budget, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DashboardParityProbe_FixesDevChannelAndOmitsPrivateFieldsFromReports()
+    {
+        var probe = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "QuantifiedSelf.Windows.DashboardParity",
+            "Program.cs"));
+
+        Assert.Contains("private const string ChannelName = \"dev\"", probe, StringComparison.Ordinal);
+        Assert.Contains("Agent 正在运行", probe, StringComparison.Ordinal);
+        Assert.Contains("windowTitle", probe, StringComparison.Ordinal);
+        Assert.Contains("databasePath", probe, StringComparison.Ordinal);
+        Assert.Contains("EnumeratePropertyNames", probe, StringComparison.Ordinal);
+        Assert.DoesNotContain("AppendLine($\"| 数据库", probe, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AppendLine($\"| 窗口", probe, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void TauriSource_DoesNotAccessSqliteNamedPipeRegistryOrWpf()
     {
         string[] forbiddenMarkers =
