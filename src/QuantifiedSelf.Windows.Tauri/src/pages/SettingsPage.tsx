@@ -1,28 +1,217 @@
-import { GearSixIcon, ShieldCheckIcon } from '@phosphor-icons/react';
+import { useEffect, useRef, useState } from 'react';
+import { useBlocker } from 'react-router-dom';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import type { SettingsGetResult, SettingsSnapshot } from '../bridge/contracts';
+import { bridgeClient, toCommandError } from '../bridge/client';
+import {
+  initializeQueryKey,
+  refreshQueriesAfterSettingsSaved,
+  settingsQueryKey,
+} from '../bridge/queryInvalidation';
+import {
+  SettingsLoadError,
+  SettingsLoading,
+  SettingsView,
+  type SettingsSaveState,
+} from '../features/settings/SettingsView';
+import {
+  createSettingsDraft,
+  isSettingsDirty,
+  mapBridgeFieldErrors,
+  parseSettingsDraft,
+  settingsFieldId,
+  updateSettingsDraft,
+  type SettingsDraft,
+  type SettingsDraftValue,
+  type SettingsFieldErrors,
+  type SettingsFieldName,
+} from '../features/settings/settingsModel';
 
 export default function SettingsPage() {
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<SettingsDraft>();
+  const [baseline, setBaseline] = useState<SettingsDraft>();
+  const [defaults, setDefaults] = useState<SettingsDraft>();
+  const [fieldErrors, setFieldErrors] = useState<SettingsFieldErrors>({});
+  const [saveState, setSaveState] = useState<SettingsSaveState>('ready');
+  const [errorMessage, setErrorMessage] = useState<string>();
+  const formRef = useRef({ draft, baseline });
+  const lastSettingsUpdate = useRef(0);
+
+  const initialize = useQuery({ queryKey: initializeQueryKey, queryFn: bridgeClient.initialize });
+  const settings = useQuery({
+    queryKey: settingsQueryKey,
+    queryFn: bridgeClient.getSettings,
+    enabled: initialize.isSuccess,
+  });
+
+  useEffect(() => {
+    formRef.current = { draft, baseline };
+  }, [draft, baseline]);
+
+  useEffect(() => {
+    if (!settings.data || settings.dataUpdatedAt === lastSettingsUpdate.current) return;
+    lastSettingsUpdate.current = settings.dataUpdatedAt;
+    const nextDefaults = createSettingsDraft(settings.data.defaults);
+    setDefaults(nextDefaults);
+
+    const current = formRef.current;
+    if (current.draft && current.baseline && isSettingsDirty(current.draft, current.baseline)) return;
+    const next = createSettingsDraft(settings.data.settings);
+    setDraft(next);
+    setBaseline(next);
+  }, [settings.data, settings.dataUpdatedAt]);
+
+  const save = useMutation({
+    mutationFn: (snapshot: SettingsSnapshot) => bridgeClient.updateSettings(snapshot),
+    onSuccess: async (result) => {
+      const next = createSettingsDraft(result.settings);
+      setDraft(next);
+      setBaseline(next);
+      setFieldErrors({});
+      setErrorMessage(undefined);
+      setSaveState('success');
+      queryClient.setQueryData<SettingsGetResult>(settingsQueryKey, (current) => (
+        current ? { ...current, settings: result.settings } : current
+      ));
+      await refreshQueriesAfterSettingsSaved(queryClient);
+    },
+    onError: (error) => {
+      const commandError = toCommandError(error);
+      const nextFieldErrors = mapBridgeFieldErrors(commandError.fieldErrors);
+      setFieldErrors(nextFieldErrors);
+      setErrorMessage(commandError.message);
+      setSaveState('error');
+      focusFirstError(nextFieldErrors);
+    },
+  });
+
+  const dirty = Boolean(draft && baseline && isSettingsDirty(draft, baseline));
+  const blocker = useBlocker(dirty);
+
+  useEffect(() => {
+    const onBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [dirty]);
+
+  const submit = () => {
+    if (save.isPending || !draft || !dirty) return;
+    const parsed = parseSettingsDraft(draft);
+    if (!parsed.settings) {
+      setFieldErrors(parsed.fieldErrors);
+      setErrorMessage('请检查标记的字段后重试。');
+      setSaveState('error');
+      focusFirstError(parsed.fieldErrors);
+      return;
+    }
+    setFieldErrors({});
+    setErrorMessage(undefined);
+    setSaveState('saving');
+    save.mutate(parsed.settings);
+  };
+
+  const change = (field: SettingsFieldName, value: SettingsDraftValue) => {
+    setDraft((current) => current ? updateSettingsDraft(current, field, value) : current);
+    setFieldErrors((current) => {
+      const { [field]: removed, ...remaining } = current;
+      void removed;
+      return remaining;
+    });
+    setErrorMessage(undefined);
+    setSaveState('ready');
+  };
+
+  const retryLoad = async () => {
+    if (!initialize.isSuccess) {
+      const result = await initialize.refetch();
+      if (result.isError) return;
+    }
+    await settings.refetch();
+  };
+
+  const loadError = initialize.error ?? settings.error;
+  if (loadError && !draft) {
+    return <SettingsLoadError message={toCommandError(loadError).message} retrying={initialize.isFetching || settings.isFetching} onRetry={() => { void retryLoad(); }} />;
+  }
+  if (!draft || !baseline || !defaults) {
+    return <SettingsLoading />;
+  }
+
   return (
-    <div className="page page-enter">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">本地设置</p>
-          <h1 tabIndex={-1}>设置</h1>
-          <p>设置仍由 Core 与 Application 校验；前端只呈现经过批准的字段。</p>
+    <>
+      <SettingsView
+        draft={draft}
+        baseline={baseline}
+        dirty={dirty}
+        saveState={save.isPending ? 'saving' : settings.isError ? 'error' : saveState}
+        fieldErrors={fieldErrors}
+        errorMessage={errorMessage ?? (settings.error ? toCommandError(settings.error).message : undefined)}
+        onChange={change}
+        onSave={submit}
+        onRetrySave={submit}
+        onRestoreDefaults={() => {
+          setDraft(defaults);
+          setFieldErrors({});
+          setErrorMessage(undefined);
+          setSaveState('ready');
+        }}
+        onDiscard={() => {
+          setDraft(baseline);
+          setFieldErrors({});
+          setErrorMessage(undefined);
+          setSaveState('ready');
+        }}
+      />
+      {blocker.state === 'blocked' && (
+        <UnsavedChangesDialog
+          onStay={() => blocker.reset()}
+          onDiscard={() => blocker.proceed()}
+        />
+      )}
+    </>
+  );
+}
+
+function UnsavedChangesDialog({ onStay, onDiscard }: { readonly onStay: () => void; readonly onDiscard: () => void }) {
+  const stayButton = useRef<HTMLButtonElement>(null);
+  const discardButton = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    stayButton.current?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onStay();
+      } else if (event.key === 'Tab' && event.shiftKey && document.activeElement === stayButton.current) {
+        event.preventDefault();
+        discardButton.current?.focus();
+      } else if (event.key === 'Tab' && !event.shiftKey && document.activeElement === discardButton.current) {
+        event.preventDefault();
+        stayButton.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onStay]);
+
+  return (
+    <div className="settings-dialog-backdrop">
+      <section className="settings-dialog" role="alertdialog" aria-modal="true" aria-labelledby="settings-unsaved-title" aria-describedby="settings-unsaved-description">
+        <h2 id="settings-unsaved-title">保留未保存的修改？</h2>
+        <p id="settings-unsaved-description">离开设置页会丢弃当前修改。你可以留下继续保存，或确认放弃后离开。</p>
+        <div className="settings-dialog__actions">
+          <button ref={stayButton} className="button button--primary" type="button" onClick={onStay}>留下继续编辑</button>
+          <button ref={discardButton} className="button button--secondary" type="button" onClick={onDiscard}>放弃并离开</button>
         </div>
-      </header>
-      <div className="settings-grid">
-        <section className="placeholder-card" aria-labelledby="settings-placeholder-title">
-          <div className="placeholder-card__icon"><GearSixIcon size={24} aria-hidden="true" /></div>
-          <div>
-            <h2 id="settings-placeholder-title">设置表单将在阶段 5 接入</h2>
-            <p>保存、校验与 Agent reload 规则不会复制到 React。</p>
-          </div>
-        </section>
-        <aside className="privacy-note">
-          <ShieldCheckIcon size={20} aria-hidden="true" />
-          <div><strong>本地优先</strong><p>不启用远程脚本、外部字体或通用文件访问。</p></div>
-        </aside>
-      </div>
+      </section>
     </div>
   );
+}
+
+function focusFirstError(errors: SettingsFieldErrors) {
+  const firstField = Object.keys(errors)[0] as SettingsFieldName | undefined;
+  if (!firstField) return;
+  window.requestAnimationFrame(() => document.getElementById(settingsFieldId(firstField))?.focus());
 }

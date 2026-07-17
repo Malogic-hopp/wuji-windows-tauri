@@ -7,7 +7,7 @@ const assetsDirectory = fileURLToPath(new URL('../dist/assets/', import.meta.url
 const budgets = [
   { label: '主 bundle', pattern: /^index-[^.]+\.js$/, rawKiB: 400, gzipKiB: 120 },
   { label: 'Dashboard route chunk', pattern: /^DashboardPage-[^.]+\.js$/, rawKiB: 32, gzipKiB: 10 },
-  { label: 'Settings route chunk', pattern: /^SettingsPage-[^.]+\.js$/, rawKiB: 16, gzipKiB: 8 },
+  { label: 'Settings route chunk', pattern: /^SettingsPage-[^.]+\.js$/, rawKiB: 18, gzipKiB: 8 },
 ];
 
 const assetNames = await readdir(assetsDirectory);
