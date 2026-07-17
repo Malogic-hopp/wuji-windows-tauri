@@ -135,6 +135,47 @@ public sealed class TauriArchitectureBoundaryTests
     }
 
     [Fact]
+    public void GeneratedSettingsContracts_ExposeOnlyTheFrozenFiveAAllowlist()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var typescript = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "contracts",
+            "wuji-bridge",
+            "v1",
+            "generated",
+            "typescript",
+            "bridge-contracts.generated.ts"));
+        var rust = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "contracts",
+            "wuji-bridge",
+            "v1",
+            "generated",
+            "rust",
+            "bridge_contracts.generated.rs"));
+
+        foreach (var source in new[] { typescript, rust })
+        {
+            Assert.Contains("SettingsSnapshot", source, StringComparison.Ordinal);
+            Assert.Contains("SettingsUpdateParams", source, StringComparison.Ordinal);
+            Assert.Contains("sampling", source, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("mask", source, StringComparison.OrdinalIgnoreCase);
+            string[] forbidden =
+            [
+                "StartAppOnWindowsLogin", "start_app_on_windows_login", "startAppOnWindowsLogin",
+                "ExcludedProcesses", "excluded_processes", "excludedProcesses",
+                "ExcludedTitlePatterns", "excluded_title_patterns", "excludedTitlePatterns",
+                "DataRoot", "data_root", "dataRoot", "DatabasePath", "database_path", "databasePath"
+            ];
+            foreach (var marker in forbidden)
+            {
+                Assert.DoesNotContain(marker, source, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    [Fact]
     public void BridgeAvailabilityNotification_IsFixedAndContainsNoRuntimePaths()
     {
         var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
@@ -161,6 +202,8 @@ public sealed class TauriArchitectureBoundaryTests
             "agent_resume",
             "agent_stop",
             "activity_get_overview",
+            "settings_get",
+            "settings_update",
             "bridge_retry"
         ];
 
@@ -215,6 +258,49 @@ public sealed class TauriArchitectureBoundaryTests
             "invalidateQueries({ queryKey: activityOverviewQueryKey })",
             invalidation,
             StringComparison.Ordinal);
+        Assert.Contains("['settings', 'current']", invalidation, StringComparison.Ordinal);
+        Assert.Contains(
+            "invalidateQueries({ queryKey: settingsQueryKey })",
+            invalidation,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettingsCommands_AreTypedPassThroughWithDistinctTimeouts()
+    {
+        var commands = ReadTauriFile("src-tauri", "src", "commands", "mod.rs");
+        var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
+        var client = ReadTauriFile("src", "bridge", "client.ts");
+
+        Assert.Contains("pub async fn settings_get", commands, StringComparison.Ordinal);
+        Assert.Contains("Result<SettingsGetResult, CommandError>", commands, StringComparison.Ordinal);
+        Assert.Contains("supervisor.request(\"settings.get\").await", commands, StringComparison.Ordinal);
+        Assert.Contains("pub async fn settings_update", commands, StringComparison.Ordinal);
+        Assert.Contains("request: SettingsUpdateParams", commands, StringComparison.Ordinal);
+        Assert.Contains("Result<SettingsUpdateResult, CommandError>", commands, StringComparison.Ordinal);
+        Assert.Contains(
+            ".request_with_params(\"settings.update\", request)",
+            commands,
+            StringComparison.Ordinal);
+        Assert.Contains("\"settings.get\" => SETTINGS_READ_TIMEOUT", supervisor, StringComparison.Ordinal);
+        Assert.Contains("\"settings.update\" => SETTINGS_UPDATE_TIMEOUT", supervisor, StringComparison.Ordinal);
+        Assert.Contains("invoke<SettingsGetResult>(commandWhitelist.settingsGet)", client, StringComparison.Ordinal);
+        Assert.Contains("invoke<SettingsUpdateResult>(commandWhitelist.settingsUpdate, { request })", client, StringComparison.Ordinal);
+
+        string[] forbiddenBusinessSemantics =
+        [
+            "RefreshIntervalSecondsMin",
+            "SamplingIntervalSecondsMin",
+            "RetentionDaysMax",
+            "default_settings",
+            "merge_settings",
+            "validate_settings"
+        ];
+        foreach (var semantic in forbiddenBusinessSemantics)
+        {
+            Assert.DoesNotContain(semantic, commands, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(semantic, supervisor, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
@@ -256,6 +342,69 @@ public sealed class TauriArchitectureBoundaryTests
     }
 
     [Fact]
+    public void ReactSettings_UsesOnlyTypedClientCommandsAndPreservesUnsavedWork()
+    {
+        var page = ReadTauriFile("src", "pages", "SettingsPage.tsx");
+        var view = ReadTauriFile("src", "features", "settings", "SettingsView.tsx");
+        var model = ReadTauriFile("src", "features", "settings", "settingsModel.ts");
+
+        Assert.Contains("bridgeClient.getSettings", page, StringComparison.Ordinal);
+        Assert.Contains("bridgeClient.updateSettings", page, StringComparison.Ordinal);
+        Assert.Contains("settingsQueryKey", page, StringComparison.Ordinal);
+        Assert.Contains("useBlocker(dirty)", page, StringComparison.Ordinal);
+        Assert.Contains("beforeunload", page, StringComparison.Ordinal);
+        Assert.Contains("save.isPending || !draft || !dirty", page, StringComparison.Ordinal);
+        Assert.Contains("SettingsLoading", view, StringComparison.Ordinal);
+        Assert.Contains("saveState === 'saving'", view, StringComparison.Ordinal);
+        Assert.Contains("saveState === 'success'", view, StringComparison.Ordinal);
+        Assert.Contains("saveState === 'error'", view, StringComparison.Ordinal);
+        Assert.Contains("aria-invalid", view, StringComparison.Ordinal);
+        Assert.Contains("aria-describedby", view, StringComparison.Ordinal);
+        Assert.Contains("role=\"alertdialog\"", page, StringComparison.Ordinal);
+        Assert.Contains("Intl.NumberFormat", model, StringComparison.Ordinal);
+        Assert.Contains("refreshQueriesAfterSettingsSaved(queryClient)", page, StringComparison.Ordinal);
+
+        string[] forbiddenAccess =
+        [
+            "invoke(",
+            "readTextFile",
+            "writeTextFile",
+            "localStorage",
+            "@tauri-apps/plugin-fs",
+            "@tauri-apps/plugin-sql",
+            "Database.load",
+            "reg.exe",
+            "databasePath"
+        ];
+        foreach (var token in forbiddenAccess)
+        {
+            Assert.DoesNotContain(token, page, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(token, view, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(token, model, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    [Fact]
+    public void ReactSettings_UsesCoreDefaultsAndKeepsBusinessValidationOutOfReact()
+    {
+        var page = ReadTauriFile("src", "pages", "SettingsPage.tsx");
+        var model = ReadTauriFile("src", "features", "settings", "settingsModel.ts");
+        var css = ReadTauriFile("src", "design-system", "global.css");
+
+        Assert.Contains("settings.data.defaults", page, StringComparison.Ordinal);
+        Assert.Contains("parseSettingsDraft", page, StringComparison.Ordinal);
+        Assert.Contains("Number.isSafeInteger", model, StringComparison.Ordinal);
+        Assert.DoesNotContain("RefreshIntervalSecondsMin", model, StringComparison.Ordinal);
+        Assert.DoesNotContain("SamplingIntervalSecondsMin", model, StringComparison.Ordinal);
+        Assert.DoesNotContain("RetentionDaysMax", model, StringComparison.Ordinal);
+        Assert.DoesNotContain("mergeSettings", model, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("@media (prefers-reduced-motion: reduce)", css, StringComparison.Ordinal);
+        Assert.Contains("@media (forced-colors: active)", css, StringComparison.Ordinal);
+        Assert.Contains(".settings-section", css, StringComparison.Ordinal);
+        Assert.Contains(".settings-number-control:has(input[aria-invalid=\"true\"])", css, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void DashboardParitySmoke_UsesFixedDevBridgeAndEnforcesBundleBudgets()
     {
         using var package = JsonDocument.Parse(ReadTauriFile("package.json"));
@@ -293,6 +442,40 @@ public sealed class TauriArchitectureBoundaryTests
         Assert.Contains("EnumeratePropertyNames", probe, StringComparison.Ordinal);
         Assert.DoesNotContain("AppendLine($\"| 数据库", probe, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("AppendLine($\"| 窗口", probe, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void SettingsParitySmoke_ProtectsProdAndRestoresDevSettings()
+    {
+        using var package = JsonDocument.Parse(ReadTauriFile("package.json"));
+        var scripts = package.RootElement.GetProperty("scripts");
+        var smoke = ReadTauriFile("scripts", "settings-parity-smoke.ps1");
+        var probe = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "tools",
+            "QuantifiedSelf.Windows.SettingsParity",
+            "Program.cs"));
+
+        Assert.Equal(
+            "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/settings-parity-smoke.ps1",
+            scripts.GetProperty("smoke:settings-parity").GetString());
+        Assert.Contains("src-tauri\\sidecars\\bridge\\QuantifiedSelf.Windows.Client.Bridge.exe", smoke, StringComparison.Ordinal);
+        Assert.Contains("Compare WPF and Tauri against protected dev settings", smoke, StringComparison.Ordinal);
+        Assert.Contains("--data-root $workspaceRoot", smoke, StringComparison.Ordinal);
+        Assert.Contains("settings-parity-workspace-", smoke, StringComparison.Ordinal);
+        Assert.DoesNotContain("--channel prod", smoke, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains("private const string ChannelName = \"dev\"", probe, StringComparison.Ordinal);
+        Assert.Contains("new SettingsViewModel(client.Settings, client.Paths)", probe, StringComparison.Ordinal);
+        Assert.Contains("devBackup.Restore()", probe, StringComparison.Ordinal);
+        Assert.Contains("TryDeleteOwnedWorkspace", probe, StringComparison.Ordinal);
+        Assert.Contains("prodBefore.EquivalentToCurrent()", probe, StringComparison.Ordinal);
+        Assert.Contains("RequestErrorAsync", probe, StringComparison.Ordinal);
+        Assert.Contains("CrashAsync", probe, StringComparison.Ordinal);
+        Assert.Contains("windowTitle", probe, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("databasePath", probe, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AppendLine($\"| 路径", probe, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("AppendLine($\"| 数据库", probe, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
