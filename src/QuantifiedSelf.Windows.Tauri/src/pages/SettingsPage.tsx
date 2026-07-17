@@ -4,6 +4,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { SettingsGetResult, SettingsSnapshot } from '../bridge/contracts';
 import { bridgeClient, toCommandError } from '../bridge/client';
 import {
+  subscribeHostCloseRequested,
+  type HostCloseIntent,
+} from '../bridge/hostLifecycle';
+import {
   initializeQueryKey,
   refreshQueriesAfterSettingsSaved,
   settingsQueryKey,
@@ -35,6 +39,9 @@ export default function SettingsPage() {
   const [fieldErrors, setFieldErrors] = useState<SettingsFieldErrors>({});
   const [saveState, setSaveState] = useState<SettingsSaveState>('ready');
   const [errorMessage, setErrorMessage] = useState<string>();
+  const [nativeCloseIntent, setNativeCloseIntent] = useState<HostCloseIntent>();
+  const [nativeClosePending, setNativeClosePending] = useState(false);
+  const [nativeCloseError, setNativeCloseError] = useState<string>();
   const formRef = useRef({ draft, baseline });
   const lastSettingsUpdate = useRef(0);
 
@@ -88,6 +95,41 @@ export default function SettingsPage() {
 
   const dirty = Boolean(draft && baseline && isSettingsDirty(draft, baseline));
   const blocker = useBlocker(dirty);
+  const blockerRef = useRef(blocker);
+
+  useEffect(() => {
+    blockerRef.current = blocker;
+  }, [blocker]);
+
+  useEffect(() => {
+    void bridgeClient.setUnsavedChanges(dirty);
+  }, [dirty]);
+
+  useEffect(() => () => {
+    void bridgeClient.setUnsavedChanges(false);
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void subscribeHostCloseRequested((intent) => {
+      if (blockerRef.current.state === 'blocked') {
+        blockerRef.current.reset();
+      }
+      setNativeCloseError(undefined);
+      setNativeCloseIntent(intent);
+    }).then((removeListener) => {
+      if (disposed) {
+        removeListener();
+      } else {
+        unlisten = removeListener;
+      }
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -166,17 +208,60 @@ export default function SettingsPage() {
           setSaveState('ready');
         }}
       />
-      {blocker.state === 'blocked' && (
+      {blocker.state === 'blocked' && !nativeCloseIntent && (
         <UnsavedChangesDialog
+          intent="navigate"
           onStay={() => blocker.reset()}
           onDiscard={() => blocker.proceed()}
+        />
+      )}
+      {nativeCloseIntent && (
+        <UnsavedChangesDialog
+          intent={nativeCloseIntent}
+          pending={nativeClosePending}
+          errorMessage={nativeCloseError}
+          onStay={() => {
+            setNativeCloseIntent(undefined);
+            setNativeCloseError(undefined);
+            void bridgeClient.cancelClose();
+          }}
+          onDiscard={() => {
+            setNativeClosePending(true);
+            setNativeCloseError(undefined);
+            const action = nativeCloseIntent === 'exit'
+              ? bridgeClient.requestExit()
+              : bridgeClient.hideWindow();
+            void action.then(() => {
+              setDraft(baseline);
+              setFieldErrors({});
+              setErrorMessage(undefined);
+              setSaveState('ready');
+              setNativeCloseIntent(undefined);
+            }).catch((error: unknown) => {
+              setNativeCloseError(toCommandError(error).message);
+            }).finally(() => {
+              setNativeClosePending(false);
+            });
+          }}
         />
       )}
     </>
   );
 }
 
-function UnsavedChangesDialog({ onStay, onDiscard }: { readonly onStay: () => void; readonly onDiscard: () => void }) {
+function UnsavedChangesDialog({
+  intent,
+  pending = false,
+  errorMessage,
+  onStay,
+  onDiscard,
+}: {
+  readonly intent: HostCloseIntent | 'navigate';
+  readonly pending?: boolean;
+  readonly errorMessage?: string;
+  readonly onStay: () => void;
+  readonly onDiscard: () => void;
+}) {
   const stayButton = useRef<HTMLButtonElement>(null);
   const discardButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -200,14 +285,29 @@ function UnsavedChangesDialog({ onStay, onDiscard }: { readonly onStay: () => vo
     <div className="settings-dialog-backdrop">
       <section className="settings-dialog" role="alertdialog" aria-modal="true" aria-labelledby="settings-unsaved-title" aria-describedby="settings-unsaved-description">
         <h2 id="settings-unsaved-title">保留未保存的修改？</h2>
-        <p id="settings-unsaved-description">离开设置页会丢弃当前修改。你可以留下继续保存，或确认放弃后离开。</p>
+        <p id="settings-unsaved-description">{unsavedDescription(intent)}</p>
+        {errorMessage && <p className="settings-dialog__error" role="alert">{errorMessage}</p>}
         <div className="settings-dialog__actions">
-          <button ref={stayButton} className="button button--primary" type="button" onClick={onStay}>留下继续编辑</button>
-          <button ref={discardButton} className="button button--secondary" type="button" onClick={onDiscard}>放弃并离开</button>
+          <button ref={stayButton} className="button button--primary" type="button" disabled={pending} onClick={onStay}>留下继续编辑</button>
+          <button ref={discardButton} className="button button--secondary" type="button" disabled={pending} onClick={onDiscard}>
+            {pending ? '正在处理…' : discardLabel(intent)}
+          </button>
         </div>
       </section>
     </div>
   );
+}
+
+function unsavedDescription(intent: HostCloseIntent | 'navigate') {
+  if (intent === 'hide') return '关闭窗口会将吾迹隐藏到托盘，并丢弃当前修改。Agent 会继续独立运行。';
+  if (intent === 'exit') return '退出吾迹会关闭当前界面并丢弃修改，但不会停止正在运行的 Agent。';
+  return '离开设置页会丢弃当前修改。你可以留下继续保存，或确认放弃后离开。';
+}
+
+function discardLabel(intent: HostCloseIntent | 'navigate') {
+  if (intent === 'hide') return '放弃并隐藏到托盘';
+  if (intent === 'exit') return '放弃并退出界面';
+  return '放弃并离开';
 }
 
 function focusFirstError(errors: SettingsFieldErrors) {

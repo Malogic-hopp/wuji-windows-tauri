@@ -6,17 +6,33 @@ import type { SettingsGetResult, SettingsUpdateResult } from '../bridge/contract
 import { bridgeClient } from '../bridge/client';
 import SettingsPage from './SettingsPage';
 
+const hostLifecycle = vi.hoisted(() => ({
+  closeHandler: undefined as ((intent: 'hide' | 'exit') => void) | undefined,
+}));
+
 vi.mock('../bridge/client', () => ({
   bridgeClient: {
     initialize: vi.fn(),
     getSettings: vi.fn(),
     updateSettings: vi.fn(),
+    setUnsavedChanges: vi.fn(),
+    hideWindow: vi.fn(),
+    requestExit: vi.fn(),
+    cancelClose: vi.fn(),
   },
   toCommandError: (error: unknown) => (
     typeof error === 'object' && error !== null
       ? error
       : { code: 'bridge_unavailable', message: '无法连接本地服务，请稍后重试。', retryable: true }
   ),
+}));
+
+vi.mock('../bridge/hostLifecycle', () => ({
+  subscribeHostCloseRequested: vi.fn(async (handler: (intent: 'hide' | 'exit') => void) => {
+    await Promise.resolve();
+    hostLifecycle.closeHandler = handler;
+    return vi.fn();
+  }),
 }));
 
 const response: SettingsGetResult = {
@@ -93,6 +109,11 @@ describe('SettingsPage', () => {
       saved: true,
       settings: response.settings,
     });
+    vi.mocked(bridgeClient.setUnsavedChanges).mockResolvedValue(null);
+    vi.mocked(bridgeClient.hideWindow).mockResolvedValue(null);
+    vi.mocked(bridgeClient.requestExit).mockResolvedValue(null);
+    vi.mocked(bridgeClient.cancelClose).mockResolvedValue(null);
+    hostLifecycle.closeHandler = undefined;
   });
 
   it('dirty 时阻止路由和窗口关闭，并允许键盘留下或确认放弃', async () => {
@@ -151,6 +172,45 @@ describe('SettingsPage', () => {
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['settings', 'current'] });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['agent', 'status'] });
     expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ['activity', 'overview'] });
+  });
+
+  it('dirty 状态同步到宿主，原生关闭默认保留并可确认隐藏到托盘', async () => {
+    renderPage();
+    const theme = await screen.findByLabelText('主题');
+    await waitFor(() => expect(hostLifecycle.closeHandler).toBeTypeOf('function'));
+
+    fireEvent.change(theme, { target: { value: 'light' } });
+    await waitFor(() => expect(bridgeClient.setUnsavedChanges).toHaveBeenLastCalledWith(true));
+    act(() => hostLifecycle.closeHandler?.('hide'));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('隐藏到托盘');
+    expect(dialog).toHaveTextContent('Agent 会继续独立运行');
+    expect(screen.getByRole('button', { name: '留下继续编辑' })).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument());
+    expect(bridgeClient.cancelClose).toHaveBeenCalledOnce();
+    expect(theme).toHaveValue('light');
+
+    act(() => hostLifecycle.closeHandler?.('hide'));
+    fireEvent.click(await screen.findByRole('button', { name: '放弃并隐藏到托盘' }));
+    await waitFor(() => expect(bridgeClient.hideWindow).toHaveBeenCalledOnce());
+    await waitFor(() => expect(theme).toHaveValue('dark'));
+  });
+
+  it('托盘真正退出确认只关闭界面并明确保留 Agent', async () => {
+    renderPage();
+    fireEvent.change(await screen.findByLabelText('主题'), { target: { value: 'light' } });
+    await waitFor(() => expect(hostLifecycle.closeHandler).toBeTypeOf('function'));
+
+    act(() => hostLifecycle.closeHandler?.('exit'));
+
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog).toHaveTextContent('不会停止正在运行的 Agent');
+    fireEvent.click(screen.getByRole('button', { name: '放弃并退出界面' }));
+    await waitFor(() => expect(bridgeClient.requestExit).toHaveBeenCalledOnce());
+    expect(bridgeClient.hideWindow).not.toHaveBeenCalled();
   });
 
   it('读取断线后允许重试，恢复时重新进入 Ready', async () => {

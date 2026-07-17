@@ -32,6 +32,11 @@ export const commandWhitelist = {
   settingsGet: 'settings_get',
   settingsUpdate: 'settings_update',
   bridgeRetry: 'bridge_retry',
+  setUnsavedChanges: 'app_set_unsaved_changes',
+  windowShow: 'window_show',
+  windowHide: 'window_hide',
+  requestExit: 'app_request_exit',
+  cancelClose: 'app_cancel_close',
 } as const;
 
 const agentCommands: Record<AgentCommand, string> = {
@@ -54,6 +59,12 @@ export const bridgeClient = {
     return invoke<SettingsUpdateResult>(commandWhitelist.settingsUpdate, { request });
   },
   retry: () => invoke<ClientInitializeResult>(commandWhitelist.bridgeRetry),
+  setUnsavedChanges: (hasUnsavedChanges: boolean) =>
+    invoke<null>(commandWhitelist.setUnsavedChanges, { hasUnsavedChanges }),
+  showWindow: () => invoke<null>(commandWhitelist.windowShow),
+  hideWindow: () => invoke<null>(commandWhitelist.windowHide),
+  requestExit: () => invoke<null>(commandWhitelist.requestExit),
+  cancelClose: () => invoke<null>(commandWhitelist.cancelClose),
 };
 
 export function toCommandError(error: unknown): CommandError {

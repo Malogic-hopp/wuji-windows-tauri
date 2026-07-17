@@ -330,6 +330,7 @@ button, a[href] { -webkit-tap-highlight-color: transparent; }
 .settings-dialog { width: min(100%, 480px); padding: var(--space-6); border: 1px solid var(--color-border); border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-card); }
 .settings-dialog h2 { margin: 0 0 var(--space-2); font-size: 21px; }
 .settings-dialog p { margin: 0; color: var(--color-text-muted); }
+.settings-dialog .settings-dialog__error { margin-top: var(--space-3); color: var(--color-danger); }
 .settings-dialog__actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-5); }
 .route-loading, .fatal-state { padding: var(--space-10); }
 .fatal-state { display: grid; min-height: 100vh; place-content: center; text-align: center; }

@@ -42,6 +42,11 @@ describe('bridgeClient semantic commands', () => {
       'settings_get',
       'settings_update',
       'bridge_retry',
+      'app_set_unsaved_changes',
+      'window_show',
+      'window_hide',
+      'app_request_exit',
+      'app_cancel_close',
     ]);
   });
 
@@ -75,5 +80,23 @@ describe('bridgeClient semantic commands', () => {
     expect(invoke).toHaveBeenNthCalledWith(2, 'settings_update', {
       request: { settings },
     });
+  });
+
+  it('宿主生命周期只使用固定 command 且不接受路径或进程参数', async () => {
+    vi.mocked(invoke).mockResolvedValue(undefined);
+
+    await bridgeClient.setUnsavedChanges(true);
+    await bridgeClient.showWindow();
+    await bridgeClient.hideWindow();
+    await bridgeClient.requestExit();
+    await bridgeClient.cancelClose();
+
+    expect(invoke).toHaveBeenNthCalledWith(1, 'app_set_unsaved_changes', {
+      hasUnsavedChanges: true,
+    });
+    expect(invoke).toHaveBeenNthCalledWith(2, 'window_show');
+    expect(invoke).toHaveBeenNthCalledWith(3, 'window_hide');
+    expect(invoke).toHaveBeenNthCalledWith(4, 'app_request_exit');
+    expect(invoke).toHaveBeenNthCalledWith(5, 'app_cancel_close');
   });
 });
