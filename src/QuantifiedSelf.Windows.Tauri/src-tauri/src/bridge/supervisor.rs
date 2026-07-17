@@ -114,21 +114,30 @@ struct AvailabilityEvent {
 pub struct BridgeSupervisor {
     command_tx: mpsc::Sender<WorkerCommand>,
     _availability: watch::Receiver<Availability>,
+    worker_stopped: watch::Receiver<bool>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ShutdownOutcome {
+    Graceful,
+    Forced,
+    AlreadyExited,
 }
 
 impl BridgeSupervisor {
     pub fn start(path: PathBuf, app_handle: AppHandle) -> Self {
         let (command_tx, command_rx) = mpsc::channel(32);
         let (availability_tx, availability) = watch::channel(Availability::Starting);
-        tauri::async_runtime::spawn(supervisor_worker(
-            command_rx,
-            availability_tx,
-            path,
-            app_handle,
-        ));
+        let (worker_stopped_tx, worker_stopped) = watch::channel(false);
+        tauri::async_runtime::spawn(async move {
+            supervisor_worker(command_rx, availability_tx, path, app_handle).await;
+            let _ = worker_stopped_tx.send(true);
+        });
         Self {
             command_tx,
             _availability: availability,
+            worker_stopped,
         }
     }
 
@@ -162,13 +171,36 @@ impl BridgeSupervisor {
         response_rx.await.map_err(|_| CommandError::unavailable())?
     }
 
-    pub async fn shutdown(&self) -> Result<(), CommandError> {
+    pub async fn shutdown(&self) -> Result<ShutdownOutcome, CommandError> {
+        let mut worker_stopped = self.worker_stopped.clone();
+        if *worker_stopped.borrow() {
+            return Ok(ShutdownOutcome::AlreadyExited);
+        }
+
         let (response_tx, response_rx) = oneshot::channel();
-        self.command_tx
+        if self
+            .command_tx
             .send(WorkerCommand::Shutdown { response_tx })
             .await
-            .map_err(|_| CommandError::shutting_down())?;
-        response_rx.await.map_err(|_| CommandError::unavailable())?
+            .is_err()
+        {
+            return if *worker_stopped.borrow() {
+                Ok(ShutdownOutcome::AlreadyExited)
+            } else {
+                Err(CommandError::shutting_down())
+            };
+        }
+
+        let outcome = response_rx
+            .await
+            .map_err(|_| CommandError::unavailable())??;
+        if !*worker_stopped.borrow() {
+            timeout(Duration::from_secs(2), worker_stopped.changed())
+                .await
+                .map_err(|_| CommandError::shutting_down())?
+                .map_err(|_| CommandError::shutting_down())?;
+        }
+        Ok(outcome)
     }
 
     async fn request_value(
@@ -199,7 +231,7 @@ enum WorkerCommand {
         response_tx: oneshot::Sender<Result<ClientInitializeResult, CommandError>>,
     },
     Shutdown {
-        response_tx: oneshot::Sender<Result<(), CommandError>>,
+        response_tx: oneshot::Sender<Result<ShutdownOutcome, CommandError>>,
     },
 }
 
@@ -212,7 +244,7 @@ struct PendingRequest {
 struct ShutdownRequest {
     id: String,
     deadline: Instant,
-    response_tx: oneshot::Sender<Result<(), CommandError>>,
+    response_tx: oneshot::Sender<Result<ShutdownOutcome, CommandError>>,
 }
 
 struct BridgeSession {
@@ -337,7 +369,7 @@ async fn wait_for_recovery(command_rx: &mut mpsc::Receiver<WorkerCommand>) -> Re
             }
             WorkerCommand::Retry { response_tx } => return RecoveryAction::Retry(response_tx),
             WorkerCommand::Shutdown { response_tx } => {
-                let _ = response_tx.send(Ok(()));
+                let _ = response_tx.send(Ok(ShutdownOutcome::AlreadyExited));
                 return RecoveryAction::Shutdown;
             }
         }
@@ -501,8 +533,8 @@ async fn run_session(
                                 });
                             }
                             _ => {
-                                terminate_child(&mut child).await;
-                                let _ = response_tx.send(Ok(()));
+                                let outcome = terminate_child(&mut child).await;
+                                let _ = response_tx.send(Ok(outcome));
                                 return SessionEnd::Shutdown;
                             }
                         }
@@ -533,9 +565,9 @@ async fn run_session(
 
                 if shutdown.as_ref().is_some_and(|request| request.id == envelope.id) {
                     let request = shutdown.take().expect("shutdown response must exist");
-                    let result = response_result(envelope).map(|_| ());
-                    let _ = request.response_tx.send(result);
-                    wait_or_kill(&mut child).await;
+                    let result = response_result(envelope);
+                    let outcome = wait_or_kill(&mut child).await;
+                    let _ = request.response_tx.send(result.map(|_| outcome));
                     return SessionEnd::Shutdown;
                 }
 
@@ -550,7 +582,7 @@ async fn run_session(
                 let _ = status;
                 fail_pending(&mut pending, CommandError::unavailable());
                 if let Some(request) = shutdown.take() {
-                    let _ = request.response_tx.send(Ok(()));
+                    let _ = request.response_tx.send(Ok(ShutdownOutcome::AlreadyExited));
                     return SessionEnd::Shutdown;
                 }
                 return SessionEnd::Crashed(started_at.elapsed());
@@ -568,8 +600,8 @@ async fn run_session(
 
                 if shutdown.as_ref().is_some_and(|request| request.deadline <= now) {
                     let request = shutdown.take().expect("shutdown timeout must exist");
-                    terminate_child(&mut child).await;
-                    let _ = request.response_tx.send(Ok(()));
+                    let outcome = terminate_child(&mut child).await;
+                    let _ = request.response_tx.send(Ok(outcome));
                     return SessionEnd::Shutdown;
                 }
             }
@@ -668,15 +700,20 @@ fn fail_pending(pending: &mut HashMap<String, PendingRequest>, error: CommandErr
     }
 }
 
-async fn wait_or_kill(child: &mut Child) {
-    if timeout(Duration::from_secs(2), child.wait()).await.is_err() {
-        terminate_child(child).await;
+async fn wait_or_kill(child: &mut Child) -> ShutdownOutcome {
+    match timeout(Duration::from_secs(2), child.wait()).await {
+        Ok(_) => ShutdownOutcome::Graceful,
+        Err(_) => terminate_child(child).await,
     }
 }
 
-async fn terminate_child(child: &mut Child) {
+async fn terminate_child(child: &mut Child) -> ShutdownOutcome {
+    if child.try_wait().ok().flatten().is_some() {
+        return ShutdownOutcome::AlreadyExited;
+    }
     let _ = child.kill().await;
     let _ = child.wait().await;
+    ShutdownOutcome::Forced
 }
 
 pub fn fixed_bridge_path() -> PathBuf {
@@ -867,5 +904,32 @@ mod tests {
         assert_eq!(hello.api_version, "1.0");
         assert_eq!(hello.capabilities, ["client.initialize"]);
         fake_bridge.await.expect("fake bridge task should finish");
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn bridge_child_that_exits_itself_is_reported_as_graceful() {
+        let mut child = Command::new("cmd.exe")
+            .args(["/C", "exit", "0"])
+            .spawn()
+            .expect("short-lived child should start");
+
+        assert_eq!(wait_or_kill(&mut child).await, ShutdownOutcome::Graceful);
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn unresponsive_bridge_child_is_killed_and_reaped() {
+        let mut child = Command::new("powershell.exe")
+            .args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("long-lived child should start");
+
+        assert_eq!(terminate_child(&mut child).await, ShutdownOutcome::Forced);
+        assert!(child.try_wait().unwrap().is_some());
     }
 }

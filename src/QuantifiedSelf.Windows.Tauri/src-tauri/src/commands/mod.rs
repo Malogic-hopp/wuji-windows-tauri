@@ -1,10 +1,14 @@
-use tauri::State;
+use tauri::{AppHandle, State};
 
 use crate::{
     bridge::{BridgeSupervisor, CommandError},
     contracts::{
         ActivityOverviewResult, AgentStatus, ClientInitializeResult, CommandResult,
         SettingsGetResult, SettingsUpdateParams, SettingsUpdateResult,
+    },
+    lifecycle::{
+        LifecycleCommandError, cancel_close, hide_main_window, request_exit, set_unsaved_changes,
+        show_main_window,
     },
 };
 
@@ -20,6 +24,11 @@ pub const COMMAND_WHITELIST: &[&str] = &[
     "settings_get",
     "settings_update",
     "bridge_retry",
+    "app_set_unsaved_changes",
+    "window_show",
+    "window_hide",
+    "app_request_exit",
+    "app_cancel_close",
 ];
 
 #[tauri::command]
@@ -95,13 +104,38 @@ pub async fn bridge_retry(
     supervisor.retry().await
 }
 
+#[tauri::command]
+pub fn app_set_unsaved_changes(app: AppHandle, has_unsaved_changes: bool) {
+    set_unsaved_changes(&app, has_unsaved_changes);
+}
+
+#[tauri::command]
+pub fn window_show(app: AppHandle) -> Result<(), LifecycleCommandError> {
+    show_main_window(&app)
+}
+
+#[tauri::command]
+pub fn window_hide(app: AppHandle) -> Result<(), LifecycleCommandError> {
+    hide_main_window(&app)
+}
+
+#[tauri::command]
+pub fn app_request_exit(app: AppHandle) {
+    request_exit(&app);
+}
+
+#[tauri::command]
+pub fn app_cancel_close(app: AppHandle) {
+    cancel_close(&app);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn exposes_only_semantic_commands() {
-        assert_eq!(COMMAND_WHITELIST.len(), 10);
+        assert_eq!(COMMAND_WHITELIST.len(), 15);
         assert!(COMMAND_WHITELIST.iter().all(|command| {
             !command.contains("shell")
                 && !command.contains("file")
