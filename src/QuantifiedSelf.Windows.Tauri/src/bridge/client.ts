@@ -4,6 +4,11 @@ import type {
   AgentStatus,
   ClientInitializeResult,
   CommandResult,
+  SettingsFieldError,
+  SettingsGetResult,
+  SettingsSnapshot,
+  SettingsUpdateParams,
+  SettingsUpdateResult,
 } from './contracts';
 
 export type AgentCommand = 'start' | 'pause' | 'resume' | 'stop';
@@ -13,6 +18,7 @@ export interface CommandError {
   readonly message: string;
   readonly retryable: boolean;
   readonly correlationId?: string;
+  readonly fieldErrors?: ReadonlyArray<SettingsFieldError>;
 }
 
 export const commandWhitelist = {
@@ -23,6 +29,8 @@ export const commandWhitelist = {
   agentResume: 'agent_resume',
   agentStop: 'agent_stop',
   activityOverview: 'activity_get_overview',
+  settingsGet: 'settings_get',
+  settingsUpdate: 'settings_update',
   bridgeRetry: 'bridge_retry',
 } as const;
 
@@ -40,6 +48,11 @@ export const bridgeClient = {
     invoke<CommandResult>(agentCommands[command]),
   getActivityOverview: () =>
     invoke<ActivityOverviewResult>(commandWhitelist.activityOverview),
+  getSettings: () => invoke<SettingsGetResult>(commandWhitelist.settingsGet),
+  updateSettings: (settings: SettingsSnapshot) => {
+    const request: SettingsUpdateParams = { settings };
+    return invoke<SettingsUpdateResult>(commandWhitelist.settingsUpdate, { request });
+  },
   retry: () => invoke<ClientInitializeResult>(commandWhitelist.bridgeRetry),
 };
 

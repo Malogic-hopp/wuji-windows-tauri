@@ -2,7 +2,10 @@ use tauri::State;
 
 use crate::{
     bridge::{BridgeSupervisor, CommandError},
-    contracts::{ActivityOverviewResult, AgentStatus, ClientInitializeResult, CommandResult},
+    contracts::{
+        ActivityOverviewResult, AgentStatus, ClientInitializeResult, CommandResult,
+        SettingsGetResult, SettingsUpdateParams, SettingsUpdateResult,
+    },
 };
 
 #[cfg(test)]
@@ -14,6 +17,8 @@ pub const COMMAND_WHITELIST: &[&str] = &[
     "agent_resume",
     "agent_stop",
     "activity_get_overview",
+    "settings_get",
+    "settings_update",
     "bridge_retry",
 ];
 
@@ -67,6 +72,23 @@ pub async fn activity_get_overview(
 }
 
 #[tauri::command]
+pub async fn settings_get(
+    supervisor: State<'_, BridgeSupervisor>,
+) -> Result<SettingsGetResult, CommandError> {
+    supervisor.request("settings.get").await
+}
+
+#[tauri::command]
+pub async fn settings_update(
+    supervisor: State<'_, BridgeSupervisor>,
+    request: SettingsUpdateParams,
+) -> Result<SettingsUpdateResult, CommandError> {
+    supervisor
+        .request_with_params("settings.update", request)
+        .await
+}
+
+#[tauri::command]
 pub async fn bridge_retry(
     supervisor: State<'_, BridgeSupervisor>,
 ) -> Result<ClientInitializeResult, CommandError> {
@@ -79,7 +101,7 @@ mod tests {
 
     #[test]
     fn exposes_only_semantic_commands() {
-        assert_eq!(COMMAND_WHITELIST.len(), 8);
+        assert_eq!(COMMAND_WHITELIST.len(), 10);
         assert!(COMMAND_WHITELIST.iter().all(|command| {
             !command.contains("shell")
                 && !command.contains("file")

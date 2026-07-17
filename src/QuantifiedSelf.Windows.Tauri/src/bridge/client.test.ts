@@ -6,7 +6,7 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
-describe('bridgeClient activity command', () => {
+describe('bridgeClient semantic commands', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('只通过固定白名单 command 请求 Overview', async () => {
@@ -39,7 +39,41 @@ describe('bridgeClient activity command', () => {
       'agent_resume',
       'agent_stop',
       'activity_get_overview',
+      'settings_get',
+      'settings_update',
       'bridge_retry',
     ]);
+  });
+
+  it('通过固定 command 读取并原样提交生成的 Settings DTO', async () => {
+    const settings = {
+      appSettings: {
+        theme: 'dark',
+        refreshIntervalSeconds: 30,
+        autoStartAgentWhenAppStarts: true,
+      },
+      agentOptions: {
+        samplingIntervalSeconds: 3,
+        idleThresholdSeconds: 300,
+        heartbeatIntervalSeconds: 5,
+        staleThresholdSeconds: 30,
+        retentionDays: 90,
+        enableJsonlJournal: false,
+        enableAgentEventJournal: true,
+        enableSessionMerge: true,
+        maskWindowTitles: true,
+      },
+    } as const;
+    vi.mocked(invoke).mockResolvedValue({ settings });
+
+    await bridgeClient.getSettings();
+    await bridgeClient.updateSettings(settings);
+
+    expect(commandWhitelist.settingsGet).toBe('settings_get');
+    expect(commandWhitelist.settingsUpdate).toBe('settings_update');
+    expect(invoke).toHaveBeenNthCalledWith(1, 'settings_get');
+    expect(invoke).toHaveBeenNthCalledWith(2, 'settings_update', {
+      request: { settings },
+    });
   });
 });

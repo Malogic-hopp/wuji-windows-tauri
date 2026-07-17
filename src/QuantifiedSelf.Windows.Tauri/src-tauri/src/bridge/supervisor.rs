@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::contracts::{
     BridgeHelloResult, BridgeRequestEnvelope, BridgeRequestMeta, BridgeResponseEnvelope,
-    ClientInitializeResult,
+    ClientInitializeResult, SettingsFieldError,
 };
 
 const API_VERSION: &str = "1.0";
@@ -23,13 +23,15 @@ const RESTART_BACKOFF: Duration = Duration::from_millis(350);
 const STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(12);
 const READ_ONLY_QUERY_TIMEOUT: Duration = Duration::from_secs(12);
+const SETTINGS_READ_TIMEOUT: Duration = Duration::from_secs(12);
+const SETTINGS_UPDATE_TIMEOUT: Duration = Duration::from_secs(18);
 const STOP_TIMEOUT: Duration = Duration::from_secs(22);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
 const STABILITY_WINDOW: Duration = Duration::from_secs(30);
 
 pub const BRIDGE_AVAILABILITY_EVENT: &str = "bridge://availability";
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommandError {
     pub code: String,
@@ -37,6 +39,8 @@ pub struct CommandError {
     pub retryable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correlation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_errors: Option<Vec<SettingsFieldError>>,
 }
 
 impl CommandError {
@@ -46,6 +50,7 @@ impl CommandError {
             message: "无法连接本地服务，请稍后重试。".into(),
             retryable: true,
             correlation_id: None,
+            field_errors: None,
         }
     }
 
@@ -55,6 +60,7 @@ impl CommandError {
             message: "本地服务返回了无法识别的响应。".into(),
             retryable: true,
             correlation_id: None,
+            field_errors: None,
         }
     }
 
@@ -64,24 +70,26 @@ impl CommandError {
             message: "应用正在退出，无法接受新请求。".into(),
             retryable: false,
             correlation_id: None,
+            field_errors: None,
         }
     }
 
     fn timeout(method: &str) -> Self {
         let side_effect = matches!(
             method,
-            "agent.start" | "agent.pause" | "agent.resume" | "agent.stop"
+            "agent.start" | "agent.pause" | "agent.resume" | "agent.stop" | "settings.update"
         );
         Self {
             code: "request_timeout".into(),
-            message: if side_effect {
-                "请求超时；命令可能已经执行，请先刷新 Agent 状态。"
-            } else {
-                "请求超时，请稍后重试。"
+            message: match method {
+                "settings.update" => "保存请求超时；设置可能已经保存，请先重新读取设置。",
+                _ if side_effect => "请求超时；命令可能已经执行，请先刷新 Agent 状态。",
+                _ => "请求超时，请稍后重试。",
             }
             .into(),
             retryable: !side_effect,
             correlation_id: None,
+            field_errors: None,
         }
     }
 }
@@ -128,7 +136,20 @@ impl BridgeSupervisor {
     where
         T: DeserializeOwned,
     {
-        let value = self.request_value(method).await?;
+        self.request_with_params(method, json!({})).await
+    }
+
+    pub async fn request_with_params<T, P>(
+        &self,
+        method: &'static str,
+        params: P,
+    ) -> Result<T, CommandError>
+    where
+        T: DeserializeOwned,
+        P: Serialize,
+    {
+        let params = serde_json::to_value(params).map_err(|_| CommandError::protocol())?;
+        let value = self.request_value(method, params).await?;
         serde_json::from_value(value).map_err(|_| CommandError::protocol())
     }
 
@@ -150,11 +171,16 @@ impl BridgeSupervisor {
         response_rx.await.map_err(|_| CommandError::unavailable())?
     }
 
-    async fn request_value(&self, method: &'static str) -> Result<Value, CommandError> {
+    async fn request_value(
+        &self,
+        method: &'static str,
+        params: Value,
+    ) -> Result<Value, CommandError> {
         let (response_tx, response_rx) = oneshot::channel();
         self.command_tx
             .send(WorkerCommand::Request {
                 method,
+                params,
                 response_tx,
             })
             .await
@@ -166,6 +192,7 @@ impl BridgeSupervisor {
 enum WorkerCommand {
     Request {
         method: &'static str,
+        params: Value,
         response_tx: oneshot::Sender<Result<Value, CommandError>>,
     },
     Retry {
@@ -398,7 +425,7 @@ where
     W: AsyncWrite + Unpin,
     R: AsyncBufRead + Unpin,
 {
-    let (id, payload) = create_request(method)?;
+    let (id, payload) = create_request(method, json!({}))?;
     write_request(stdin, &payload).await?;
     let line = timeout(duration, stdout.next_line())
         .await
@@ -431,8 +458,8 @@ async fn run_session(
         tokio::select! {
             command = command_rx.recv() => {
                 match command {
-                    Some(WorkerCommand::Request { method, response_tx }) if shutdown.is_none() => {
-                        match create_request(method) {
+                    Some(WorkerCommand::Request { method, params, response_tx }) if shutdown.is_none() => {
+                        match create_request(method, params) {
                             Ok((id, payload)) => {
                                 if write_request(&mut stdin, &payload).await.is_err() {
                                     let _ = response_tx.send(Err(CommandError::unavailable()));
@@ -465,7 +492,7 @@ async fn run_session(
                             generation,
                         );
                         fail_pending(&mut pending, CommandError::shutting_down());
-                        match create_request("bridge.shutdown") {
+                        match create_request("bridge.shutdown", json!({})) {
                             Ok((id, payload)) if write_request(&mut stdin, &payload).await.is_ok() => {
                                 shutdown = Some(ShutdownRequest {
                                     id,
@@ -550,13 +577,13 @@ async fn run_session(
     }
 }
 
-fn create_request(method: &'static str) -> Result<(String, Vec<u8>), CommandError> {
+fn create_request(method: &'static str, params: Value) -> Result<(String, Vec<u8>), CommandError> {
     let id = Uuid::new_v4().simple().to_string();
     let request = BridgeRequestEnvelope {
         jsonrpc: JSON_RPC_VERSION.into(),
         id: id.clone(),
         method: method.into(),
-        params: json!({}),
+        params,
         meta: BridgeRequestMeta {
             api_version: API_VERSION.into(),
             correlation_id: id.clone(),
@@ -611,6 +638,7 @@ fn response_result(response: BridgeResponseEnvelope) -> Result<Value, CommandErr
             message: error.message,
             retryable: error.data.retryable,
             correlation_id: Some(error.data.correlation_id),
+            field_errors: error.data.field_errors,
         });
     }
     response.result.ok_or_else(CommandError::protocol)
@@ -627,6 +655,8 @@ fn can_automatically_restart(previous_restarts: u8, uptime: Duration) -> bool {
 fn request_timeout(method: &str) -> Duration {
     match method {
         "activity.getOverview" => READ_ONLY_QUERY_TIMEOUT,
+        "settings.get" => SETTINGS_READ_TIMEOUT,
+        "settings.update" => SETTINGS_UPDATE_TIMEOUT,
         "agent.stop" => STOP_TIMEOUT,
         _ => REQUEST_TIMEOUT,
     }
@@ -692,8 +722,10 @@ mod tests {
     #[test]
     fn side_effect_timeout_is_not_retryable() {
         assert!(!CommandError::timeout("agent.start").retryable);
+        assert!(!CommandError::timeout("settings.update").retryable);
         assert!(CommandError::timeout("agent.getStatus").retryable);
         assert!(CommandError::timeout("activity.getOverview").retryable);
+        assert!(CommandError::timeout("settings.get").retryable);
     }
 
     #[test]
@@ -704,6 +736,83 @@ mod tests {
         );
         assert_eq!(READ_ONLY_QUERY_TIMEOUT, Duration::from_secs(12));
         assert_eq!(request_timeout("agent.stop"), STOP_TIMEOUT);
+    }
+
+    #[test]
+    fn settings_commands_use_distinct_read_and_update_timeouts() {
+        assert_eq!(request_timeout("settings.get"), SETTINGS_READ_TIMEOUT);
+        assert_eq!(SETTINGS_READ_TIMEOUT, Duration::from_secs(12));
+        assert_eq!(request_timeout("settings.update"), SETTINGS_UPDATE_TIMEOUT);
+        assert_eq!(SETTINGS_UPDATE_TIMEOUT, Duration::from_secs(18));
+        assert_ne!(SETTINGS_READ_TIMEOUT, SETTINGS_UPDATE_TIMEOUT);
+    }
+
+    #[test]
+    fn settings_update_params_are_forwarded_without_rewriting() {
+        let params = json!({
+            "settings": {
+                "appSettings": {
+                    "theme": "dark",
+                    "refreshIntervalSeconds": 30,
+                    "autoStartAgentWhenAppStarts": true
+                },
+                "agentOptions": {
+                    "samplingIntervalSeconds": 3,
+                    "idleThresholdSeconds": 300,
+                    "heartbeatIntervalSeconds": 5,
+                    "staleThresholdSeconds": 30,
+                    "retentionDays": 90,
+                    "enableJsonlJournal": false,
+                    "enableAgentEventJournal": true,
+                    "enableSessionMerge": true,
+                    "maskWindowTitles": true
+                }
+            }
+        });
+
+        let (_, payload) = create_request("settings.update", params.clone())
+            .expect("settings request should serialize");
+        let request: BridgeRequestEnvelope =
+            serde_json::from_slice(&payload).expect("request should be valid JSON-RPC");
+
+        assert_eq!(request.method, "settings.update");
+        assert_eq!(request.params, params);
+    }
+
+    #[test]
+    fn settings_validation_field_errors_are_preserved_for_the_webview() {
+        let response: BridgeResponseEnvelope = serde_json::from_value(json!({
+            "jsonrpc": "2.0",
+            "id": "settings-1",
+            "error": {
+                "code": "validation_failed",
+                "message": "部分设置值无效。",
+                "data": {
+                    "kind": "validation",
+                    "retryable": false,
+                    "correlationId": "settings-1",
+                    "fieldErrors": [
+                        {
+                            "field": "agentOptions.staleThresholdSeconds",
+                            "message": "设置值无效。"
+                        }
+                    ]
+                }
+            }
+        }))
+        .expect("Bridge error should match generated contracts");
+
+        let error = response_result(response).expect_err("validation should be an error");
+
+        assert_eq!(error.code, "validation_failed");
+        assert!(!error.retryable);
+        assert_eq!(
+            error
+                .field_errors
+                .expect("field errors should be preserved")[0]
+                .field,
+            "agentOptions.staleThresholdSeconds"
+        );
     }
 
     #[test]
