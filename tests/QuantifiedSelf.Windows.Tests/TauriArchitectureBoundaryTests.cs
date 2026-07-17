@@ -204,7 +204,12 @@ public sealed class TauriArchitectureBoundaryTests
             "activity_get_overview",
             "settings_get",
             "settings_update",
-            "bridge_retry"
+            "bridge_retry",
+            "app_set_unsaved_changes",
+            "window_show",
+            "window_hide",
+            "app_request_exit",
+            "app_cancel_close"
         ];
 
         foreach (var command in allowedCommands)
@@ -215,6 +220,75 @@ public sealed class TauriArchitectureBoundaryTests
         Assert.DoesNotContain("channelName", client, StringComparison.Ordinal);
         Assert.DoesNotContain("dataRoot", client, StringComparison.Ordinal);
         Assert.DoesNotContain("execute(", client, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HostLifecycle_SeparatesHideFromExitAndKeepsAgentIndependent()
+    {
+        var lifecycle = ReadTauriFile("src-tauri", "src", "lifecycle", "mod.rs");
+        var entrypoint = ReadTauriFile("src-tauri", "src", "lib.rs");
+
+        Assert.Contains("HostLifecycleState::Visible", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("HostLifecycleState::HiddenToTray", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("HostLifecycleState::ExitConfirmationPending", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("HostLifecycleState::ShuttingDown", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("api.prevent_close()", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("CloseIntent::Hide", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("CloseIntent::Exit", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("show-main-window", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("exit-wuji", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("supervisor.shutdown().await", lifecycle, StringComparison.Ordinal);
+        Assert.DoesNotContain("agent.stop", lifecycle, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("!permits_exit(app_handle)", entrypoint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void BridgeShutdown_IsBoundedAndWaitsForWorkerCompletion()
+    {
+        var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
+
+        Assert.Contains("SHUTDOWN_TIMEOUT", supervisor, StringComparison.Ordinal);
+        Assert.Contains("ShutdownOutcome::Graceful", supervisor, StringComparison.Ordinal);
+        Assert.Contains("ShutdownOutcome::Forced", supervisor, StringComparison.Ordinal);
+        Assert.Contains("ShutdownOutcome::AlreadyExited", supervisor, StringComparison.Ordinal);
+        Assert.Contains("worker_stopped.changed()", supervisor, StringComparison.Ordinal);
+        Assert.Contains("terminate_child", supervisor, StringComparison.Ordinal);
+        Assert.Contains("child.kill().await", supervisor, StringComparison.Ordinal);
+        Assert.Contains("child.wait().await", supervisor, StringComparison.Ordinal);
+        Assert.Contains("kill_on_drop(true)", supervisor, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettingsDirtyClose_UsesTypedHostCommandsAndSafeFixedEvents()
+    {
+        var page = ReadTauriFile("src", "pages", "SettingsPage.tsx");
+        var client = ReadTauriFile("src", "bridge", "client.ts");
+        var events = ReadTauriFile("src", "bridge", "hostLifecycle.ts");
+
+        Assert.Contains("bridgeClient.setUnsavedChanges(dirty)", page, StringComparison.Ordinal);
+        Assert.Contains("subscribeHostCloseRequested", page, StringComparison.Ordinal);
+        Assert.Contains("bridgeClient.hideWindow()", page, StringComparison.Ordinal);
+        Assert.Contains("bridgeClient.requestExit()", page, StringComparison.Ordinal);
+        Assert.Contains("bridgeClient.cancelClose()", page, StringComparison.Ordinal);
+        Assert.Contains("role=\"alertdialog\"", page, StringComparison.Ordinal);
+        Assert.Contains("Agent 会继续独立运行", page, StringComparison.Ordinal);
+        Assert.Contains("host://close-requested", events, StringComparison.Ordinal);
+        Assert.Contains("invoke<null>(commandWhitelist.windowHide)", client, StringComparison.Ordinal);
+        Assert.Contains("invoke<null>(commandWhitelist.requestExit)", client, StringComparison.Ordinal);
+
+        string[] forbiddenDirectAccess =
+        [
+            "@tauri-apps/api/window",
+            "getCurrentWindow",
+            "WebviewWindow",
+            "invoke("
+        ];
+        foreach (var token in forbiddenDirectAccess)
+        {
+            Assert.DoesNotContain(token, page, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.DoesNotContain("processId", events, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("path", events, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
