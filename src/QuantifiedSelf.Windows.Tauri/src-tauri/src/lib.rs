@@ -7,6 +7,8 @@ mod bridge;
 mod commands;
 mod contracts;
 mod lifecycle;
+mod single_instance;
+mod tray;
 
 use bridge::{BridgeSupervisor, fixed_bridge_path};
 use commands::{
@@ -14,11 +16,19 @@ use commands::{
     app_cancel_close, app_initialize, app_request_exit, app_set_unsaved_changes, bridge_retry,
     settings_get, settings_update, window_hide, window_show,
 };
-use lifecycle::{HostLifecycle, handle_window_event, permits_exit, request_exit, setup_tray};
+use lifecycle::{HostLifecycle, handle_window_event, permits_exit, request_exit};
+use single_instance::{InstanceDecision, acquire_dev_instance};
 use tauri::{Manager, RunEvent};
+use tray::setup_tray;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let single_instance_guard =
+        match acquire_dev_instance().expect("failed to establish the dev single-instance guard") {
+            InstanceDecision::Primary(guard) => guard,
+            InstanceDecision::SecondaryActivated => return,
+        };
+
     let app = tauri::Builder::default()
         .setup(|app| {
             app.manage(HostLifecycle::default());
@@ -51,6 +61,7 @@ pub fn run() {
         .expect("failed to build WUJI Tauri application");
 
     app.run(move |app_handle, event| {
+        let _keep_single_instance_guard_alive = &single_instance_guard;
         if let RunEvent::ExitRequested { api, .. } = event
             && !permits_exit(app_handle)
         {

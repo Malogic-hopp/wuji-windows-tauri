@@ -1,19 +1,13 @@
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{
-    AppHandle, Emitter, Manager, Runtime, WebviewWindow, Window, WindowEvent,
-    menu::{Menu, MenuItem},
-    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
-};
+use tauri::{AppHandle, Emitter, Manager, Runtime, WebviewWindow, Window, WindowEvent};
 
 use crate::bridge::BridgeSupervisor;
 
 pub const HOST_LIFECYCLE_EVENT: &str = "host://lifecycle";
 pub const HOST_CLOSE_REQUESTED_EVENT: &str = "host://close-requested";
 const MAIN_WINDOW_LABEL: &str = "main";
-const TRAY_SHOW_ID: &str = "show-main-window";
-const TRAY_EXIT_ID: &str = "exit-wuji";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -190,39 +184,6 @@ struct CloseRequestedEvent {
     intent: CloseIntent,
 }
 
-pub fn setup_tray<R: Runtime>(app: &tauri::App<R>) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, TRAY_SHOW_ID, "显示吾迹", true, None::<&str>)?;
-    let exit = MenuItem::with_id(app, TRAY_EXIT_ID, "退出吾迹", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &exit])?;
-    let mut tray = TrayIconBuilder::with_id("wuji-main")
-        .menu(&menu)
-        .tooltip("吾迹 · 开发预览")
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            TRAY_SHOW_ID => {
-                let _ = show_main_window(app);
-            }
-            TRAY_EXIT_ID => request_exit(app),
-            _ => {}
-        })
-        .on_tray_icon_event(|tray, event| {
-            if matches!(
-                event,
-                TrayIconEvent::DoubleClick {
-                    button: MouseButton::Left,
-                    ..
-                }
-            ) {
-                let _ = show_main_window(tray.app_handle());
-            }
-        });
-    if let Some(icon) = app.default_window_icon().cloned() {
-        tray = tray.icon(icon);
-    }
-    tray.build(app)?;
-    Ok(())
-}
-
 pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) {
     if window.label() != MAIN_WINDOW_LABEL {
         return;
@@ -232,6 +193,11 @@ pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) 
         let app = window.app_handle();
         let lifecycle = app.state::<HostLifecycle>();
         execute_action(app, lifecycle.request(CloseIntent::Hide));
+    } else if matches!(event, WindowEvent::Focused(true)) {
+        let app = window.app_handle();
+        let lifecycle = app.state::<HostLifecycle>();
+        lifecycle.mark_visible();
+        publish_lifecycle(app, lifecycle.state());
     }
 }
 
