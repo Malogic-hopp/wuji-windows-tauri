@@ -19,7 +19,10 @@
     "bundle:check": "node ./scripts/check-bundle-budget.mjs",
     "smoke:bridge-recovery": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/bridge-recovery-smoke.ps1",
     "smoke:dashboard-parity": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/dashboard-parity-smoke.ps1",
+    "smoke:lifecycle-parity": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lifecycle-parity-smoke.ps1",
     "smoke:settings-parity": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/settings-parity-smoke.ps1",
+    "soak:lifecycle": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lifecycle-soak.ps1",
+    "soak:lifecycle:24h": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lifecycle-soak.ps1 -DurationMinutes 1440 -SampleIntervalSeconds 60 -WarmupMinutes 5 -AgentExpectation Running",
     "contracts:generate": "dotnet run --project ../../tools/QuantifiedSelf.Windows.Bridge.ContractGen -- --write --repo-root ../..",
     "contracts:check": "dotnet run --project ../../tools/QuantifiedSelf.Windows.Bridge.ContractGen -- --check --repo-root ../..",
     "tauri": "tauri"

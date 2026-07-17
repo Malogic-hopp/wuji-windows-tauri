@@ -245,6 +245,31 @@ public sealed class TauriArchitectureBoundaryTests
     }
 
     [Fact]
+    public void TauriMinimizeToTray_MatchesTheWpfDevDefaultWithoutDiscardingDirtyState()
+    {
+        var lifecycle = ReadTauriFile("src-tauri", "src", "lifecycle", "mod.rs");
+        var wpfStartup = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(),
+            "src",
+            "QuantifiedSelf.Windows.App",
+            "App.xaml.cs"));
+        var defaults = new QuantifiedSelf.Windows.Core.Options.AppSettings();
+
+        Assert.True(defaults.MinimizeToTray);
+        Assert.True(defaults.CloseToTray);
+        Assert.Contains("window.StateChanged", wpfStartup, StringComparison.Ordinal);
+        Assert.Contains("window.WindowState == WindowState.Minimized", wpfStartup, StringComparison.Ordinal);
+        Assert.Contains("window.Hide()", wpfStartup, StringComparison.Ordinal);
+
+        Assert.Contains("WindowEvent::Resized(_)", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("window.is_minimized()", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("request_minimize_to_tray", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("minimize_to_tray_preserves_dirty_state_without_confirmation", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("minimize_does_not_bypass_an_active_close_confirmation", lifecycle, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_unsaved_changes(false)", lifecycle, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NativeTray_ExposesSafeAgentStatusActionsAndWindowControls()
     {
         var tray = ReadTauriFile("src-tauri", "src", "tray.rs");
@@ -353,6 +378,61 @@ public sealed class TauriArchitectureBoundaryTests
             StringComparison.OrdinalIgnoreCase);
         Assert.NotEqual(prodAgentMutex, devAgentMutex);
         Assert.Contains("QuantifiedSelf.Windows.Agent.{runtimeChannel.Name}.{userSid}", agentProgram, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LifecycleParityAndSoakTools_AreDevOnlyBoundedAndDoNotKillTheAgent()
+    {
+        using var package = JsonDocument.Parse(ReadTauriFile("package.json"));
+        var scripts = package.RootElement.GetProperty("scripts");
+        var parity = ReadTauriFile("scripts", "lifecycle-parity-smoke.ps1");
+        var soak = ReadTauriFile("scripts", "lifecycle-soak.ps1");
+
+        Assert.Equal(
+            "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lifecycle-parity-smoke.ps1",
+            scripts.GetProperty("smoke:lifecycle-parity").GetString());
+        Assert.Equal(
+            "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/lifecycle-soak.ps1",
+            scripts.GetProperty("soak:lifecycle").GetString());
+        Assert.Contains("-DurationMinutes 1440", scripts.GetProperty("soak:lifecycle:24h").GetString(), StringComparison.Ordinal);
+        Assert.Contains("-AgentExpectation Running", scripts.GetProperty("soak:lifecycle:24h").GetString(), StringComparison.Ordinal);
+
+        Assert.Contains("--channel\\s+dev", parity, StringComparison.Ordinal);
+        Assert.Contains("--ui-preview", parity, StringComparison.Ordinal);
+        Assert.Contains("Stop-ValidatedDevProcess", parity, StringComparison.Ordinal);
+        Assert.Contains("Assert-NoOrphanBridge", parity, StringComparison.Ordinal);
+        Assert.Contains("Assert-AgentIdentity", parity, StringComparison.Ordinal);
+        Assert.Contains("显式停止 Agent", parity, StringComparison.Ordinal);
+        Assert.Equal(1, parity.Split("Stop-Process -Id", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("Stop-Process -Name", parity, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Stop-Process -Id $agent", parity, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--channel prod", parity, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GetTempPath", parity, StringComparison.Ordinal);
+
+        Assert.Contains("[int]$DurationMinutes = 1440", soak, StringComparison.Ordinal);
+        Assert.Contains("[int]$SampleIntervalSeconds = 60", soak, StringComparison.Ordinal);
+        Assert.Contains("Get-ValidatedTopology", soak, StringComparison.Ordinal);
+        Assert.Contains("MaxMemoryGrowthMiB", soak, StringComparison.Ordinal);
+        Assert.Contains("MaxHandleGrowth", soak, StringComparison.Ordinal);
+        Assert.Contains("RefreshRateMultiplierLimit", soak, StringComparison.Ordinal);
+        Assert.Contains("ReadOperationCount", soak, StringComparison.Ordinal);
+        Assert.Contains("WriteOperationCount", soak, StringComparison.Ordinal);
+        Assert.DoesNotContain("Stop-Process", soak, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("--channel prod", soak, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("databasePath", soak, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GetTempPath", soak, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AgentRefreshCadence_IsFixedAndSkipsMissedTrayTicks()
+    {
+        var tray = ReadTauriFile("src-tauri", "src", "tray.rs");
+        var agentContainer = ReadTauriFile("src", "features", "agent", "AgentCommandContainer.tsx");
+
+        Assert.Contains("Duration::from_secs(4)", tray, StringComparison.Ordinal);
+        Assert.Contains("MissedTickBehavior::Skip", tray, StringComparison.Ordinal);
+        Assert.Contains("refetchInterval: 4_000", agentContainer, StringComparison.Ordinal);
+        Assert.DoesNotContain("MissedTickBehavior::Burst", tray, StringComparison.Ordinal);
     }
 
     [Fact]
