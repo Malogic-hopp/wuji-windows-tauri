@@ -17,6 +17,7 @@ use crate::contracts::{
 };
 
 const API_VERSION: &str = "1.0";
+const DEV_CHANNEL_NAME: &str = "dev";
 const JSON_RPC_VERSION: &str = "2.0";
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 const RESTART_BACKOFF: Duration = Duration::from_millis(350);
@@ -394,7 +395,7 @@ async fn spawn_initialized_bridge(path: &PathBuf) -> Result<BridgeSession, Comma
     let mut command = Command::new(path);
     command
         .arg("--channel")
-        .arg("dev")
+        .arg(DEV_CHANNEL_NAME)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -438,6 +439,10 @@ async fn spawn_initialized_bridge(path: &PathBuf) -> Result<BridgeSession, Comma
         STARTUP_TIMEOUT,
     )
     .await?;
+    if !is_expected_dev_identity(&initialization) {
+        terminate_child(&mut child).await;
+        return Err(CommandError::protocol());
+    }
     Ok(BridgeSession {
         child,
         stdin,
@@ -680,6 +685,10 @@ fn compatible_api(value: &str) -> bool {
     value.split('.').next() == Some("1")
 }
 
+fn is_expected_dev_identity(initialization: &ClientInitializeResult) -> bool {
+    initialization.channel_name == DEV_CHANNEL_NAME && !initialization.is_default_channel
+}
+
 fn can_automatically_restart(previous_restarts: u8, uptime: Duration) -> bool {
     previous_restarts == 0 || uptime >= STABILITY_WINDOW
 }
@@ -857,6 +866,28 @@ mod tests {
         assert!(can_automatically_restart(0, Duration::ZERO));
         assert!(!can_automatically_restart(1, Duration::from_secs(2)));
         assert!(can_automatically_restart(1, STABILITY_WINDOW));
+    }
+
+    #[test]
+    fn bridge_identity_must_be_the_non_default_dev_channel() {
+        let dev = ClientInitializeResult {
+            api_version: "1.0".into(),
+            channel_name: "dev".into(),
+            product_display_name: "WUJI Dev".into(),
+            is_default_channel: false,
+            capabilities: vec![],
+        };
+        assert!(is_expected_dev_identity(&dev));
+
+        assert!(!is_expected_dev_identity(&ClientInitializeResult {
+            channel_name: "prod".into(),
+            is_default_channel: true,
+            ..dev.clone()
+        }));
+        assert!(!is_expected_dev_identity(&ClientInitializeResult {
+            is_default_channel: true,
+            ..dev
+        }));
     }
 
     #[tokio::test]

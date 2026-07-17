@@ -94,7 +94,8 @@ public sealed class TauriArchitectureBoundaryTests
         var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
         Assert.Contains("QuantifiedSelf.Windows.Client.Bridge.exe", supervisor, StringComparison.Ordinal);
         Assert.Contains(".arg(\"--channel\")", supervisor, StringComparison.Ordinal);
-        Assert.Contains(".arg(\"dev\")", supervisor, StringComparison.Ordinal);
+        Assert.Contains("const DEV_CHANNEL_NAME: &str = \"dev\"", supervisor, StringComparison.Ordinal);
+        Assert.Contains(".arg(DEV_CHANNEL_NAME)", supervisor, StringComparison.Ordinal);
         Assert.DoesNotContain("std::env::args", supervisor, StringComparison.Ordinal);
 
         var commands = ReadTauriFile("src-tauri", "src", "commands", "mod.rs");
@@ -226,6 +227,7 @@ public sealed class TauriArchitectureBoundaryTests
     public void HostLifecycle_SeparatesHideFromExitAndKeepsAgentIndependent()
     {
         var lifecycle = ReadTauriFile("src-tauri", "src", "lifecycle", "mod.rs");
+        var tray = ReadTauriFile("src-tauri", "src", "tray.rs");
         var entrypoint = ReadTauriFile("src-tauri", "src", "lib.rs");
 
         Assert.Contains("HostLifecycleState::Visible", lifecycle, StringComparison.Ordinal);
@@ -235,11 +237,122 @@ public sealed class TauriArchitectureBoundaryTests
         Assert.Contains("api.prevent_close()", lifecycle, StringComparison.Ordinal);
         Assert.Contains("CloseIntent::Hide", lifecycle, StringComparison.Ordinal);
         Assert.Contains("CloseIntent::Exit", lifecycle, StringComparison.Ordinal);
-        Assert.Contains("show-main-window", lifecycle, StringComparison.Ordinal);
-        Assert.Contains("exit-wuji", lifecycle, StringComparison.Ordinal);
+        Assert.Contains("show-main-window", tray, StringComparison.Ordinal);
+        Assert.Contains("exit-wuji", tray, StringComparison.Ordinal);
         Assert.Contains("supervisor.shutdown().await", lifecycle, StringComparison.Ordinal);
         Assert.DoesNotContain("agent.stop", lifecycle, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("!permits_exit(app_handle)", entrypoint, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NativeTray_ExposesSafeAgentStatusActionsAndWindowControls()
+    {
+        var tray = ReadTauriFile("src-tauri", "src", "tray.rs");
+
+        string[] requiredMenuItems =
+        [
+            "Agent：正在连接…",
+            "启动记录",
+            "暂停记录",
+            "继续记录",
+            "停止记录",
+            "显示吾迹",
+            "隐藏吾迹",
+            "退出吾迹"
+        ];
+        foreach (var item in requiredMenuItems)
+        {
+            Assert.Contains(item, tray, StringComparison.Ordinal);
+        }
+
+        Assert.Contains("agent.getStatus", tray, StringComparison.Ordinal);
+        Assert.Contains("agent.start", tray, StringComparison.Ordinal);
+        Assert.Contains("agent.pause", tray, StringComparison.Ordinal);
+        Assert.Contains("agent.resume", tray, StringComparison.Ordinal);
+        Assert.Contains("agent.stop", tray, StringComparison.Ordinal);
+        Assert.Contains("STATUS_REFRESH_INTERVAL", tray, StringComparison.Ordinal);
+        Assert.Contains("MissedTickBehavior::Skip", tray, StringComparison.Ordinal);
+        Assert.Contains("AtomicBool", tray, StringComparison.Ordinal);
+        Assert.Contains("PredefinedMenuItem::separator", tray, StringComparison.Ordinal);
+        Assert.Contains("AgentState::Running", tray, StringComparison.Ordinal);
+        Assert.Contains("AgentState::Paused", tray, StringComparison.Ordinal);
+        Assert.Contains("AgentState::Stale", tray, StringComparison.Ordinal);
+        Assert.Contains("AgentState::NotRunning", tray, StringComparison.Ordinal);
+        Assert.DoesNotContain("windowTitle", tray, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("databasePath", tray, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void TauriSingleInstance_UsesADevOnlyMutexAndActivatesTheExistingWindow()
+    {
+        var singleInstance = ReadTauriFile("src-tauri", "src", "single_instance.rs");
+        var entrypoint = ReadTauriFile("src-tauri", "src", "lib.rs");
+        using var config = JsonDocument.Parse(ReadTauriFile("src-tauri", "tauri.conf.json"));
+        var title = config.RootElement
+            .GetProperty("app")
+            .GetProperty("windows")[0]
+            .GetProperty("title")
+            .GetString();
+
+        Assert.Contains("Local\\WUJI.Tauri.Dev.SingleInstance.v1", singleInstance, StringComparison.Ordinal);
+        Assert.DoesNotContain("QuantifiedSelf.Windows.Agent", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("CreateMutexW", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("ERROR_ALREADY_EXISTS", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("FindWindowW", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("ShowWindowAsync", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("SetForegroundWindow", singleInstance, StringComparison.Ordinal);
+        Assert.Contains("InstanceDecision::SecondaryActivated => return", entrypoint, StringComparison.Ordinal);
+        Assert.Contains("acquire_dev_instance()", entrypoint, StringComparison.Ordinal);
+        Assert.Equal("吾迹 · 开发预览", title);
+        Assert.Contains("DEV_WINDOW_TITLE: &str = \"吾迹 · 开发预览\"", singleInstance, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TauriChannel_IsFixedToDevAndCoreIsolationIdentifiersStayDistinctFromProd()
+    {
+        var supervisor = ReadTauriFile("src-tauri", "src", "bridge", "supervisor.rs");
+        var client = ReadTauriFile("src", "bridge", "client.ts");
+        var package = ReadTauriFile("package.json");
+        var repositoryRoot = FindRepositoryRoot();
+        var agentProgram = File.ReadAllText(Path.Combine(
+            repositoryRoot,
+            "src",
+            "QuantifiedSelf.Windows.Agent",
+            "Program.cs"));
+        var dev = QuantifiedSelf.Windows.Core.Runtime.RuntimeChannel.Development;
+        var prod = QuantifiedSelf.Windows.Core.Runtime.RuntimeChannel.Default;
+        var devPipe = new QuantifiedSelf.Windows.Core.Ipc.AgentPipeName("test-user", dev.Name);
+        var prodPipe = new QuantifiedSelf.Windows.Core.Ipc.AgentPipeName("test-user", prod.Name);
+        var devPaths = new QuantifiedSelf.Windows.Core.Paths.WindowsAgentPaths(channelName: dev.Name);
+        var prodPaths = new QuantifiedSelf.Windows.Core.Paths.WindowsAgentPaths(channelName: prod.Name);
+        var devAgentMutex = $@"Local\QuantifiedSelf.Windows.Agent.{dev.Name}.test-user";
+        var prodAgentMutex = @"Local\QuantifiedSelf.Windows.Agent.test-user";
+
+        Assert.Contains("const DEV_CHANNEL_NAME: &str = \"dev\"", supervisor, StringComparison.Ordinal);
+        Assert.Contains(".arg(DEV_CHANNEL_NAME)", supervisor, StringComparison.Ordinal);
+        Assert.Contains("initialization.channel_name == DEV_CHANNEL_NAME", supervisor, StringComparison.Ordinal);
+        Assert.Contains("!initialization.is_default_channel", supervisor, StringComparison.Ordinal);
+        Assert.DoesNotContain("channelName", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("executablePath", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("dataRoot", client, StringComparison.Ordinal);
+        Assert.DoesNotContain("plugin-autostart", package, StringComparison.OrdinalIgnoreCase);
+
+        Assert.False(dev.IsDefault);
+        Assert.Equal("WUJI-Dev", dev.DataRootProductFolder);
+        Assert.Equal("WUJI Dev", dev.StartupRegistryValueName);
+        Assert.Equal("--channel dev", dev.AgentLaunchArguments);
+        Assert.NotEqual(prod.DataRootProductFolder, dev.DataRootProductFolder);
+        Assert.NotEqual(prod.StartupRegistryValueName, dev.StartupRegistryValueName);
+        Assert.NotEqual(prodPipe.FullPipeName, devPipe.FullPipeName);
+        Assert.Contains(".dev.", devPipe.FullPipeName, StringComparison.Ordinal);
+        Assert.DoesNotContain(".dev.", prodPipe.FullPipeName, StringComparison.Ordinal);
+        Assert.NotEqual(prodPaths.Root, devPaths.Root);
+        Assert.Contains(
+            $"{Path.DirectorySeparatorChar}WUJI-Dev{Path.DirectorySeparatorChar}WindowsAgent",
+            devPaths.Root,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.NotEqual(prodAgentMutex, devAgentMutex);
+        Assert.Contains("QuantifiedSelf.Windows.Agent.{runtimeChannel.Name}.{userSid}", agentProgram, StringComparison.Ordinal);
     }
 
     [Fact]
