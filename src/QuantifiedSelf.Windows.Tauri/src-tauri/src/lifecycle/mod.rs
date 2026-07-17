@@ -99,6 +99,27 @@ impl HostLifecycle {
         }
     }
 
+    fn request_minimize_to_tray(&self) -> HostAction {
+        let mut data = self.lock();
+        if matches!(
+            data.state,
+            HostLifecycleState::ShuttingDown | HostLifecycleState::Exited
+        ) {
+            return HostAction::None;
+        }
+        if data.state == HostLifecycleState::ExitConfirmationPending {
+            // Hide the minimized window but preserve the active confirmation
+            // and its intent so restoring from the tray can continue safely.
+            return HostAction::Hide;
+        }
+
+        // Match the WPF dev default: minimizing hides the window without
+        // discarding dirty Settings state or asking for close confirmation.
+        data.state = HostLifecycleState::HiddenToTray;
+        data.pending_intent = None;
+        HostAction::Hide
+    }
+
     fn confirm(&self, intent: CloseIntent) -> Result<HostAction, LifecycleCommandError> {
         let mut data = self.lock();
         if data.state != HostLifecycleState::ExitConfirmationPending
@@ -193,6 +214,10 @@ pub fn handle_window_event<R: Runtime>(window: &Window<R>, event: &WindowEvent) 
         let app = window.app_handle();
         let lifecycle = app.state::<HostLifecycle>();
         execute_action(app, lifecycle.request(CloseIntent::Hide));
+    } else if matches!(event, WindowEvent::Resized(_)) && window.is_minimized().unwrap_or(false) {
+        let app = window.app_handle();
+        let lifecycle = app.state::<HostLifecycle>();
+        execute_action(app, lifecycle.request_minimize_to_tray());
     } else if matches!(event, WindowEvent::Focused(true)) {
         let app = window.app_handle();
         let lifecycle = app.state::<HostLifecycle>();
@@ -364,6 +389,32 @@ mod tests {
         lifecycle.request(CloseIntent::Hide);
 
         assert!(lifecycle.confirm(CloseIntent::Exit).is_err());
+        assert_eq!(
+            lifecycle.state(),
+            HostLifecycleState::ExitConfirmationPending
+        );
+    }
+
+    #[test]
+    fn minimize_to_tray_preserves_dirty_state_without_confirmation() {
+        let lifecycle = HostLifecycle::default();
+        lifecycle.set_unsaved_changes(true);
+
+        assert_eq!(lifecycle.request_minimize_to_tray(), HostAction::Hide);
+        assert_eq!(lifecycle.state(), HostLifecycleState::HiddenToTray);
+        assert_eq!(
+            lifecycle.request(CloseIntent::Exit),
+            HostAction::Confirm(CloseIntent::Exit)
+        );
+    }
+
+    #[test]
+    fn minimize_does_not_bypass_an_active_close_confirmation() {
+        let lifecycle = HostLifecycle::default();
+        lifecycle.set_unsaved_changes(true);
+        lifecycle.request(CloseIntent::Hide);
+
+        assert_eq!(lifecycle.request_minimize_to_tray(), HostAction::Hide);
         assert_eq!(
             lifecycle.state(),
             HostLifecycleState::ExitConfirmationPending
