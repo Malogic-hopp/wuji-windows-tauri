@@ -4,6 +4,14 @@ namespace QuantifiedSelf.Windows.ApplicationLayer.Settings;
 
 public interface ISettingsService
 {
+    Task<ClientSettingsSnapshot> GetClientSettingsAsync(CancellationToken cancellationToken = default);
+
+    ClientSettingsSnapshot GetDefaultClientSettings();
+
+    Task<ClientSettingsUpdateResult> UpdateClientSettingsAsync(
+        ClientSettingsSnapshot settings,
+        CancellationToken cancellationToken = default);
+
     Task<AppSettings> ReadAppSettingsAsync(CancellationToken cancellationToken = default);
 
     Task SaveAppSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default);

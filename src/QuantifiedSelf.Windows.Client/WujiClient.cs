@@ -116,6 +116,18 @@ internal sealed class DiagnosticsClient(IDiagnosticsDataService service) : IDiag
 
 internal sealed class SettingsClient(ISettingsService service) : ISettingsClient
 {
+    public Task<ClientSettingsSnapshot> GetClientSettingsAsync(
+        CancellationToken cancellationToken = default) =>
+        service.GetClientSettingsAsync(cancellationToken);
+
+    public ClientSettingsSnapshot GetDefaultClientSettings() =>
+        service.GetDefaultClientSettings();
+
+    public Task<ClientSettingsUpdateResult> UpdateClientSettingsAsync(
+        ClientSettingsSnapshot settings,
+        CancellationToken cancellationToken = default) =>
+        service.UpdateClientSettingsAsync(settings, cancellationToken);
+
     public async Task<Core.Options.AppSettings> ReadAppSettingsOrDefaultAsync(
         CancellationToken cancellationToken = default)
     {

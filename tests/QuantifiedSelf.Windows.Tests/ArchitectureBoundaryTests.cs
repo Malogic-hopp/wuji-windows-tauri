@@ -434,6 +434,35 @@ public sealed class ArchitectureBoundaryTests
         Assert.Same(applicationAssembly, typeof(IAgentOptionsStore).Assembly);
         Assert.Same(applicationAssembly, typeof(ISettingsService).Assembly);
         Assert.Same(applicationAssembly, typeof(SettingsService).Assembly);
+        Assert.Same(applicationAssembly, typeof(ClientSettingsSnapshot).Assembly);
+        Assert.Same(applicationAssembly, typeof(ClientSettingsUpdateResult).Assembly);
+    }
+
+    [Fact]
+    public void ClientSettingsUseCases_ReturnFrameworkIndependentSafeContracts()
+    {
+        var getMethod = typeof(ISettingsService).GetMethod(nameof(ISettingsService.GetClientSettingsAsync));
+        var updateMethod = typeof(ISettingsService).GetMethod(nameof(ISettingsService.UpdateClientSettingsAsync));
+
+        Assert.NotNull(getMethod);
+        Assert.NotNull(updateMethod);
+        Assert.Equal(typeof(Task<ClientSettingsSnapshot>), getMethod!.ReturnType);
+        Assert.Equal(typeof(ClientSettingsSnapshot), updateMethod!.GetParameters()[0].ParameterType);
+        Assert.Equal(typeof(Task<ClientSettingsUpdateResult>), updateMethod.ReturnType);
+
+        var publicContract = string.Join(
+            Environment.NewLine,
+            typeof(ClientAppSettings).GetProperties().Select(property => property.Name)
+                .Concat(typeof(ClientAgentOptions).GetProperties().Select(property => property.Name)));
+        string[] forbidden =
+        [
+            "StartAppOnWindowsLogin", "LastSelectedPage", "ExcludedProcesses", "ExcludedTitlePatterns",
+            "UseMockCapture", "DataRoot", "DatabasePath", "ExecutablePath", "PipeName", "Registry"
+        ];
+        foreach (var marker in forbidden)
+        {
+            Assert.DoesNotContain(marker, publicContract, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
