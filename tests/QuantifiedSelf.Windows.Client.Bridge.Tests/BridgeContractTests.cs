@@ -42,7 +42,7 @@ public sealed class BridgeContractTests
     }
 
     [Fact]
-    public void Schema_ContainsStageFourMethodsAndStableErrors()
+    public void Schema_ContainsStageFiveAMethodsAndStableErrors()
     {
         var schemaPath = Path.Combine(
             FindRepositoryRoot(),
@@ -64,6 +64,8 @@ public sealed class BridgeContractTests
                 "agent.resume",
                 "agent.stop",
                 "activity.getOverview",
+                "settings.get",
+                "settings.update",
                 "bridge.shutdown"
             ],
             root.GetProperty("x-wuji-methods")
@@ -77,6 +79,11 @@ public sealed class BridgeContractTests
                 .Select(value => value.GetString()));
         Assert.Contains(
             "initialization_required",
+            root.GetProperty("x-wuji-error-codes")
+                .EnumerateArray()
+                .Select(value => value.GetString()));
+        Assert.Contains(
+            "validation_failed",
             root.GetProperty("x-wuji-error-codes")
                 .EnumerateArray()
                 .Select(value => value.GetString()));
@@ -181,6 +188,83 @@ public sealed class BridgeContractTests
                 .GetProperty("startedAtUtc")
                 .GetProperty("format")
                 .GetString());
+    }
+
+    [Fact]
+    public void SettingsContracts_ExposeOnlyTheApprovedSafeAllowlist()
+    {
+        Assert.Equal(
+            ["AutoStartAgentWhenAppStarts", "RefreshIntervalSeconds", "Theme"],
+            typeof(SettingsAppSettings).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            [
+                "EnableAgentEventJournal", "EnableJsonlJournal", "EnableSessionMerge",
+                "HeartbeatIntervalSeconds", "IdleThresholdSeconds", "MaskWindowTitles",
+                "RetentionDays", "SamplingIntervalSeconds", "StaleThresholdSeconds"
+            ],
+            typeof(SettingsAgentOptions).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["AgentOptions", "AppSettings"],
+            typeof(SettingsSnapshot).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["Defaults", "Settings"],
+            typeof(SettingsGetResult).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Equal(
+            ["Field", "Message"],
+            typeof(SettingsFieldError).GetProperties().Select(property => property.Name).Order().ToArray());
+        Assert.Contains(
+            "FieldErrors",
+            typeof(BridgeErrorData).GetProperties().Select(property => property.Name));
+
+        var settingsContractSource = string.Join(
+            Environment.NewLine,
+            typeof(SettingsAppSettings).GetProperties().Select(property => property.Name)
+                .Concat(typeof(SettingsAgentOptions).GetProperties().Select(property => property.Name)));
+        string[] forbiddenFields =
+        [
+            "StartAppOnWindowsLogin", "LastSelectedPage", "MinimizeToTray", "CloseToTray",
+            "UseMockCapture", "IdleSummaryIntervalMinutes", "ExcludedProcesses", "ExcludedTitlePatterns",
+            "DataRoot", "DatabasePath", "AgentExecutablePath", "PipeName", "Mutex", "Registry"
+        ];
+        foreach (var forbiddenField in forbiddenFields)
+        {
+            Assert.DoesNotContain(forbiddenField, settingsContractSource, StringComparison.OrdinalIgnoreCase);
+        }
+
+        var schemaPath = Path.Combine(
+            FindRepositoryRoot(), "contracts", "wuji-bridge", "v1", "bridge.schema.json");
+        using var schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+        var definitions = schema.RootElement.GetProperty("$defs");
+        Assert.Equal(5, definitions.GetProperty("SettingsAppSettings").GetProperty("properties")
+            .GetProperty("refreshIntervalSeconds").GetProperty("minimum").GetInt32());
+        Assert.Equal(300, definitions.GetProperty("SettingsAppSettings").GetProperty("properties")
+            .GetProperty("refreshIntervalSeconds").GetProperty("maximum").GetInt32());
+        Assert.Equal(3650, definitions.GetProperty("SettingsAgentOptions").GetProperty("properties")
+            .GetProperty("retentionDays").GetProperty("maximum").GetInt32());
+    }
+
+    [Fact]
+    public void SettingsHandlers_UseOnlyTypedWujiClientSettingsUseCases()
+    {
+        var repositoryRoot = FindRepositoryRoot();
+        var host = File.ReadAllText(Path.Combine(
+            repositoryRoot, "src", "QuantifiedSelf.Windows.Client.Bridge", "BridgeHost.cs"));
+        var mapper = File.ReadAllText(Path.Combine(
+            repositoryRoot, "src", "QuantifiedSelf.Windows.Client.Bridge", "BridgeSettingsMapper.cs"));
+
+        Assert.Contains("var settingsClient = _client.Settings", host, StringComparison.Ordinal);
+        Assert.Contains("settingsClient.GetClientSettingsAsync", host, StringComparison.Ordinal);
+        Assert.Contains("settingsClient.GetDefaultClientSettings", host, StringComparison.Ordinal);
+        Assert.Contains("_client.Settings.UpdateClientSettingsAsync", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadAppSettingsAsync", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("ReadAgentOptionsAsync", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveAppSettingsAsync", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("SaveAgentOptionsAsync", host, StringComparison.Ordinal);
+        Assert.DoesNotContain("Infrastructure", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Sqlite", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Registry", host, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("StartAppOnWindowsLogin", mapper, StringComparison.Ordinal);
+        Assert.DoesNotContain("ExcludedTitlePatterns", mapper, StringComparison.Ordinal);
     }
 
     [Fact]

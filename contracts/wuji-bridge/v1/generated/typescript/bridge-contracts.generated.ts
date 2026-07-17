@@ -82,6 +82,7 @@ export interface BridgeErrorData {
   readonly kind: BridgeErrorKind;
   readonly retryable: boolean;
   readonly correlationId: string;
+  readonly fieldErrors?: ReadonlyArray<SettingsFieldError>;
 }
 
 export type BridgeErrorKind =
@@ -143,4 +144,53 @@ export interface CommandResult {
   readonly usedFallback: boolean;
   readonly message?: string;
   readonly errorCode?: string;
+}
+
+export interface SettingsAgentOptions {
+  readonly samplingIntervalSeconds: number;
+  readonly idleThresholdSeconds: number;
+  readonly heartbeatIntervalSeconds: number;
+  readonly staleThresholdSeconds: number;
+  readonly retentionDays: number;
+  readonly enableJsonlJournal: boolean;
+  readonly enableAgentEventJournal: boolean;
+  readonly enableSessionMerge: boolean;
+  readonly maskWindowTitles: boolean;
+}
+
+export interface SettingsAppSettings {
+  readonly theme: SettingsTheme;
+  readonly refreshIntervalSeconds: number;
+  readonly autoStartAgentWhenAppStarts: boolean;
+}
+
+export interface SettingsFieldError {
+  readonly field: string;
+  readonly message: string;
+}
+
+export type SettingsGetParams = Record<string, never>;
+
+export interface SettingsGetResult {
+  readonly settings: SettingsSnapshot;
+  readonly defaults: SettingsSnapshot;
+}
+
+export interface SettingsSnapshot {
+  readonly appSettings: SettingsAppSettings;
+  readonly agentOptions: SettingsAgentOptions;
+}
+
+export type SettingsTheme =
+  | 'light'
+  | 'dark'
+  | 'high_contrast';
+
+export interface SettingsUpdateParams {
+  readonly settings: SettingsSnapshot;
+}
+
+export interface SettingsUpdateResult {
+  readonly saved: boolean;
+  readonly settings: SettingsSnapshot;
 }

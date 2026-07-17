@@ -2,9 +2,11 @@ using System.Text;
 using System.Text.Json;
 using QuantifiedSelf.Windows.ApplicationLayer.Activity;
 using QuantifiedSelf.Windows.ApplicationLayer.Models;
+using QuantifiedSelf.Windows.ApplicationLayer.Settings;
 using QuantifiedSelf.Windows.Client.Bridge.Generated;
 using QuantifiedSelf.Windows.Core.Control;
 using QuantifiedSelf.Windows.Core.Models;
+using QuantifiedSelf.Windows.Core.Options;
 using QuantifiedSelf.Windows.Core.Runtime;
 
 namespace QuantifiedSelf.Windows.Client.Bridge.Tests;
@@ -251,6 +253,190 @@ public sealed class BridgeHostTests
 
         Assert.Equal("initialization_required", Error(result.Responses[1]).GetProperty("code").GetString());
         Assert.Equal(0, client.ActivityAccessCount);
+    }
+
+    [Fact]
+    public async Task SettingsMethodBeforeInitialize_IsRejectedWithoutAccessingSettings()
+    {
+        var client = new FakeWujiClient(settings: new FakeBridgeSettingsClient());
+        var result = await RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("settings-1", BridgeProtocol.SettingsGetMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal("initialization_required", Error(result.Responses[1]).GetProperty("code").GetString());
+        Assert.Equal(0, client.SettingsAccessCount);
+    }
+
+    [Fact]
+    public async Task SettingsGet_ReturnsOnlyTheApprovedSafeAllowlist()
+    {
+        const string PrivatePath = "C:\\Users\\private\\settings.json";
+        var settings = new FakeBridgeSettingsClient
+        {
+            Current = ValidClientSettings() with
+            {
+                AppSettings = new ClientAppSettings("HighContrast", 30, true)
+            },
+            PrivateDiagnostic = PrivatePath
+        };
+        var client = new FakeWujiClient(settings: settings);
+        var result = await RunHostAsync(
+            client,
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("settings-1", BridgeProtocol.SettingsGetMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var response = Result(result.Responses[2]);
+        var snapshot = response.GetProperty("settings");
+        var defaults = response.GetProperty("defaults");
+        Assert.Equal("high_contrast", snapshot.GetProperty("appSettings").GetProperty("theme").GetString());
+        Assert.Equal(30, snapshot.GetProperty("appSettings").GetProperty("refreshIntervalSeconds").GetInt64());
+        Assert.Equal(3, snapshot.GetProperty("agentOptions").GetProperty("samplingIntervalSeconds").GetInt64());
+        Assert.Equal("light", defaults.GetProperty("appSettings").GetProperty("theme").GetString());
+        string[] forbiddenFields =
+        [
+            "startAppOnWindowsLogin", "lastSelectedPage", "minimizeToTray", "closeToTray",
+            "useMockCapture", "idleSummaryIntervalMinutes", "excludedProcesses", "excludedTitlePatterns",
+            "dataRoot", "databasePath", "registry"
+        ];
+        foreach (var field in forbiddenFields)
+        {
+            Assert.DoesNotContain(field, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        }
+        Assert.DoesNotContain(PrivatePath, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, settings.GetCount);
+        Assert.Equal(1, settings.GetDefaultsCount);
+        Assert.Equal(1, client.SettingsAccessCount);
+        Assert.Equal(0, client.AgentAccessCount);
+        Assert.Equal(0, client.ActivityAccessCount);
+    }
+
+    [Fact]
+    public async Task SettingsUpdate_MapsTypedParamsAndReturnsNormalizedSettings()
+    {
+        var settings = new FakeBridgeSettingsClient
+        {
+            UpdateHandler = (update, _) => Task.FromResult(
+                ClientSettingsUpdateResult.Success(update with
+                {
+                    AppSettings = update.AppSettings with { Theme = "Dark" }
+                }))
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(settings: settings),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            SettingsUpdateRequest("settings-1", theme: "dark", refreshIntervalSeconds: 25),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var response = Result(result.Responses[2]);
+        Assert.True(response.GetProperty("saved").GetBoolean());
+        Assert.Equal("dark", response.GetProperty("settings").GetProperty("appSettings").GetProperty("theme").GetString());
+        Assert.Equal(25, settings.LastUpdate!.AppSettings.RefreshIntervalSeconds);
+        Assert.Equal("Dark", settings.LastUpdate.AppSettings.Theme);
+        Assert.Equal(1, settings.UpdateCount);
+    }
+
+    [Fact]
+    public async Task SettingsUpdate_ValidationFailureReturnsSafeFieldErrors()
+    {
+        const string PrivatePath = "C:\\Users\\private\\agent-options.json";
+        const string PrivateStoreDetail = "registry HKCU value failed; database wuji-dev.db";
+        var settings = new FakeBridgeSettingsClient
+        {
+            UpdateHandler = (_, _) => Task.FromResult(ClientSettingsUpdateResult.ValidationFailure(
+            [
+                new ClientSettingsValidationIssue("agentOptions.staleThresholdSeconds", "must be greater than heartbeatIntervalSeconds."),
+                new ClientSettingsValidationIssue("unknown.privateField", PrivatePath),
+                new ClientSettingsValidationIssue("appSettings.refreshIntervalSeconds", PrivateStoreDetail)
+            ]))
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(settings: settings),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            SettingsUpdateRequest("settings-1"),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var error = Error(result.Responses[2]);
+        Assert.Equal("validation_failed", error.GetProperty("code").GetString());
+        Assert.Equal("validation", error.GetProperty("data").GetProperty("kind").GetString());
+        Assert.False(error.GetProperty("data").GetProperty("retryable").GetBoolean());
+        var fieldErrors = error.GetProperty("data").GetProperty("fieldErrors");
+        Assert.Equal("agentOptions.staleThresholdSeconds", fieldErrors[0].GetProperty("field").GetString());
+        Assert.Equal("settings", fieldErrors[1].GetProperty("field").GetString());
+        Assert.Equal("appSettings.refreshIntervalSeconds", fieldErrors[2].GetProperty("field").GetString());
+        Assert.All(fieldErrors.EnumerateArray(), fieldError =>
+            Assert.Equal("设置值无效。", fieldError.GetProperty("message").GetString()));
+        Assert.Equal("设置值无效。", fieldErrors[1].GetProperty("message").GetString());
+        Assert.DoesNotContain(PrivatePath, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(PrivateStoreDetail, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task SettingsUpdate_RejectsMissingOrUnknownParamsWithoutCallingClient()
+    {
+        var settings = new FakeBridgeSettingsClient();
+        var result = await RunHostAsync(
+            new FakeWujiClient(settings: settings),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("invalid-1", BridgeProtocol.SettingsUpdateMethod),
+            RequestWithParams("invalid-2", BridgeProtocol.SettingsUpdateMethod, new { executablePath = "forbidden" }),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal("invalid_request", Error(result.Responses[2]).GetProperty("code").GetString());
+        Assert.Equal("invalid_request", Error(result.Responses[3]).GetProperty("code").GetString());
+        Assert.Equal(0, settings.UpdateCount);
+    }
+
+    [Fact]
+    public async Task SettingsFailure_DoesNotLeakInternalPathsOrExceptions()
+    {
+        const string PrivatePath = "C:\\Users\\private\\app-settings.json";
+        var settings = new FakeBridgeSettingsClient
+        {
+            GetHandler = _ => Task.FromException<ClientSettingsSnapshot>(new IOException(PrivatePath))
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(settings: settings),
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            Request("settings-1", BridgeProtocol.SettingsGetMethod),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        Assert.Equal("internal_error", Error(result.Responses[2]).GetProperty("code").GetString());
+        Assert.DoesNotContain(PrivatePath, result.RawOutput, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(PrivatePath, result.Log, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("method=settings.get", result.Log, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SettingsUpdateTimeout_IsNotRetryableBecauseSaveMayHaveCompleted()
+    {
+        var settings = new FakeBridgeSettingsClient
+        {
+            UpdateHandler = async (_, cancellationToken) =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                throw new InvalidOperationException("unreachable");
+            }
+        };
+        var result = await RunHostAsync(
+            new FakeWujiClient(settings: settings),
+            new BridgeHostOptions { SettingsUpdateTimeout = TimeSpan.FromMilliseconds(25) },
+            Request("hello-1", BridgeProtocol.HelloMethod),
+            Request("init-1", BridgeProtocol.InitializeMethod),
+            SettingsUpdateRequest("settings-1"),
+            Request("shutdown-1", BridgeProtocol.ShutdownMethod));
+
+        var error = Error(result.Responses[2]);
+        Assert.Equal("request_timeout", error.GetProperty("code").GetString());
+        Assert.False(error.GetProperty("data").GetProperty("retryable").GetBoolean());
+        Assert.Equal(1, settings.UpdateCount);
     }
 
     [Fact]
@@ -682,6 +868,55 @@ public sealed class BridgeHostTests
         });
     }
 
+    private static string RequestWithParams(string id, string method, object parameters)
+    {
+        return JsonSerializer.Serialize(new
+        {
+            jsonrpc = "2.0",
+            id,
+            method,
+            @params = parameters,
+            meta = new
+            {
+                apiVersion = "1.0",
+                correlationId = $"corr-{id}"
+            }
+        });
+    }
+
+    private static string SettingsUpdateRequest(
+        string id,
+        string theme = "dark",
+        long refreshIntervalSeconds = 15) =>
+        RequestWithParams(id, BridgeProtocol.SettingsUpdateMethod, new
+        {
+            settings = new
+            {
+                appSettings = new
+                {
+                    theme,
+                    refreshIntervalSeconds,
+                    autoStartAgentWhenAppStarts = true
+                },
+                agentOptions = new
+                {
+                    samplingIntervalSeconds = 3,
+                    idleThresholdSeconds = 60,
+                    heartbeatIntervalSeconds = 3,
+                    staleThresholdSeconds = 15,
+                    retentionDays = 30,
+                    enableJsonlJournal = true,
+                    enableAgentEventJournal = true,
+                    enableSessionMerge = true,
+                    maskWindowTitles = true
+                }
+            }
+        });
+
+    private static ClientSettingsSnapshot ValidClientSettings() => new(
+        new ClientAppSettings("Light", 15, false),
+        new ClientAgentOptions(3, 60, 3, 15, 30, true, true, true, true));
+
     private static string RequestWithUnknownProperty(string id)
     {
         return JsonSerializer.Serialize(new
@@ -715,15 +950,18 @@ public sealed class BridgeHostTests
         private readonly Func<CancellationToken, Task> _initialize;
         private readonly IAgentClient? _agent;
         private readonly IActivityClient? _activity;
+        private readonly ISettingsClient? _settings;
 
         public FakeWujiClient(
             Func<CancellationToken, Task>? initialize = null,
             IAgentClient? agent = null,
-            IActivityClient? activity = null)
+            IActivityClient? activity = null,
+            ISettingsClient? settings = null)
         {
             _initialize = initialize ?? (_ => Task.CompletedTask);
             _agent = agent;
             _activity = activity;
+            _settings = settings;
         }
 
         public int InitializeCount { get; private set; }
@@ -733,6 +971,8 @@ public sealed class BridgeHostTests
         public int AgentAccessCount { get; private set; }
 
         public int ActivityAccessCount { get; private set; }
+
+        public int SettingsAccessCount { get; private set; }
 
         public IAgentClient Agent
         {
@@ -756,7 +996,15 @@ public sealed class BridgeHostTests
 
         public IDiagnosticsClient Diagnostics => throw new InvalidOperationException("Diagnostics is not part of stage 1.");
 
-        public ISettingsClient Settings => throw new InvalidOperationException("Settings is not part of stage 1.");
+        public ISettingsClient Settings
+        {
+            get
+            {
+                SettingsAccessCount++;
+                return _settings
+                    ?? throw new InvalidOperationException("Settings must not be accessed by this Bridge test.");
+            }
+        }
 
         public IStartupClient Startup => throw new InvalidOperationException("Startup is not part of stage 1.");
 
@@ -775,5 +1023,70 @@ public sealed class BridgeHostTests
             DisposeCount++;
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class FakeBridgeSettingsClient : ISettingsClient
+    {
+        public ClientSettingsSnapshot Current { get; set; } = ValidClientSettings();
+
+        public string PrivateDiagnostic { get; set; } = string.Empty;
+
+        public int GetCount { get; private set; }
+
+        public int GetDefaultsCount { get; private set; }
+
+        public int UpdateCount { get; private set; }
+
+        public ClientSettingsSnapshot? LastUpdate { get; private set; }
+
+        public Func<CancellationToken, Task<ClientSettingsSnapshot>>? GetHandler { get; init; }
+
+        public Func<ClientSettingsSnapshot, CancellationToken, Task<ClientSettingsUpdateResult>>? UpdateHandler { get; init; }
+
+        public Task<ClientSettingsSnapshot> GetClientSettingsAsync(CancellationToken cancellationToken = default)
+        {
+            GetCount++;
+            _ = PrivateDiagnostic;
+            return GetHandler?.Invoke(cancellationToken) ?? Task.FromResult(Current);
+        }
+
+        public ClientSettingsSnapshot GetDefaultClientSettings()
+        {
+            GetDefaultsCount++;
+            return ValidClientSettings();
+        }
+
+        public Task<ClientSettingsUpdateResult> UpdateClientSettingsAsync(
+            ClientSettingsSnapshot settings,
+            CancellationToken cancellationToken = default)
+        {
+            UpdateCount++;
+            LastUpdate = settings;
+            return UpdateHandler?.Invoke(settings, cancellationToken)
+                ?? Task.FromResult(ClientSettingsUpdateResult.Success(settings));
+        }
+
+        public Task<AppSettings> ReadAppSettingsOrDefaultAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
+
+        public Task<AppSettings> ReadAppSettingsAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
+
+        public Task SaveAppSettingsAsync(AppSettings settings, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
+
+        public Task<WindowsAgentOptions> ReadAgentOptionsAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
+
+        public Task SaveAgentOptionsAsync(WindowsAgentOptions options, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
+
+        public Task SaveAgentOptionsWithBackupAsync(
+            WindowsAgentOptions options,
+            CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
+
+        public Task RestoreAgentOptionsBackupAsync(CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Legacy settings methods must not be used by Bridge.");
     }
 }

@@ -20,6 +20,10 @@ internal sealed class BridgeHostOptions
 
     public TimeSpan ActivityOverviewTimeout { get; init; } = TimeSpan.FromSeconds(10);
 
+    public TimeSpan SettingsReadTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan SettingsUpdateTimeout { get; init; } = TimeSpan.FromSeconds(15);
+
     public TimeSpan CompletedRequestTtl { get; init; } = TimeSpan.FromMinutes(5);
 
     public void Validate()
@@ -36,6 +40,8 @@ internal sealed class BridgeHostOptions
             || AgentResumeTimeout <= TimeSpan.Zero
             || AgentStopTimeout <= TimeSpan.Zero
             || ActivityOverviewTimeout <= TimeSpan.Zero
+            || SettingsReadTimeout <= TimeSpan.Zero
+            || SettingsUpdateTimeout <= TimeSpan.Zero
             || CompletedRequestTtl <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(RequestTimeout), "Bridge timeouts must be positive.");
@@ -50,6 +56,8 @@ internal sealed class BridgeHostOptions
         BridgeProtocol.AgentResumeMethod => AgentResumeTimeout,
         BridgeProtocol.AgentStopMethod => AgentStopTimeout,
         BridgeProtocol.ActivityGetOverviewMethod => ActivityOverviewTimeout,
+        BridgeProtocol.SettingsGetMethod => SettingsReadTimeout,
+        BridgeProtocol.SettingsUpdateMethod => SettingsUpdateTimeout,
         _ => RequestTimeout
     };
 }

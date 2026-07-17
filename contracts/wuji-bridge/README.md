@@ -27,5 +27,8 @@ dotnet run --project .\tools\QuantifiedSelf.Windows.Bridge.ContractGen -- --chec
 - Bridge 生命周期：`bridge.hello`、`client.initialize`、`bridge.shutdown`；
 - Agent 生命周期：`agent.getStatus`、`agent.start`、`agent.pause`、`agent.resume`、`agent.stop`；
 - Dashboard：`activity.getOverview`。
+- Settings：`settings.get`、`settings.update`。
 
 `activity.getOverview` 只返回今日摘要、Top Apps 和最近会话的安全投影，不包含窗口标题、进程名、数据库 ID、路径或内部异常。
+
+Settings v1 只允许主题、刷新间隔、UI 启动 Agent，以及 Agent 的五个数值参数和四个布尔开关。`settings.get` 同时返回当前安全快照与由 Core/Application 投影的默认快照，前端不复制默认值。Windows 登录启动、导航状态、托盘策略、模拟采集、排除进程/标题、路径、注册表、数据库和任意键值配置不进入合同。`settings.update` 必须通过 Application 校验，字段错误只返回固定字段名和安全消息。

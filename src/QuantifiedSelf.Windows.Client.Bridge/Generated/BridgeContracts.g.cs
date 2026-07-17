@@ -109,6 +109,7 @@ public sealed class BridgeErrorData
     public required BridgeErrorKind Kind { get; init; }
     public required bool Retryable { get; init; }
     public required string CorrelationId { get; init; }
+    public IReadOnlyList<SettingsFieldError>? FieldErrors { get; init; }
 }
 
 public enum BridgeErrorKind
@@ -185,4 +186,64 @@ public sealed class CommandResult
     public required bool UsedFallback { get; init; }
     public string? Message { get; init; }
     public string? ErrorCode { get; init; }
+}
+
+public sealed class SettingsAgentOptions
+{
+    public required long SamplingIntervalSeconds { get; init; }
+    public required long IdleThresholdSeconds { get; init; }
+    public required long HeartbeatIntervalSeconds { get; init; }
+    public required long StaleThresholdSeconds { get; init; }
+    public required long RetentionDays { get; init; }
+    public required bool EnableJsonlJournal { get; init; }
+    public required bool EnableAgentEventJournal { get; init; }
+    public required bool EnableSessionMerge { get; init; }
+    public required bool MaskWindowTitles { get; init; }
+}
+
+public sealed class SettingsAppSettings
+{
+    public required SettingsTheme Theme { get; init; }
+    public required long RefreshIntervalSeconds { get; init; }
+    public required bool AutoStartAgentWhenAppStarts { get; init; }
+}
+
+public sealed class SettingsFieldError
+{
+    public required string Field { get; init; }
+    public required string Message { get; init; }
+}
+
+public sealed class SettingsGetParams
+{
+}
+
+public sealed class SettingsGetResult
+{
+    public required SettingsSnapshot Settings { get; init; }
+    public required SettingsSnapshot Defaults { get; init; }
+}
+
+public sealed class SettingsSnapshot
+{
+    public required SettingsAppSettings AppSettings { get; init; }
+    public required SettingsAgentOptions AgentOptions { get; init; }
+}
+
+public enum SettingsTheme
+{
+    Light,
+    Dark,
+    HighContrast,
+}
+
+public sealed class SettingsUpdateParams
+{
+    public required SettingsSnapshot Settings { get; init; }
+}
+
+public sealed class SettingsUpdateResult
+{
+    public required bool Saved { get; init; }
+    public required SettingsSnapshot Settings { get; init; }
 }

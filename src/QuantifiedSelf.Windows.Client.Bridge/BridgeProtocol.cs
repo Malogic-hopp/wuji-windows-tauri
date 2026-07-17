@@ -17,6 +17,8 @@ internal static class BridgeProtocol
     public const string AgentResumeMethod = "agent.resume";
     public const string AgentStopMethod = "agent.stop";
     public const string ActivityGetOverviewMethod = "activity.getOverview";
+    public const string SettingsGetMethod = "settings.get";
+    public const string SettingsUpdateMethod = "settings.update";
     public const string ShutdownMethod = "bridge.shutdown";
 
     public static readonly IReadOnlyList<string> Capabilities =
@@ -29,6 +31,8 @@ internal static class BridgeProtocol
         AgentResumeMethod,
         AgentStopMethod,
         ActivityGetOverviewMethod,
+        SettingsGetMethod,
+        SettingsUpdateMethod,
         ShutdownMethod
     ];
 
@@ -36,10 +40,10 @@ internal static class BridgeProtocol
         AgentGetStatusMethod or AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod;
 
     public static bool RequiresInitialization(string method) =>
-        IsAgentMethod(method) || method is ActivityGetOverviewMethod;
+        IsAgentMethod(method) || method is ActivityGetOverviewMethod or SettingsGetMethod or SettingsUpdateMethod;
 
     public static bool IsSideEffectMethod(string method) => method is
-        AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod;
+        AgentStartMethod or AgentPauseMethod or AgentResumeMethod or AgentStopMethod or SettingsUpdateMethod;
 
     public static readonly JsonSerializerOptions SerializerOptions = new()
     {
@@ -50,6 +54,11 @@ internal static class BridgeProtocol
         {
             new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower)
         }
+    };
+
+    public static readonly JsonSerializerOptions ParameterSerializerOptions = new(SerializerOptions)
+    {
+        UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
     };
 
     public static bool IsSupportedApiVersion(string? value)
@@ -80,7 +89,8 @@ internal static class BridgeProtocol
         string code,
         string message,
         BridgeErrorKind kind,
-        bool retryable)
+        bool retryable,
+        IReadOnlyList<SettingsFieldError>? fieldErrors = null)
     {
         return new BridgeResponseEnvelope
         {
@@ -94,7 +104,8 @@ internal static class BridgeProtocol
                 {
                     Kind = kind,
                     Retryable = retryable,
-                    CorrelationId = correlationId
+                    CorrelationId = correlationId,
+                    FieldErrors = fieldErrors
                 }
             }
         };

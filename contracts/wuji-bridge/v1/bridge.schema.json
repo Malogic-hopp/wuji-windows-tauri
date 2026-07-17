@@ -13,6 +13,8 @@
     "agent.resume",
     "agent.stop",
     "activity.getOverview",
+    "settings.get",
+    "settings.update",
     "bridge.shutdown"
   ],
   "x-wuji-error-codes": [
@@ -25,6 +27,7 @@
     "unsupported_api_version",
     "request_timeout",
     "request_cancelled",
+    "validation_failed",
     "internal_error"
   ],
   "$defs": {
@@ -102,6 +105,12 @@
         },
         "correlationId": {
           "type": "string"
+        },
+        "fieldErrors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/SettingsFieldError"
+          }
         }
       }
     },
@@ -451,6 +460,173 @@
           "items": {
             "$ref": "#/$defs/ActivityOverviewSession"
           }
+        }
+      }
+    },
+    "SettingsTheme": {
+      "type": "string",
+      "enum": [
+        "light",
+        "dark",
+        "high_contrast"
+      ]
+    },
+    "SettingsAppSettings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "theme",
+        "refreshIntervalSeconds",
+        "autoStartAgentWhenAppStarts"
+      ],
+      "properties": {
+        "theme": {
+          "$ref": "#/$defs/SettingsTheme"
+        },
+        "refreshIntervalSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 300
+        },
+        "autoStartAgentWhenAppStarts": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SettingsAgentOptions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "samplingIntervalSeconds",
+        "idleThresholdSeconds",
+        "heartbeatIntervalSeconds",
+        "staleThresholdSeconds",
+        "retentionDays",
+        "enableJsonlJournal",
+        "enableAgentEventJournal",
+        "enableSessionMerge",
+        "maskWindowTitles"
+      ],
+      "properties": {
+        "samplingIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "idleThresholdSeconds": {
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 3600
+        },
+        "heartbeatIntervalSeconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 60
+        },
+        "staleThresholdSeconds": {
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 600
+        },
+        "retentionDays": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3650
+        },
+        "enableJsonlJournal": {
+          "type": "boolean"
+        },
+        "enableAgentEventJournal": {
+          "type": "boolean"
+        },
+        "enableSessionMerge": {
+          "type": "boolean"
+        },
+        "maskWindowTitles": {
+          "type": "boolean"
+        }
+      }
+    },
+    "SettingsSnapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "appSettings",
+        "agentOptions"
+      ],
+      "properties": {
+        "appSettings": {
+          "$ref": "#/$defs/SettingsAppSettings"
+        },
+        "agentOptions": {
+          "$ref": "#/$defs/SettingsAgentOptions"
+        }
+      }
+    },
+    "SettingsGetParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "SettingsGetResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "settings",
+        "defaults"
+      ],
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/SettingsSnapshot"
+        },
+        "defaults": {
+          "$ref": "#/$defs/SettingsSnapshot"
+        }
+      }
+    },
+    "SettingsUpdateParams": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "settings"
+      ],
+      "properties": {
+        "settings": {
+          "$ref": "#/$defs/SettingsSnapshot"
+        }
+      }
+    },
+    "SettingsUpdateResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "saved",
+        "settings"
+      ],
+      "properties": {
+        "saved": {
+          "type": "boolean"
+        },
+        "settings": {
+          "$ref": "#/$defs/SettingsSnapshot"
+        }
+      }
+    },
+    "SettingsFieldError": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "field",
+        "message"
+      ],
+      "properties": {
+        "field": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 256
         }
       }
     },

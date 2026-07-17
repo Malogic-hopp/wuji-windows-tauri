@@ -182,6 +182,17 @@ internal sealed class BridgeHost
                 retryable: false));
         }
 
+        if (!HasValidParameters(request))
+        {
+            return SerializeAndCache(request, BridgeProtocol.Failure(
+                request.Id,
+                request.Meta.CorrelationId,
+                "invalid_request",
+                "请求参数无效。",
+                BridgeErrorKind.Validation,
+                retryable: false));
+        }
+
         if (!string.Equals(request.Method, BridgeProtocol.HelloMethod, StringComparison.Ordinal)
             && !_handshakeCompleted)
         {
@@ -232,6 +243,12 @@ internal sealed class BridgeHost
                     request,
                     requestCancellation.Token).ConfigureAwait(false),
                 BridgeProtocol.ActivityGetOverviewMethod => await HandleActivityGetOverviewAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.SettingsGetMethod => await HandleSettingsGetAsync(
+                    request,
+                    requestCancellation.Token).ConfigureAwait(false),
+                BridgeProtocol.SettingsUpdateMethod => await HandleSettingsUpdateAsync(
                     request,
                     requestCancellation.Token).ConfigureAwait(false),
                 BridgeProtocol.ShutdownMethod => HandleShutdown(request),
@@ -391,6 +408,53 @@ internal sealed class BridgeHost
                 await recentSessionsTask.ConfigureAwait(false))));
     }
 
+    private async Task<ResponseOutcome> HandleSettingsGetAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var settingsClient = _client.Settings;
+        var settings = await settingsClient.GetClientSettingsAsync(cancellationToken).ConfigureAwait(false);
+        var defaults = settingsClient.GetDefaultClientSettings();
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            new SettingsGetResult
+            {
+                Settings = BridgeSettingsMapper.ToContract(settings),
+                Defaults = BridgeSettingsMapper.ToContract(defaults)
+            }));
+    }
+
+    private async Task<ResponseOutcome> HandleSettingsUpdateAsync(
+        BridgeRequestEnvelope request,
+        CancellationToken cancellationToken)
+    {
+        var parameters = JsonSerializer.Deserialize<SettingsUpdateParams>(
+            request.Params.GetRawText(),
+            BridgeProtocol.ParameterSerializerOptions)!;
+        var result = await _client.Settings.UpdateClientSettingsAsync(
+            BridgeSettingsMapper.ToApplication(parameters.Settings),
+            cancellationToken).ConfigureAwait(false);
+        if (!result.IsValid)
+        {
+            return SerializeAndCache(request, BridgeProtocol.Failure(
+                request.Id,
+                request.Meta.CorrelationId,
+                "validation_failed",
+                "部分设置值无效。",
+                BridgeErrorKind.Validation,
+                retryable: false,
+                BridgeSettingsMapper.ToFieldErrors(result.Issues)));
+        }
+
+        return SerializeAndCache(request, BridgeProtocol.Success(
+            request.Id,
+            new SettingsUpdateResult
+            {
+                Saved = true,
+                Settings = BridgeSettingsMapper.ToContract(result.Settings!)
+            }));
+    }
+
     private ResponseOutcome SerializeAndCache(
         BridgeRequestEnvelope request,
         BridgeResponseEnvelope response)
@@ -437,7 +501,6 @@ internal sealed class BridgeHost
             || !TryGetNonEmptyBoundedString(root, "method", 128, out _)
             || !root.TryGetProperty("params", out var parameters)
             || parameters.ValueKind != JsonValueKind.Object
-            || parameters.EnumerateObject().Any()
             || !root.TryGetProperty("meta", out var meta)
             || meta.ValueKind != JsonValueKind.Object)
         {
@@ -455,6 +518,25 @@ internal sealed class BridgeHost
         return TryGetNonEmptyBoundedString(meta, "apiVersion", 16, out _)
             && TryGetSafeIdentifier(meta, "correlationId", 128, out _)
             && TryGetSafeIdentifier(root, "id", 128, out _);
+    }
+
+    private static bool HasValidParameters(BridgeRequestEnvelope request)
+    {
+        if (request.Method == BridgeProtocol.SettingsUpdateMethod)
+        {
+            try
+            {
+                return JsonSerializer.Deserialize<SettingsUpdateParams>(
+                    request.Params.GetRawText(),
+                    BridgeProtocol.ParameterSerializerOptions) is not null;
+            }
+            catch (JsonException)
+            {
+                return false;
+            }
+        }
+
+        return !request.Params.EnumerateObject().Any();
     }
 
     private static bool TryGetNonEmptyBoundedString(

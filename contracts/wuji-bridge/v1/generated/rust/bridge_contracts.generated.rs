@@ -123,6 +123,8 @@ pub struct BridgeErrorData {
     pub kind: BridgeErrorKind,
     pub retryable: bool,
     pub correlation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_errors: Option<Vec<SettingsFieldError>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -214,4 +216,73 @@ pub struct CommandResult {
     pub message: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsAgentOptions {
+    pub sampling_interval_seconds: i64,
+    pub idle_threshold_seconds: i64,
+    pub heartbeat_interval_seconds: i64,
+    pub stale_threshold_seconds: i64,
+    pub retention_days: i64,
+    pub enable_jsonl_journal: bool,
+    pub enable_agent_event_journal: bool,
+    pub enable_session_merge: bool,
+    pub mask_window_titles: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsAppSettings {
+    pub theme: SettingsTheme,
+    pub refresh_interval_seconds: i64,
+    pub auto_start_agent_when_app_starts: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsFieldError {
+    pub field: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsGetParams {
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsGetResult {
+    pub settings: SettingsSnapshot,
+    pub defaults: SettingsSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsSnapshot {
+    pub app_settings: SettingsAppSettings,
+    pub agent_options: SettingsAgentOptions,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SettingsTheme {
+    Light,
+    Dark,
+    HighContrast,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsUpdateParams {
+    pub settings: SettingsSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsUpdateResult {
+    pub saved: bool,
+    pub settings: SettingsSnapshot,
 }
