@@ -52,7 +52,8 @@ public static class WujiNativeWindowProbe
         IntPtr result = IntPtr.Zero;
         EnumWindows((window, parameter) =>
         {
-            GetWindowThreadProcessId(window, out uint processId);
+            uint processId;
+            GetWindowThreadProcessId(window, out processId);
             if (processId == expectedProcessId)
             {
                 result = window;
@@ -338,7 +339,7 @@ try {
     Write-Step '2/10 WPF dev close/minimize-to-tray 对照'
     Write-Host '请在独立终端运行：' -ForegroundColor Yellow
     Write-Host 'dotnet run --project .\src\QuantifiedSelf.Windows.App\QuantifiedSelf.Windows.App.csproj -- --channel dev --ui-preview'
-    Read-Host '确认 WPF dev 的“最小化到托盘”和“关闭到托盘”均已启用，然后按 Enter'
+    Read-Host 'WPF dev 窗口出现后按 Enter；脚本将直接验证实际的最小化/关闭到托盘行为'
     $wpf = Wait-ForSingleProcess -Name $wpfProcessName
     if ($wpf.CommandLine -notmatch '(?i)--channel\s+dev(?:\s|$)' -or
         $wpf.CommandLine -notmatch '(?i)--ui-preview(?:\s|$)') {

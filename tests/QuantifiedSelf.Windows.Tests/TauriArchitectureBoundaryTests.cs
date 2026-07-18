@@ -399,10 +399,18 @@ public sealed class TauriArchitectureBoundaryTests
 
         Assert.Contains("--channel\\s+dev", parity, StringComparison.Ordinal);
         Assert.Contains("--ui-preview", parity, StringComparison.Ordinal);
+        Assert.Contains("脚本将直接验证实际的最小化/关闭到托盘行为", parity, StringComparison.Ordinal);
+        Assert.DoesNotContain("确认 WPF dev 的", parity, StringComparison.Ordinal);
         Assert.Contains("Stop-ValidatedDevProcess", parity, StringComparison.Ordinal);
         Assert.Contains("Assert-NoOrphanBridge", parity, StringComparison.Ordinal);
         Assert.Contains("Assert-AgentIdentity", parity, StringComparison.Ordinal);
         Assert.Contains("显式停止 Agent", parity, StringComparison.Ordinal);
+        Assert.Contains("uint processId;", parity, StringComparison.Ordinal);
+        Assert.Contains("out processId", parity, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "GetWindowThreadProcessId(window, out uint",
+            parity,
+            StringComparison.Ordinal);
         Assert.Equal(1, parity.Split("Stop-Process -Id", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("Stop-Process -Name", parity, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Stop-Process -Id $agent", parity, StringComparison.OrdinalIgnoreCase);
