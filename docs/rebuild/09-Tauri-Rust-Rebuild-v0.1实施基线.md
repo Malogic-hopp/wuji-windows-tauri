@@ -297,7 +297,7 @@ v0.1 不提供 migration runner。开发期间 Schema 不兼容变化直接重�
 
 ### 7.2 可执行 Schema 合同
 
-[schema-v0.1.sql](./schema-v0.1.sql) 是 V01-2 的字段、类型、PK/FK、CHECK、索引、枚举和 PRAGMA 权威，不再由实现者根据“最小表说明”自行推导。它只用于创建全新数据库，不是 migration。V01-2 将该文件移动为 `rebuild/crates/wuji-storage/schema/schema.sql` 并同步更新本文链接，不保留两份可漂移的 DDL。
+[schema.sql](../../rebuild/crates/wuji-storage/schema/schema.sql) 是 V01-2 的字段、类型、PK/FK、CHECK、索引、枚举和 PRAGMA 权威，不再由实现者根据“最小表说明”自行推导。它只用于创建全新数据库，不是 migration。V01-2 已将该文件落地为 `rebuild/crates/wuji-storage/schema/schema.sql` 并同步本链接，仓库不保留第二份可漂移的 DDL。
 
 Bootstrap 必须在同一临时文件中：
 
@@ -310,7 +310,7 @@ Bootstrap 必须在同一临时文件中：
 
 生产代码不得在运行中执行 `ALTER TABLE`、猜测缺失列或自动删除不兼容数据库。发现 `schema_version != 1` 时返回 `DB_SCHEMA_UNSUPPORTED`。
 
-PRAGMA 按连接生效而非库级持久：`schema-v0.1.sql` 中的 `foreign_keys`、`busy_timeout` 只影响执行 bootstrap 的那一条连接。Writer 与只读 reader 每次打开连接都必须执行各自的连接 bootstrap：Writer 设置 `foreign_keys=ON`、`busy_timeout=750`、`synchronous=NORMAL`、`trusted_schema=OFF` 并验证 `journal_mode=WAL`；reader 按 7.3 设置只读参数。任何连接不得假设 PRAGMA 已被其他连接持久化。
+PRAGMA 按连接生效而非库级持久：`schema/schema.sql` 中的 `foreign_keys`、`busy_timeout` 只影响执行 bootstrap 的那一条连接。Writer 与只读 reader 每次打开连接都必须执行各自的连接 bootstrap：Writer 设置 `foreign_keys=ON`、`busy_timeout=750`、`synchronous=NORMAL`、`trusted_schema=OFF` 并验证 `journal_mode=WAL`；reader 按 7.3 设置只读参数。任何连接不得假设 PRAGMA 已被其他连接持久化。
 
 ### 7.3 Projection 一致性与幂等
 
@@ -576,12 +576,12 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 
 ## 11. 实施顺序
 
-本文件保持 Draft，避免把尚未评审的细节伪装成已接受合同。V01-1 可以立即开始；V01-2 开始前必须接受第 7 节和 `schema-v0.1.sql`，V01-3–V01-5 前必须接受第 5–6、8 节，V01-6–V01-8 前必须接受第 4、8–9 节。接受只冻结 v0.1 合同，不提升长期 01–08 或 ADR-002 状态。
+本文件保持 Draft，避免把尚未评审的细节伪装成已接受合同。V01-1 可以立即开始；V01-2 开始前必须接受第 7 节和 `schema/schema.sql`，V01-3–V01-5 前必须接受第 5–6、8 节，V01-6–V01-8 前必须接受第 4、8–9 节。接受只冻结 v0.1 合同，不提升长期 01–08 或 ADR-002 状态。
 
 | 阶段 | 工作 | 退出条件 |
 |---|---|---|
 | V01-1 Workspace | 建立 rebuild workspace、Core/Error/Settings/DTO 和固定 runtime names | `cargo test`；Core 无 Tauri/Win32/SQLite 依赖；生成 TS DTO 无 drift |
-| V01-2 Storage | 按 `schema-v0.1.sql` 落地 bootstrap、Writer/Query、临时库测试 | Schema 原样执行；FK/只读/事务/重算幂等测试通过 |
+| V01-2 Storage | 按 `schema/schema.sql` 落地 bootstrap、Writer/Query、临时库测试 | Schema 原样执行；FK/只读/事务/重算幂等测试通过 |
 | V01-3 Capture | Win32 foreground/process/idle、隐私过滤、bounded queue | 真实 Windows 捕获和卡死/退出进程测试通过 |
 | V01-4 Activity | 精确 Activity/Work 状态机、gap 和小时/日重算 | switch/idle/crash/DST 固定输入黄金样本守恒通过 |
 | V01-5 Agent | 双 lane Writer、CommandServer、heartbeat、单实例和恢复 | drop epoch、disk fault、Desktop exit、Agent restart、Capture 状态机通过 |
@@ -597,7 +597,7 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 
 - Rust：`fmt`、`clippy -D warnings`、workspace tests；
 - React：typecheck、ESLint、Vitest；
-- SQLite：`schema-v0.1.sql` 原样执行、空库 bootstrap、FK/CHECK、事务回滚、只读 reader、并发 WAL、触及桶重算幂等；
+- SQLite：`schema/schema.sql` 原样执行、空库 bootstrap、FK/CHECK、事务回滚、只读 reader、并发 WAL、触及桶重算幂等；
 - 领域：零时长首样本、采样切换不归属、Idle pending、Work break、app switch、restart、clock change、UTC/local/DST 固定样本；
 - 守恒交叉验证：同一 fixture 上 Today（daily 读模型）与 Timeline（Segment 交集）的时长/计数总和一致；黄金样本期望值必须先经人工评审再固化为断言，不得按实现结果反写；
 - 隐私：DB、WAL、log、DTO 不出现测试标题、完整路径或排除 App 名；

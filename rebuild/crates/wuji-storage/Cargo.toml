@@ -5,6 +5,15 @@ edition.workspace = true
 rust-version.workspace = true
 
 # V01-2：bootstrap、Single Writer、只读 Query（09 §7）。
-# schema/schema.sql 在 V01-2 合同接受后由 docs/rebuild/schema-v0.1.sql 移入（09 §7.2，只留一份 DDL）。
+# schema/schema.sql 是唯一 DDL 来源（09 §7.2），编译期内嵌。
 
 [dependencies]
+chrono = "=0.4.45"
+chrono-tz = "=0.10.4"
+iana-time-zone = "=0.1.65"
+rusqlite = { version = "=0.40.1", features = ["bundled"] }
+ulid = "=3.0.0"
+wuji-core = { version = "=0.1.0", path = "../wuji-core" }
+
+[dev-dependencies]
+tempfile = "=3.27.0"

@@ -9,10 +9,10 @@
 
 | 层级 | 文档 | 用途 |
 |---|---|---|
-| 当前实施基线 | [09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md) + [schema-v0.1.sql](./schema-v0.1.sql) | 冻结 dev-only v0.1 做什么、运行/算法/协议合同、可执行空库 Schema 和验收顺序 |
+| 当前实施基线 | [09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md) + [schema.sql](../../rebuild/crates/wuji-storage/schema/schema.sql) | 冻结 dev-only v0.1 做什么、运行/算法/协议合同、可执行空库 Schema 和验收顺序 |
 | 长期规划 | ADR-002、01–08 | 保存完整目标语义、生产安全、版本化重建、迁移和退役风险 |
 
-在 v0.1 范围内，09 是实施范围与运行合同权威，`schema-v0.1.sql` 是其可执行存储附件。01–08 中被 09 明确延期的 Generation、Result Set、Snapshot、Lease/GC、Importer、生产认证等内容不得成为 v0.1 的前置条件，也不得提前搭建空框架。09 没有重新定义的基础不变量——React 白名单、双进程、Agent 单写行为数据库、Tauri 对行为数据库只读、隐私先于落库、新旧数据隔离——仍遵循 ADR-002。
+在 v0.1 范围内，09 是实施范围与运行合同权威，`rebuild/crates/wuji-storage/schema/schema.sql` 是其可执行存储附件。01–08 中被 09 明确延期的 Generation、Result Set、Snapshot、Lease/GC、Importer、生产认证等内容不得成为 v0.1 的前置条件，也不得提前搭建空框架。09 没有重新定义的基础不变量——React 白名单、双进程、Agent 单写行为数据库、Tauri 对行为数据库只读、隐私先于落库、新旧数据隔离——仍遵循 ADR-002。
 
 长期规划内部仍按分域权威管理：
 
@@ -62,7 +62,7 @@
 - **可以**：可选实现，不构成兼容承诺；
 - **候选**：尚未接受，不得作为稳定产品语义对外展示。
 
-长期逻辑 Schema 章节中的字段默认都是“必须字段”；明确标记为“延期”或“候选”的字段不进入未来生产 Schema。v0.1 直接建库的字段以 `schema-v0.1.sql` 为准。禁止用“建议字段”描述事务、外键或查询实际依赖的结构。
+长期逻辑 Schema 章节中的字段默认都是“必须字段”；明确标记为“延期”或“候选”的字段不进入未来生产 Schema。v0.1 直接建库的字段以 `rebuild/crates/wuji-storage/schema/schema.sql` 为准。禁止用“建议字段”描述事务、外键或查询实际依赖的结构。
 
 ## 4. 统一术语与命名
 

@@ -2,7 +2,8 @@
 
 状态：实施状态记录（不定义设计）
 基线日期：2026-07-18
-本次核对方式：仓库结构与源码只读检查；本次文档工作未重新运行 build、test、smoke 或 soak
+最近更新：2026-07-19（V01-1、V01-2 完成）
+本次核对方式：仓库结构与源码只读检查 + rebuild workspace `cargo test`/`clippy`/`fmt` 实跑；旧系统 build、test、smoke、soak 未重新运行
 当前实施依据：[09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)
 长期目标依据：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
 
@@ -37,7 +38,7 @@ React 19 / TypeScript
 → C# Agent / SQLite v1
 ```
 
-目标架构尚未形成可运行的 Rust Agent/Core/Storage 链路。v0.1 已补充固定运行命名、可执行 DDL、精确 Activity/Work、Single Writer/背压、IPC/DTO、Settings 和打包合同；可以从 V01-1 Rust workspace 开始，不再等待长期 G-DDL。上述合同仍为 Draft，应在对应阶段开始前接受。空库 bootstrap、Rust Capture/Agent、最小读模型和 bridge-free Tauri 均尚未实现。
+目标架构尚未形成可运行的 Rust Agent 链路，但 v0.1 已完成两个阶段：V01-1 建立 `rebuild/` workspace 与 `wuji-core`（commit `c2ca961`）；V01-2 落地 `wuji-storage`，schema 已移入 `rebuild/crates/wuji-storage/schema/schema.sql` 作为唯一 DDL，空库 bootstrap、Writer 行操作、触及桶重算与只读 Reader 已实现。`cargo test --workspace`（39 项）、`clippy -D warnings`、`fmt --check` 全部通过。空库 bootstrap 与最小读模型已实现；Rust Capture/Agent 运行时、bridge-free Tauri 与四条 UI 路径尚未实现。
 
 ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Result Set/Snapshot、Identity Resolution、Lease/GC、production binary/session 认证、Importer 和旧系统退役继续作为长期 Design only，不阻挡 dev-only v0.1，但在未来 production cutover 前仍需重新进入对应门禁。
 
@@ -59,19 +60,19 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 
 | 能力/边界 | 当前状态 | 当前证据 | 目标 | 主要差距 | 下一门禁 |
 |---|---|---|---|---|---|
-| v0.1 实施基线 | Design only | [09](./09-Tauri-Rust-Rebuild-v0.1实施基线.md) 已定义范围、运行/算法/协议合同、阶段和验收；[DDL](./schema-v0.1.sql) 可执行 | dev-only bridge-free React/Tauri/Rust Agent/SQLite 链路 | 合同仍为 Draft；尚无 rebuild workspace 或目标代码 | 批准范围后 V01-1 |
+| v0.1 实施基线 | Design only | [09](./09-Tauri-Rust-Rebuild-v0.1实施基线.md) 已定义范围、运行/算法/协议合同、阶段和验收；[DDL](../../rebuild/crates/wuji-storage/schema/schema.sql) 可执行且已内嵌 | dev-only bridge-free React/Tauri/Rust Agent/SQLite 链路 | 合同仍为 Draft；V01-1/V01-2 已完成，其余阶段未开始 | V01-3 前接受第 5–6、8 节 |
 | 产品语义与指标 | Design only | [01](./01-产品语义与指标词典.md) 为 Draft | Accepted 的 Observation/Activity/Context/Work/质量/时区词典 | 产品接受、延期项和候选阈值尚未签署 | G-ADR / ALG golden review |
 | 领域模型 | Design only | [02](./02-行为分析领域模型.md) 为 Draft | 事实、派生、Generation、Result Set、Snapshot 不变量可执行 | 尚无 Rust 类型与属性测试 | DOM-001–005 |
 | 目标架构 ADR | Blocked | [ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 状态 Proposed | Accepted 并取代当前过渡 ADR 的最终架构 | 依赖规范尚未形成 Accepted 基线 | G-ADR |
 | React 19 UI 基座 | Partial | `package.json`、Dashboard/Settings 页面和 Vitest 测试存在 | Today/Timeline/Trends/Apps/Insights/Diagnostics/Settings 使用 v2 DTO | 页面范围不完整；仍使用 Bridge client/旧 overview 语义 | M7、UI-001–006 |
 | Tauri 2 Desktop shell | Partial | Tauri Host、tray、single instance、lifecycle 已存在 | 直接使用 Rust Query/IPC/Settings/Process Controller | Rust Host 仍持有 BridgeSupervisor；command 语义未拆分 Process/Capture | M6/M7、RUN-005 |
 | Bridge-free Tauri | Not started | `bridge:prepare`、`src/bridge/`、BridgeSupervisor 均仍存在 | 安装包与运行时不含 `.NET Bridge` | 缺 Rust v2 query/IPC/client 和新 command DTO | REL-001 |
-| Rust workspace / `wuji-core` | Not started | 未发现目标 `crates/wuji-core` | 纯领域、Settings、Privacy、Analytics、Protocol、Error | 当前 Rust 仅属于 Tauri Host | M1 / DOM/ALG |
-| Rust `wuji-storage` | Not started | 未发现 rusqlite Storage crate | v0.1 Single Writer、只读 Query、空库 bootstrap 和最小 projection | `schema.sql`、bootstrap、Writer/Query 均不存在 | V01-2 |
+| Rust workspace / `wuji-core` | Verified | `rebuild/crates/wuji-core`（commit `c2ca961`）：schema 对齐领域枚举、Settings 默认值/验证/digest、21 个稳定错误码、固定命名空间、DTO + specta branded TS drift 门禁；`cargo test -p wuji-core` 21 项通过 | 纯领域、Settings、Privacy、Analytics、Protocol、Error | 长期 Privacy/Analytics 部分待后续版本 | V01-2 起持续回归 |
+| Rust `wuji-storage` | Verified | `rebuild/crates/wuji-storage`：唯一内嵌 DDL、六步 bootstrap 自检、Writer 行操作、触及桶重算、只读 Reader；`cargo test -p wuji-storage` 18 项通过（含 DST/幂等/分页/恢复） | v0.1 Single Writer、只读 Query、空库 bootstrap 和最小 projection | — | V01-4 状态机接入后回归 |
 | Rust Agent binary | Not started | 当前 Agent 是 C# 项目 | 独立 Rust Agent 长期进程 | Capture/Processor/Writer/IPC/heartbeat 均未落地 | V01-3–V01-5 |
 | Rust Win32 Capture Adapter | Not started | 当前 Win32 provider 在 C# Agent/Infrastructure | v0.1 Rust foreground/process/idle adapter | 无目标 adapter 与 Windows 集成测试 | V01-3 |
 | 隐私内存边界 | Design only | ADR-002、03、05 定义；当前 C# 有 PrivacyFilter | 原始标题/路径在 Rust Agent 持久化前过滤 | 尚无 Rust 实现、DB/WAL/log/DTO 扫描 | SEC-002 |
-| SQLite v0.1 Schema | Design only | [schema-v0.1.sql](./schema-v0.1.sql) 已冻结字段、FK/CHECK/索引和 PRAGMA；09 定义 bootstrap/重算 | 内嵌同一 SQL 从零创建独立 dev DB | DDL 尚未接受，也未复制到 runtime、实现 bootstrap/自检 | 接受第 7 节后 V01-2 |
+| SQLite v0.1 Schema | Implemented | [schema.sql](../../rebuild/crates/wuji-storage/schema/schema.sql) 为唯一 DDL 并已编译期内嵌；空库执行、STRICT/FK/CHECK/单 open 行/WAL 经探针与临时库集成测试验证 | 内嵌同一 SQL 从零创建独立 dev DB | — | V01-4/V01-5 接入后回归 |
 | SQLite 长期 Schema | Design only | [04](./04-SQLite-v2与持久化读模型.md) 有完整逻辑字段 | production migration + manifest | v0.1 明确延期 | 后续 G-DDL |
 | Fact Cursor | Design only | 02/04 定义数据库全局水位 | 与事实同事务、跨 runtime 的持久水位 | 当前模型仍以旧 Sample/Session 与 Tick 流程为主 | DOM-001 / DB-005 |
 | Segmentation Generation | Design only | 02–04 定义 | Rust staging + immutable Segmentation Result Set | 无代码、表、job 或发布器 | M5 / DB-006–008 |
@@ -114,6 +115,7 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 
 | 验证项 | 仓库能力 | 本基线结果 | 说明 |
 |---|---|---|---|
+| Rebuild `cargo test --workspace` / `cargo clippy -D warnings` / `cargo fmt --check` | 命令存在（`rebuild/`） | Passed（2026-07-19，39 项测试全过、零警告） | 覆盖 wuji-core 合同与 wuji-storage bootstrap/Writer/Query/重算幂等；随 V01 阶段扩展 |
 | C# build / full xUnit | 命令和项目存在 | NotRun | 不能引用历史记录作为 2026-07-18 当前结果 |
 | React typecheck/lint/Vitest | package scripts 存在 | NotRun | 只覆盖当前 Bridge 阶段 UI，不覆盖 v2 Gate |
 | Tauri/Rust tests | Cargo tests 存在 | NotRun | 主要覆盖 Host/Bridge/lifecycle，不是 Rust Agent/Core/Storage |
@@ -143,11 +145,11 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 
 当前直接按 v0.1 顺序推进：
 
-1. 批准 09 的 v0.1 范围、固定命名和默认参数；
-2. 创建 `rebuild/` Rust workspace 与 `wuji-core`，完成 V01-1；
-3. 接受第 7 节和 `schema-v0.1.sql`，将其移动到 Storage（不保留双份 DDL）后实现 bootstrap/重算测试；
-4. 接受第 5–6、8 节，实现 Win32 Capture、Activity/Work、双 lane Writer 和 Agent；
-5. 接受第 4、8–9 节，实现 DTO 生成、Settings/Run Key、detached Agent 和 Bridge 替换；
-6. 完成 UI、dev bundle、V01-1–V01-8 验收并更新本文件。
+1. ~~创建 `rebuild/` Rust workspace 与 `wuji-core`~~（V01-1 已完成，commit `c2ca961`）；
+2. ~~按 `schema/schema.sql` 落地 bootstrap、Writer/Query 与触及桶重算幂等测试~~（V01-2 已完成）；
+3. 接受第 5–6、8 节，实现 Win32 Capture（V01-3）与 Activity/Work 精确状态机（V01-4）；
+4. 实现双 lane Writer、CommandServer、heartbeat、单实例与恢复（V01-5）；
+5. 接受第 4、8–9 节，实现 Tauri Query/IPC client、CAS Settings、detached Agent（V01-6）；
+6. 完成 UI、dev bundle、V01-7–V01-8 验收并更新本文件。
 
 期间不得修改旧数据库或删除旧 C#/WPF/Bridge。长期 manifest、Importer、Snapshot/Lease 和 production cutover 保持延期。
