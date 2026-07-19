@@ -308,6 +308,82 @@ impl Writer {
             })
             .transpose()
     }
+
+    /// 最近一次 runtime 行（启动恢复用，09 §6.7）。
+    pub fn latest_runtime(&self) -> Result<Option<crate::models::RuntimeRow>> {
+        self.conn
+            .query_row(
+                "SELECT runtime_id, process_state, capture_state, writer_state,
+                        started_at_utc_ms, ended_at_utc_ms, heartbeat_at_utc_ms,
+                        last_observation_at_utc_ms, last_write_at_utc_ms,
+                        capture_queue_depth, writer_queue_depth,
+                        dropped_capture_count, dropped_writer_count,
+                        continuity_epoch, safe_error_code
+                 FROM agent_runtime
+                 ORDER BY started_at_utc_ms DESC, runtime_id DESC
+                 LIMIT 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, i64>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
+                        row.get::<_, i64>(6)?,
+                        row.get::<_, Option<i64>>(7)?,
+                        row.get::<_, Option<i64>>(8)?,
+                        row.get::<_, i64>(9)?,
+                        row.get::<_, i64>(10)?,
+                        row.get::<_, i64>(11)?,
+                        row.get::<_, i64>(12)?,
+                        row.get::<_, i64>(13)?,
+                        row.get::<_, Option<String>>(14)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(StorageError::from_sqlite)?
+            .map(
+                |(
+                    runtime_id,
+                    process_state,
+                    capture_state,
+                    writer_state,
+                    started,
+                    ended,
+                    heartbeat,
+                    last_obs,
+                    last_write,
+                    cq,
+                    wq,
+                    dc,
+                    dw,
+                    epoch,
+                    safe,
+                )| {
+                    Ok(crate::models::RuntimeRow {
+                        runtime_id,
+                        process_state: crate::models::parse_process_state(&process_state)?,
+                        capture_state: crate::models::parse_capture_state(&capture_state)?,
+                        writer_state: crate::models::parse_writer_state(&writer_state)?,
+                        started_at_utc_ms: started,
+                        ended_at_utc_ms: ended,
+                        heartbeat_at_utc_ms: heartbeat,
+                        last_observation_at_utc_ms: last_obs,
+                        last_write_at_utc_ms: last_write,
+                        capture_queue_depth: cq,
+                        writer_queue_depth: wq,
+                        dropped_capture_count: dc,
+                        dropped_writer_count: dw,
+                        continuity_epoch: epoch,
+                        safe_error_code: safe,
+                    })
+                },
+            )
+            .transpose()
+    }
 }
 
 /// 单事务批操作。所有方法保持存储层不变量；归属决策属于 V01-4。
@@ -668,6 +744,55 @@ impl StorageTransaction<'_> {
             .map_err(StorageError::from_sqlite)?;
         if changed > 1 {
             return Err(StorageError::internal("存在多个 open gap，违反单例约束"));
+        }
+        Ok(())
+    }
+
+    /// 写入已闭合 gap（sampling_transition、clock_changed、capture_delayed 等区间已知的边界）。
+    pub fn insert_closed_gap(
+        &self,
+        runtime_id: &RuntimeId,
+        kind: GapKind,
+        start_at_utc_ms: i64,
+        end_at_utc_ms: i64,
+    ) -> Result<i64> {
+        self.tx
+            .query_row(
+                "INSERT INTO capture_gaps
+                 (runtime_id, start_at_utc_ms, end_at_utc_ms, kind, status, event_count)
+                 VALUES (?1, ?2, ?3, ?4, 'closed', 1)
+                 RETURNING gap_id",
+                params![
+                    runtime_id.as_str(),
+                    start_at_utc_ms,
+                    end_at_utc_ms,
+                    serde_gap_kind(kind)
+                ],
+                |row| row.get(0),
+            )
+            .map_err(StorageError::from_sqlite)
+    }
+
+    /// idle_break 专用：把 Work Block 回溯结束于 Idle 起点（09 §6.6），
+    /// 允许 end 早于当前 end（这是 7.3 前向更新规则的唯一受控例外）。
+    pub fn close_open_work_block_with_end(
+        &self,
+        close_reason: &str,
+        end_at_utc_ms: i64,
+    ) -> Result<()> {
+        let changed = self
+            .tx
+            .execute(
+                "UPDATE work_blocks
+                 SET status = 'closed', close_reason = ?1, end_at_utc_ms = ?2
+                 WHERE status = 'open'",
+                params![close_reason, end_at_utc_ms],
+            )
+            .map_err(StorageError::from_sqlite)?;
+        if changed > 1 {
+            return Err(StorageError::internal(
+                "存在多个 open Work Block，违反单例约束",
+            ));
         }
         Ok(())
     }

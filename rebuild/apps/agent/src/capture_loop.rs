@@ -47,6 +47,11 @@ impl ContinuityState {
         self.epoch.fetch_add(1, Ordering::AcqRel);
         self.dropped_writer.fetch_add(1, Ordering::AcqRel);
     }
+
+    /// Writer 侧时钟异常增加 epoch（09 §6.5 第 5 条）：不累计 drop 计数。
+    pub fn bump_epoch(&self) {
+        self.epoch.fetch_add(1, Ordering::AcqRel);
+    }
 }
 
 /// 采集来源抽象：真实实现为 wuji-windows 适配器，测试用脚本化 mock。

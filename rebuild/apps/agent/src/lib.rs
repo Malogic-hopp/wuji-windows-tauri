@@ -2,5 +2,6 @@
 //!
 //! V01-5 的双 lane Writer、IPC、心跳与恢复将在本库上继续构建。
 
+pub mod activity;
 pub mod capture_loop;
 pub mod processor_task;

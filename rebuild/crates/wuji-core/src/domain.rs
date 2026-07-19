@@ -57,6 +57,7 @@ pub enum SegmentCloseReason {
     AppChanged,
     StateChanged,
     CaptureDelayed,
+    CaptureError,
     PrivacyExcluded,
     QueueDrop,
     CapturePaused,
@@ -73,6 +74,9 @@ pub enum SegmentCloseReason {
 #[serde(rename_all = "snake_case")]
 pub enum WorkBlockCloseReason {
     IdleBreak,
+    CaptureDelayed,
+    CaptureError,
+    Unknown,
     PrivacyExcluded,
     QueueDrop,
     CapturePaused,

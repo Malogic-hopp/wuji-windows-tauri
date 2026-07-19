@@ -123,6 +123,7 @@ CREATE TABLE activity_segments (
         'app_changed',
         'state_changed',
         'capture_delayed',
+        'capture_error',
         'privacy_excluded',
         'queue_drop',
         'capture_paused',
@@ -159,6 +160,9 @@ CREATE TABLE work_blocks (
     status TEXT NOT NULL CHECK (status IN ('open', 'closed')),
     close_reason TEXT CHECK (close_reason IN (
         'idle_break',
+        'capture_delayed',
+        'capture_error',
+        'unknown',
         'privacy_excluded',
         'queue_drop',
         'capture_paused',

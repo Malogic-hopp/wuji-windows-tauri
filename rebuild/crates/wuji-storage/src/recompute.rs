@@ -33,6 +33,7 @@ impl StorageTransaction<'_> {
                    COUNT(*)
                  FROM activity_segments
                  WHERE end_at_utc_ms > ?5 AND start_at_utc_ms < ?6
+                   AND end_at_utc_ms > start_at_utc_ms
                  GROUP BY app_id",
                 params![hour, local_date, local_hour as i64, offset, hour, next],
             )?;
@@ -70,6 +71,7 @@ impl StorageTransaction<'_> {
                    COUNT(*)
                  FROM activity_segments
                  WHERE end_at_utc_ms > ?2 AND start_at_utc_ms < ?3
+                   AND end_at_utc_ms > start_at_utc_ms
                  GROUP BY app_id",
                 params![date_str, day_start, day_end],
             )?;

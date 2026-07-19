@@ -875,8 +875,12 @@ dependencies = [
 name = "wuji-rebuild-agent"
 version = "0.1.0"
 dependencies = [
+ "chrono-tz",
+ "rusqlite",
+ "tempfile",
  "tokio",
  "wuji-core",
+ "wuji-storage",
  "wuji-windows",
 ]
 
