@@ -9,4 +9,9 @@ name = "wuji-rebuild-agent-v01"
 path = "src/main.rs"
 
 [dependencies]
+tokio = { version = "=1.52.3", features = ["rt", "macros", "sync", "time"] }
 wuji-core = { path = "../../crates/wuji-core" }
+wuji-windows = { path = "../../crates/wuji-windows" }
+
+[dev-dependencies]
+tokio = { version = "=1.52.3", features = ["test-util"] }

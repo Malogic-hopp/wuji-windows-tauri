@@ -8,5 +8,6 @@ pub mod bindings;
 pub mod domain;
 pub mod dto;
 pub mod error;
+pub mod pipeline;
 pub mod runtime_names;
 pub mod settings;

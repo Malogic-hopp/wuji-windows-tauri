@@ -4,6 +4,15 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 
-# V01-3：Win32 foreground/process/idle 与 Named Pipe 封装（09 §4、§5）。
+# V01-3：Win32 foreground/process/idle（09 §5、§6.1）。
+# 平台 crate：不依赖 wuji-core；Named Pipe 在 V01-5 落地。
+# v0.1 不读取窗口标题（09 §6.1），因此不需要 SendMessageTimeout 路径。
 
-[dependencies]
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_System_SystemInformation",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

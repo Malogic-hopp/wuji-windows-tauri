@@ -676,6 +676,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
+name = "tokio"
+version = "1.52.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+dependencies = [
+ "pin-project-lite",
+ "tokio-macros",
+]
+
+[[package]]
+name = "tokio-macros"
+version = "2.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6328af13490e73a9b4694030fafd93f8c8c6a9dede33e821c3fc63eddf8042ba"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -854,7 +875,9 @@ dependencies = [
 name = "wuji-rebuild-agent"
 version = "0.1.0"
 dependencies = [
+ "tokio",
  "wuji-core",
+ "wuji-windows",
 ]
 
 [[package]]
@@ -873,6 +896,9 @@ dependencies = [
 [[package]]
 name = "wuji-windows"
 version = "0.1.0"
+dependencies = [
+ "windows-sys",
+]
 
 [[package]]
 name = "zmij"

@@ -120,8 +120,7 @@ impl Settings {
 
     /// 规范 JSON 的 SHA-256 小写十六进制（09 §7.2 bootstrap digest、§8.4 settings_reload）。
     pub fn content_digest(&self) -> String {
-        let digest = Sha256::digest(self.canonical_json().as_bytes());
-        digest.iter().map(|b| format!("{b:02x}")).collect()
+        sha256_hex(self.canonical_json().as_bytes())
     }
 
     /// 下一次保存的 revision（09 §9.1：成功恰好加一）。
@@ -131,6 +130,12 @@ impl Settings {
             .ok()
             .map(|r| (r + 1).to_string())
     }
+}
+
+/// SHA-256 的小写十六进制摘要（app_key 与 settings digest 共用，09 §6.1、§7.2）。
+pub fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// 进程名规范化：trim → Unicode NFKC → Unicode lowercase，保留 `.exe`（09 §6.1）。

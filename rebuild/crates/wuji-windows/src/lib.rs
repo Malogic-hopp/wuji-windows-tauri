@@ -1,4 +1,15 @@
-//! WUJI Rebuild v0.1 Windows 平台 crate：前台窗口、进程身份、idle 采集与 Named Pipe。
+//! WUJI Rebuild v0.1 Windows 平台 crate：前台窗口、进程文件名、idle 采集。
 //!
-//! 本 crate 在 V01-3 落地（09 §4、§5）。当前为 workspace 骨架占位，
-//! 不提前搭建任何接口。
+//! 合同（09 §6.1）：v0.1 不读取窗口标题；进程路径只在本 crate 调用栈内
+//! 用于取文件名并立即丢弃；PID 不越过调用方 Processor。
+//! 本 crate 不做调度、不持久化、不写日志。
+
+pub mod error;
+pub mod foreground;
+pub mod idle;
+pub mod process;
+
+pub use error::CaptureError;
+pub use foreground::{ForegroundSample, capture_foreground};
+pub use idle::idle_seconds;
+pub use process::{file_name_from_path, process_image_file_name};
