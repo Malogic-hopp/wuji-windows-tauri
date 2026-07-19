@@ -1,0 +1,10 @@
+[package]
+name = "wuji-storage"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# V01-2：bootstrap、Single Writer、只读 Query（09 §7）。
+# schema/schema.sql 在 V01-2 合同接受后由 docs/rebuild/schema-v0.1.sql 移入（09 §7.2，只留一份 DDL）。
+
+[dependencies]

@@ -20,3 +20,4 @@ ref/
 scripts/*.png
 .agents/
 .pnpm-store/
+target/

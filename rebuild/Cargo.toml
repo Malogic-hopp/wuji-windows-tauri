@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "apps/agent",
+    "crates/wuji-core",
+    "crates/wuji-storage",
+    "crates/wuji-windows",
+]
+
+# apps/desktop（React + Tauri Host）在 V01-6 迁入，不进入 V01-1 workspace。
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.97"

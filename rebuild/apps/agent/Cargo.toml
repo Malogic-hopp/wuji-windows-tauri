@@ -1,0 +1,12 @@
+[package]
+name = "wuji-rebuild-agent"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "wuji-rebuild-agent-v01"
+path = "src/main.rs"
+
+[dependencies]
+wuji-core = { path = "../../crates/wuji-core" }

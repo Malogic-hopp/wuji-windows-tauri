@@ -1,0 +1,9 @@
+[package]
+name = "wuji-windows"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+# V01-3：Win32 foreground/process/idle 与 Named Pipe 封装（09 §4、§5）。
+
+[dependencies]
