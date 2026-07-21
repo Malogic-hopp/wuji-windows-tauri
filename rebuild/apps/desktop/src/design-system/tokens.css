@@ -1,0 +1,95 @@
+/* WUJI Rebuild v0.1 设计令牌（09 §10：Chinese-first、克制、数据优先）。
+   颜色只在令牌层定义；组件不得写死色值。 */
+
+:root {
+  color-scheme: light;
+  --bg: #f7f8fa;
+  --surface: #ffffff;
+  --surface-dim: #f0f2f5;
+  --border: #d9dee5;
+  --border-strong: #b8c0cc;
+  --text: #1c2330;
+  --text-dim: #5a6577;
+  --accent: #2f6fed;
+  --accent-dim: #e3ecfd;
+  --ok: #1d8348;
+  --ok-dim: #e0f3e8;
+  --warn: #9a6a00;
+  --warn-dim: #faf0d7;
+  --error: #c03434;
+  --error-dim: #fbe3e3;
+  --focus-ring: #2f6fed;
+  --state-active: #1d8348;
+  --state-idle: #9a6a00;
+  --state-unknown: #5a6577;
+  --gap-line: #b8c0cc;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #15181d;
+  --surface: #1e232b;
+  --surface-dim: #262c36;
+  --border: #374050;
+  --border-strong: #4c5a70;
+  --text: #e8ecf2;
+  --text-dim: #9aa6b8;
+  --accent: #6b9bff;
+  --accent-dim: #24304a;
+  --ok: #4fc98a;
+  --ok-dim: #1d3a2c;
+  --warn: #e0b13f;
+  --warn-dim: #3d3416;
+  --error: #f06a6a;
+  --error-dim: #402323;
+  --focus-ring: #6b9bff;
+  --state-active: #4fc98a;
+  --state-idle: #e0b13f;
+  --state-unknown: #9aa6b8;
+  --gap-line: #4c5a70;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --bg: #15181d;
+    --surface: #1e232b;
+    --surface-dim: #262c36;
+    --border: #374050;
+    --border-strong: #4c5a70;
+    --text: #e8ecf2;
+    --text-dim: #9aa6b8;
+    --accent: #6b9bff;
+    --accent-dim: #24304a;
+    --ok: #4fc98a;
+    --ok-dim: #1d3a2c;
+    --warn: #e0b13f;
+    --warn-dim: #3d3416;
+    --error: #f06a6a;
+    --error-dim: #402323;
+    --focus-ring: #6b9bff;
+    --state-active: #4fc98a;
+    --state-idle: #e0b13f;
+    --state-unknown: #9aa6b8;
+    --gap-line: #4c5a70;
+  }
+}
+
+:root {
+  --font-sans: system-ui, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Cascadia Code', 'JetBrains Mono', Consolas, monospace;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+}

@@ -1,0 +1,377 @@
+/* 全局基础样式：布局骨架、卡片、按钮、徽章、四态与焦点可见。 */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.app-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.app-topbar__brand {
+  font-weight: 600;
+  font-size: var(--text-lg);
+  margin-right: var(--space-3);
+  white-space: nowrap;
+}
+
+.app-topbar__spacer {
+  flex: 1;
+}
+
+.app-nav {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.app-nav__link {
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-dim);
+  text-decoration: none;
+  font-size: var(--text-sm);
+}
+
+.app-nav__link:hover {
+  background: var(--surface-dim);
+}
+
+.app-nav__link[aria-current='page'] {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.app-main {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-5) var(--space-4);
+}
+
+.page {
+  max-width: 880px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.page__title {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  margin: 0;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+}
+
+.card__title {
+  font-size: var(--text-base);
+  font-weight: 600;
+  margin: 0 0 var(--space-3);
+  color: var(--text-dim);
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.metric {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.metric__label {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+
+.metric__value {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: 999px;
+  font-size: var(--text-xs);
+  line-height: 1.8;
+  white-space: nowrap;
+}
+
+.badge--ok {
+  background: var(--ok-dim);
+  color: var(--ok);
+}
+
+.badge--warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+.badge--error {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+.badge--dim {
+  background: var(--surface-dim);
+  color: var(--text-dim);
+}
+
+.badge--active {
+  background: var(--ok-dim);
+  color: var(--state-active);
+}
+
+.badge--idle {
+  background: var(--warn-dim);
+  color: var(--state-idle);
+}
+
+.badge--unknown {
+  background: var(--surface-dim);
+  color: var(--state-unknown);
+}
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  cursor: pointer;
+  font-size: var(--text-sm);
+}
+
+.button:hover:not(:disabled) {
+  background: var(--surface-dim);
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.button--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.button--primary:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.08);
+}
+
+.button--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.list__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+}
+
+.list__row--gap {
+  background: var(--surface-dim);
+  border-style: dashed;
+}
+
+.list__row--transition {
+  padding: var(--space-1) var(--space-3);
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.list__main {
+  flex: 1;
+  min-width: 0;
+}
+
+.list__title {
+  font-weight: 600;
+}
+
+.list__sub {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.text-dim {
+  color: var(--text-dim);
+}
+
+.notice {
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.notice--warn {
+  background: var(--warn-dim);
+  color: var(--warn);
+}
+
+.notice--error {
+  background: var(--error-dim);
+  color: var(--error);
+}
+
+.notice--ok {
+  background: var(--ok-dim);
+  color: var(--ok);
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.form__row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  max-width: 420px;
+}
+
+.form__label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.form__hint {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+
+.form__input,
+.form__select,
+.form__textarea {
+  font: inherit;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+}
+
+.form__textarea {
+  min-height: 120px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.form__checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.details {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  background: var(--surface-dim);
+}
+
+.details > summary {
+  cursor: pointer;
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+}
+
+.state-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-6) var(--space-4);
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.state-block__title {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  color: var(--text);
+}

@@ -159,7 +159,7 @@ impl WriterTask {
                 }
                 self.shared.note_heartbeat(
                     snapshot.heartbeat_at_utc_ms,
-                    None,
+                    Some(snapshot.heartbeat_at_utc_ms),
                     snapshot.capture_queue_depth as u32,
                     snapshot.writer_queue_depth as u32,
                     snapshot.dropped_capture_count as u64,

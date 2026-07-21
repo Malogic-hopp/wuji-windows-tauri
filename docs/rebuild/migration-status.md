@@ -2,7 +2,7 @@
 
 状态：实施状态记录（不定义设计）
 基线日期：2026-07-18
-最近更新：2026-07-19（V01-1、V01-2、V01-3、V01-4、V01-5、V01-6 完成）
+最近更新：2026-07-19（V01-1、V01-2、V01-3、V01-4、V01-5、V01-6、V01-7 完成）
 本次核对方式：仓库结构与源码只读检查 + rebuild workspace `cargo test`/`clippy`/`fmt` 实跑；旧系统 build、test、smoke、soak 未重新运行
 当前实施依据：[09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)
 长期目标依据：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -38,7 +38,7 @@ React 19 / TypeScript
 → C# Agent / SQLite v1
 ```
 
-目标架构的端到端链路已经打通：React → Tauri Rust Host → Rust Agent → SQLite 完全脱离 .NET Bridge 运行。V01-1 建立 `rebuild/` workspace 与 `wuji-core`；V01-2 落地 `wuji-storage`（唯一内嵌 DDL、bootstrap、Writer、重算、只读 Reader）；V01-3 落地 Win32 采集与隐私过滤；V01-4 落地 Activity/Work 精确状态机；V01-5 落地完整 Agent 运行时（双 lane Writer、Named Pipe CommandServer、心跳、单实例、恢复）；V01-6 落地 Desktop Host：`apps/desktop/src-tauri` 实现 IPC client（hello/envelope/timeout/自动重连）、只读 Query、Settings CAS + 原子写 + Run Key 补偿、detached Agent 启动与版本门、12 个语义命令与托盘/单实例，不含任何 Bridge 代码；`apps/desktop/src` 提供 React 占位壳（V01-7 换正式四页）。4 项 Desktop 集成测试（handshake/FSM/reload、detached ensure、CAS+Run Key、seeded 查询）与 React 门禁（typecheck/lint/Vitest/build）全部通过。Rust 88 项测试、`clippy -D warnings`、`fmt --check` 全绿。四条正式 UI 页面与 dev bundle 尚未实现。
+目标架构的端到端链路已经打通并经真实窗口验证：React → Tauri Rust Host → Rust Agent → SQLite 完全脱离 .NET Bridge 运行。V01-1 建立 `rebuild/` workspace 与 `wuji-core`；V01-2 落地 `wuji-storage`（唯一内嵌 DDL、bootstrap、Writer、重算、只读 Reader）；V01-3 落地 Win32 采集与隐私过滤；V01-4 落地 Activity/Work 精确状态机；V01-5 落地完整 Agent 运行时（双 lane Writer、Named Pipe CommandServer、心跳、单实例、恢复）；V01-6 落地 Desktop Host（IPC client、只读 Query、Settings CAS、detached Agent、12 语义命令、托盘/单实例，不含 Bridge 代码）；V01-7 落地四个正式页面：Today（指标/Top Apps/gap 提示）、Timeline（Segment/Gap 渲染、cursor 分页、切换间隔默认折叠）、Settings（六字段、CAS、saved/applied 分离、中文错误）、Diagnostics（运行健康、最后活动、resync 修复、折叠脱敏高级信息），统一 Loading/Empty/Ready/Error 四态，顶栏 Agent 状态与控制按状态切换按钮，Light/Dark 令牌主题与可见焦点。真实窗口冒烟（vite dev + desktop exe）验证：按钮点击开始/停止采集、真实前台应用写入 SQLite、Today/Timeline/Diagnostics 实时刷新。Rust 88 项测试、React 20 项测试、`clippy -D warnings`、`fmt --check`、typecheck/lint/build 全部通过。dev bundle 与 V01-8 验收尚未实现。
 
 ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Result Set/Snapshot、Identity Resolution、Lease/GC、production binary/session 认证、Importer 和旧系统退役继续作为长期 Design only，不阻挡 dev-only v0.1，但在未来 production cutover 前仍需重新进入对应门禁。
 
@@ -64,7 +64,7 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 | 产品语义与指标 | Design only | [01](./01-产品语义与指标词典.md) 为 Draft | Accepted 的 Observation/Activity/Context/Work/质量/时区词典 | 产品接受、延期项和候选阈值尚未签署 | G-ADR / ALG golden review |
 | 领域模型 | Design only | [02](./02-行为分析领域模型.md) 为 Draft | 事实、派生、Generation、Result Set、Snapshot 不变量可执行 | 尚无 Rust 类型与属性测试 | DOM-001–005 |
 | 目标架构 ADR | Blocked | [ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 状态 Proposed | Accepted 并取代当前过渡 ADR 的最终架构 | 依赖规范尚未形成 Accepted 基线 | G-ADR |
-| React 19 UI 基座 | Partial | `rebuild/apps/desktop`：React 19.2.7 + vite + 占位壳 + typecheck/lint/Vitest/build 门禁通过；wuji-core specta DTO 已接入 | Today/Timeline/Settings/Diagnostics 使用 v0.1 DTO | 四个正式页面未实现（V01-7） | V01-7 |
+| React 19 UI 基座 | Implemented | `rebuild/apps/desktop`：Today/Timeline/Settings/Diagnostics 四页 + 四态 + 顶栏 Agent 控制 + 令牌主题；20 项 Vitest 通过；真实窗口冒烟（按钮驱动采集、真实前台数据回显） | Today/Timeline/Settings/Diagnostics 使用 v0.1 DTO | 手工矩阵（尺寸/DPI/HC/读屏）待 V01-8 验收 | V01-8 |
 | Tauri 2 Desktop shell | Implemented | `rebuild/apps/desktop/src-tauri`：IPC client、Query、Settings CAS、detached Agent 控制、托盘、单实例、12 语义命令、集成测试 | 直接使用 Rust Query/IPC/Settings/Process Controller | — | V01-7 页面接入 |
 | Bridge-free Tauri | Partial | rebuild 链路 React→Tauri→Rust Agent→SQLite 全程无 Bridge（集成测试证明）；旧 `src/QuantifiedSelf.Windows.Tauri` 仍含 BridgeSupervisor（回滚入口） | 安装包与运行时不含 `.NET Bridge` | dev bundle 未验证（V01-8） | REL-001（V01-8） |
 | Rust workspace / `wuji-core` | Verified | `rebuild/crates/wuji-core`（commit `c2ca961`）：schema 对齐领域枚举、Settings 默认值/验证/digest、21 个稳定错误码、固定命名空间、DTO + specta branded TS drift 门禁；`cargo test -p wuji-core` 21 项通过 | 纯领域、Settings、Privacy、Analytics、Protocol、Error | 长期 Privacy/Analytics 部分待后续版本 | V01-2 起持续回归 |
@@ -116,7 +116,7 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 | 验证项 | 仓库能力 | 本基线结果 | 说明 |
 |---|---|---|---|
 | Rebuild `cargo test --workspace` / `cargo clippy -D warnings` / `cargo fmt --check` | 命令存在（`rebuild/`） | Passed（2026-07-19，88 项测试全过、零警告） | 覆盖 wuji-core、wuji-storage、wuji-windows、Agent 单元/黄金样本/e2e、Desktop 单元与集成测试；随 V01 阶段扩展 |
-| Rebuild Desktop `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` | `rebuild/apps/desktop/package.json` | Passed（2026-07-19，Vitest 2 项通过、零警告、dist 产出） | React 占位壳门禁；V01-7 页面接入后扩展 |
+| Rebuild Desktop `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` | `rebuild/apps/desktop/package.json` | Passed（2026-07-19，Vitest 20 项通过、零警告、dist 产出） | 四页组件与顶栏门禁；手工矩阵待 V01-8 |
 | C# build / full xUnit | 命令和项目存在 | NotRun | 不能引用历史记录作为 2026-07-18 当前结果 |
 | React typecheck/lint/Vitest | package scripts 存在 | NotRun | 只覆盖当前 Bridge 阶段 UI，不覆盖 v2 Gate |
 | Tauri/Rust tests | Cargo tests 存在 | NotRun | 主要覆盖 Host/Bridge/lifecycle，不是 Rust Agent/Core/Storage |
@@ -152,7 +152,7 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 4. ~~实现 Activity/Work 精确状态机与黄金样本守恒测试~~（V01-4 已完成）；
 5. ~~实现双 lane Writer、CommandServer、heartbeat、单实例与恢复~~（V01-5 已完成）；
 6. ~~实现 Tauri Query/IPC client、CAS Settings、detached Agent、无 Bridge Desktop 与端到端集成测试~~（V01-6 已完成）；
-7. 实现 Today、Timeline、Settings、Diagnostics 四页与四态验收（V01-7）；
-8. 完成 dev bundle、V01-8 验收并更新本文件。
+7. ~~实现 Today、Timeline、Settings、Diagnostics 四页与四态验收~~（V01-7 已完成）；
+8. 完成 dev bundle、固定 Agent 布局、dev manifest、soak、旧系统隔离验收（V01-8），并更新本文件。
 
 期间不得修改旧数据库或删除旧 C#/WPF/Bridge。长期 manifest、Importer、Snapshot/Lease 和 production cutover 保持延期。
