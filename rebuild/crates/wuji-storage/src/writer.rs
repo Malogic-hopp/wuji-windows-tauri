@@ -39,6 +39,14 @@ pub enum ObservationInsert {
     AlreadyProcessed,
 }
 
+/// settings revision 幂等写入结果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SettingsRevisionOutcome {
+    Inserted,
+    AlreadyPresent,
+    ConflictDigest,
+}
+
 impl Writer {
     /// 09 §7.2 bootstrap：临时文件建库 → 校验 → checkpoint → 原子改名。
     /// 失败只删除临时文件，不碰任何既有数据库；目标已存在时拒绝。
@@ -182,6 +190,13 @@ impl Writer {
 
     pub fn schema_meta(&self) -> &SchemaMeta {
         &self.meta
+    }
+
+    /// WAL checkpoint(TRUNCATE)（09 §5 MaintenanceLite 唯一维护动作；由 Writer 执行）。
+    pub fn checkpoint_truncate(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .map_err(StorageError::from_sqlite)
     }
 
     pub fn path(&self) -> &Path {
@@ -433,6 +448,33 @@ impl StorageTransaction<'_> {
             )
             .map_err(StorageError::from_sqlite)?;
         Ok(())
+    }
+
+    /// 幂等写入 settings revision（09 §9.1 启动对账）：已存在同 digest 行则跳过；
+    /// 同 revision 不同 digest 返回 ConflictDigest（05 §13 语义）。
+    pub fn ensure_settings_revision(
+        &self,
+        revision: i64,
+        content_digest: &str,
+        applied_at_utc_ms: i64,
+    ) -> Result<SettingsRevisionOutcome> {
+        let existing: Option<String> = self
+            .tx
+            .query_row(
+                "SELECT content_digest FROM settings_revisions WHERE revision = ?1",
+                params![revision],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StorageError::from_sqlite)?;
+        match existing {
+            None => {
+                self.insert_settings_revision(revision, content_digest, applied_at_utc_ms)?;
+                Ok(SettingsRevisionOutcome::Inserted)
+            }
+            Some(digest) if digest == content_digest => Ok(SettingsRevisionOutcome::AlreadyPresent),
+            Some(_) => Ok(SettingsRevisionOutcome::ConflictDigest),
+        }
     }
 
     pub fn insert_runtime(&self, runtime_id: &RuntimeId, started_at_utc_ms: i64) -> Result<()> {

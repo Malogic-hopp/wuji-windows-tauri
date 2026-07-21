@@ -74,6 +74,20 @@ struct WorkState {
     last_segment_id: i64,
 }
 
+/// 引擎可回滚状态快照（09 §5.2 busy 重试）。
+#[derive(Debug, Clone, Copy)]
+pub struct EngineSnapshot {
+    open_segment: Option<SegmentState>,
+    open_work: Option<WorkState>,
+    pending_idle_start_ms: Option<i64>,
+    pending_idle_ms: i64,
+    open_gap_kind: Option<GapKind>,
+    last_point: Option<(i64, u64)>,
+    last_message_epoch: Option<u64>,
+    last_capture_drops: u64,
+    last_writer_drops: u64,
+}
+
 /// Activity/Work 状态机。open 行的内存镜像 + 规则判定；DB 是唯一真相。
 pub struct ActivityEngine {
     runtime_id: RuntimeId,
@@ -134,6 +148,7 @@ impl ActivityEngine {
 
     /// 应用新 Settings（09 §9.1、§5.1）：先提交 settings_revisions，再切换内存值；
     /// 设置只影响未来数据，open 行与 gap 状态不变。
+    /// 重启对账幂等：revision 已存在且 digest 相同则跳过插入；digest 冲突返回 SETTINGS_CONFLICT。
     pub fn apply_settings(
         &mut self,
         writer: &mut Writer,
@@ -146,7 +161,17 @@ impl ActivityEngine {
             .map_err(|_| StorageError::internal("settings revision 非数字"))?;
         {
             let tx = writer.transaction()?;
-            tx.insert_settings_revision(revision, &settings.content_digest(), applied_at_utc_ms)?;
+            let outcome = tx.ensure_settings_revision(
+                revision,
+                &settings.content_digest(),
+                applied_at_utc_ms,
+            )?;
+            if outcome == wuji_storage::writer::SettingsRevisionOutcome::ConflictDigest {
+                return Err(StorageError::new(
+                    wuji_core::error::SafeErrorCode::SettingsConflict,
+                    "设置文件与已应用 revision 摘要冲突",
+                ));
+            }
             tx.commit()?;
         }
         self.gap_cap_ms = (i64::from(settings.sampling_interval_seconds) * 3_000).max(15_000);
@@ -154,6 +179,33 @@ impl ActivityEngine {
         self.settings_revision = revision;
         self.settings = settings;
         Ok(())
+    }
+
+    /// 故障重试用的引擎状态快照（09 §5.2 busy 重试：失败后整体回滚内存镜像）。
+    pub fn snapshot(&self) -> EngineSnapshot {
+        EngineSnapshot {
+            open_segment: self.open_segment,
+            open_work: self.open_work,
+            pending_idle_start_ms: self.pending_idle_start_ms,
+            pending_idle_ms: self.pending_idle_ms,
+            open_gap_kind: self.open_gap_kind,
+            last_point: self.last_point,
+            last_message_epoch: self.last_message_epoch,
+            last_capture_drops: self.last_capture_drops,
+            last_writer_drops: self.last_writer_drops,
+        }
+    }
+
+    pub fn restore(&mut self, snapshot: &EngineSnapshot) {
+        self.open_segment = snapshot.open_segment;
+        self.open_work = snapshot.open_work;
+        self.pending_idle_start_ms = snapshot.pending_idle_start_ms;
+        self.pending_idle_ms = snapshot.pending_idle_ms;
+        self.open_gap_kind = snapshot.open_gap_kind;
+        self.last_point = snapshot.last_point;
+        self.last_message_epoch = snapshot.last_message_epoch;
+        self.last_capture_drops = snapshot.last_capture_drops;
+        self.last_writer_drops = snapshot.last_writer_drops;
     }
 
     /// 启动恢复（09 §6.7 + gap 叠加规则）：关闭遗留 open 行、开 agent_restart gap。

@@ -7,9 +7,13 @@
 pub mod error;
 pub mod foreground;
 pub mod idle;
+pub mod pipe;
 pub mod process;
 
 pub use error::CaptureError;
 pub use foreground::{ForegroundSample, capture_foreground};
 pub use idle::idle_seconds;
 pub use process::{file_name_from_path, process_image_file_name};
+
+#[cfg(windows)]
+pub use pipe::{SingleInstanceGuard, create_pipe_server, current_user_sid};

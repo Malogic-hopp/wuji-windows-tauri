@@ -93,9 +93,12 @@ impl Default for CaptureLoopConfig {
 }
 
 /// 运行采集循环，直到输出端被关闭。返回 (capture queue 接收端, join handle)。
+/// 采样仅在 capture state 为 Running 时发生；状态变化后的迟到样本直接丢弃
+/// （不计入 queue drop——生命周期 gap 已覆盖该区间）。
 pub fn spawn_capture_loop<S: CaptureSource>(
     source: S,
     settings_rx: watch::Receiver<Settings>,
+    capture_state_rx: watch::Receiver<wuji_core::domain::CaptureState>,
     continuity: Arc<ContinuityState>,
     config: CaptureLoopConfig,
 ) -> (mpsc::Receiver<RawCapture>, tokio::task::JoinHandle<()>) {
@@ -111,6 +114,9 @@ pub fn spawn_capture_loop<S: CaptureSource>(
             ticker.tick().await;
             if tx.is_closed() {
                 break;
+            }
+            if *capture_state_rx.borrow() != wuji_core::domain::CaptureState::Running {
+                continue;
             }
             let interval =
                 Duration::from_secs(u64::from(settings_rx.borrow().sampling_interval_seconds));
@@ -133,6 +139,10 @@ pub fn spawn_capture_loop<S: CaptureSource>(
             } else {
                 source.capture()
             };
+            // 状态在捕获期间改变（Pause/Stop）：迟到样本不得进入生命周期边界之后。
+            if *capture_state_rx.borrow() != wuji_core::domain::CaptureState::Running {
+                continue;
+            }
             let raw = RawCapture {
                 sequence,
                 continuity_epoch: continuity.current_epoch(),
@@ -202,6 +212,12 @@ mod tests {
         rx
     }
 
+    fn running_watch() -> watch::Receiver<wuji_core::domain::CaptureState> {
+        let (tx, rx) = watch::channel(wuji_core::domain::CaptureState::Running);
+        drop(tx);
+        rx
+    }
+
     #[test]
     fn sample_due_rules() {
         let t0 = Instant::now();
@@ -224,6 +240,7 @@ mod tests {
         let (mut rx, handle) = spawn_capture_loop(
             MockSource::with(vec![]),
             settings_watch(3),
+            running_watch(),
             continuity,
             CaptureLoopConfig {
                 wake_interval: Duration::from_millis(100),
@@ -257,6 +274,7 @@ mod tests {
         let (mut rx, handle) = spawn_capture_loop(
             MockSource::with(vec![]),
             settings_watch(1),
+            running_watch(),
             continuity.clone(),
             CaptureLoopConfig {
                 wake_interval: Duration::from_millis(50),
