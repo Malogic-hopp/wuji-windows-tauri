@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "主窗口最小能力集（不授予 fs/shell/http/sql/process 等通用能力，09 §8.3/ADR-002 §14）",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

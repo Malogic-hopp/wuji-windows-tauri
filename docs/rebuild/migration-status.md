@@ -2,7 +2,7 @@
 
 状态：实施状态记录（不定义设计）
 基线日期：2026-07-18
-最近更新：2026-07-19（V01-1、V01-2、V01-3、V01-4、V01-5 完成）
+最近更新：2026-07-19（V01-1、V01-2、V01-3、V01-4、V01-5、V01-6 完成）
 本次核对方式：仓库结构与源码只读检查 + rebuild workspace `cargo test`/`clippy`/`fmt` 实跑；旧系统 build、test、smoke、soak 未重新运行
 当前实施依据：[09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)
 长期目标依据：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -38,7 +38,7 @@ React 19 / TypeScript
 → C# Agent / SQLite v1
 ```
 
-目标架构已形成可运行的 Rust Agent 链路：V01-1 建立 `rebuild/` workspace 与 `wuji-core`（commit `c2ca961`）；V01-2 落地 `wuji-storage`（唯一内嵌 DDL、bootstrap、Writer 行操作、触及桶重算、只读 Reader）；V01-3 落地 Win32 采集与隐私过滤；V01-4 落地 Activity/Work 精确状态机；V01-5 落地完整 Agent 运行时：独立 Rust Agent 进程真实采集前台 App/idle 并经隐私过滤写入全新 SQLite——双 lane Writer（data/control、biased select、busy 回滚重试、fault 停止采集）、Named Pipe CommandServer（hello 握手、envelope、64 KiB/3s、request ID 幂等、Capture 状态机、稳定错误码、同用户 DACL）、每秒心跳、MaintenanceLite checkpoint、单实例 mutex、启动恢复与受控退出。4 项 e2e 子进程测试（状态机/幂等/超限/崩溃恢复/单实例）通过。`cargo test --workspace`（82 项）、`clippy -D warnings`、`fmt --check` 全部通过。bridge-free Tauri 与四条 UI 路径尚未实现。
+目标架构的端到端链路已经打通：React → Tauri Rust Host → Rust Agent → SQLite 完全脱离 .NET Bridge 运行。V01-1 建立 `rebuild/` workspace 与 `wuji-core`；V01-2 落地 `wuji-storage`（唯一内嵌 DDL、bootstrap、Writer、重算、只读 Reader）；V01-3 落地 Win32 采集与隐私过滤；V01-4 落地 Activity/Work 精确状态机；V01-5 落地完整 Agent 运行时（双 lane Writer、Named Pipe CommandServer、心跳、单实例、恢复）；V01-6 落地 Desktop Host：`apps/desktop/src-tauri` 实现 IPC client（hello/envelope/timeout/自动重连）、只读 Query、Settings CAS + 原子写 + Run Key 补偿、detached Agent 启动与版本门、12 个语义命令与托盘/单实例，不含任何 Bridge 代码；`apps/desktop/src` 提供 React 占位壳（V01-7 换正式四页）。4 项 Desktop 集成测试（handshake/FSM/reload、detached ensure、CAS+Run Key、seeded 查询）与 React 门禁（typecheck/lint/Vitest/build）全部通过。Rust 88 项测试、`clippy -D warnings`、`fmt --check` 全绿。四条正式 UI 页面与 dev bundle 尚未实现。
 
 ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Result Set/Snapshot、Identity Resolution、Lease/GC、production binary/session 认证、Importer 和旧系统退役继续作为长期 Design only，不阻挡 dev-only v0.1，但在未来 production cutover 前仍需重新进入对应门禁。
 
@@ -64,9 +64,9 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 | 产品语义与指标 | Design only | [01](./01-产品语义与指标词典.md) 为 Draft | Accepted 的 Observation/Activity/Context/Work/质量/时区词典 | 产品接受、延期项和候选阈值尚未签署 | G-ADR / ALG golden review |
 | 领域模型 | Design only | [02](./02-行为分析领域模型.md) 为 Draft | 事实、派生、Generation、Result Set、Snapshot 不变量可执行 | 尚无 Rust 类型与属性测试 | DOM-001–005 |
 | 目标架构 ADR | Blocked | [ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 状态 Proposed | Accepted 并取代当前过渡 ADR 的最终架构 | 依赖规范尚未形成 Accepted 基线 | G-ADR |
-| React 19 UI 基座 | Partial | `package.json`、Dashboard/Settings 页面和 Vitest 测试存在 | Today/Timeline/Trends/Apps/Insights/Diagnostics/Settings 使用 v2 DTO | 页面范围不完整；仍使用 Bridge client/旧 overview 语义 | M7、UI-001–006 |
-| Tauri 2 Desktop shell | Partial | Tauri Host、tray、single instance、lifecycle 已存在 | 直接使用 Rust Query/IPC/Settings/Process Controller | Rust Host 仍持有 BridgeSupervisor；command 语义未拆分 Process/Capture | M6/M7、RUN-005 |
-| Bridge-free Tauri | Not started | `bridge:prepare`、`src/bridge/`、BridgeSupervisor 均仍存在 | 安装包与运行时不含 `.NET Bridge` | 缺 Rust v2 query/IPC/client 和新 command DTO | REL-001 |
+| React 19 UI 基座 | Partial | `rebuild/apps/desktop`：React 19.2.7 + vite + 占位壳 + typecheck/lint/Vitest/build 门禁通过；wuji-core specta DTO 已接入 | Today/Timeline/Settings/Diagnostics 使用 v0.1 DTO | 四个正式页面未实现（V01-7） | V01-7 |
+| Tauri 2 Desktop shell | Implemented | `rebuild/apps/desktop/src-tauri`：IPC client、Query、Settings CAS、detached Agent 控制、托盘、单实例、12 语义命令、集成测试 | 直接使用 Rust Query/IPC/Settings/Process Controller | — | V01-7 页面接入 |
+| Bridge-free Tauri | Partial | rebuild 链路 React→Tauri→Rust Agent→SQLite 全程无 Bridge（集成测试证明）；旧 `src/QuantifiedSelf.Windows.Tauri` 仍含 BridgeSupervisor（回滚入口） | 安装包与运行时不含 `.NET Bridge` | dev bundle 未验证（V01-8） | REL-001（V01-8） |
 | Rust workspace / `wuji-core` | Verified | `rebuild/crates/wuji-core`（commit `c2ca961`）：schema 对齐领域枚举、Settings 默认值/验证/digest、21 个稳定错误码、固定命名空间、DTO + specta branded TS drift 门禁；`cargo test -p wuji-core` 21 项通过 | 纯领域、Settings、Privacy、Analytics、Protocol、Error | 长期 Privacy/Analytics 部分待后续版本 | V01-2 起持续回归 |
 | Rust `wuji-storage` | Verified | `rebuild/crates/wuji-storage`：唯一内嵌 DDL、六步 bootstrap 自检、Writer 行操作、触及桶重算、只读 Reader；`cargo test -p wuji-storage` 18 项通过（含 DST/幂等/分页/恢复） | v0.1 Single Writer、只读 Query、空库 bootstrap 和最小 projection | — | V01-4 状态机接入后回归 |
 | Rust Agent binary | Implemented | `rebuild/apps/agent`：独立进程真实采集写库；双 lane Writer、CommandServer、心跳、MaintenanceLite、单实例与启动恢复全部接入；4 项 e2e 子进程测试通过 | 独立 Rust Agent 长期进程 | Desktop 进程管理与 UI 路径未接入 | V01-6 |
@@ -83,8 +83,8 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 | 小时/日持久化读模型 | Design only | 04 定义 hourly/daily 表族 | Today/Trends/Heatmap 不扫描 Observation | 当前页面仍依赖旧 overview/session 查询 | M5 / PERF-001–002 |
 | Named Pipe v2 | Partial | `wuji-windows/pipe.rs` 同用户 DACL + agent CommandServer：hello、envelope、64 KiB/3s、request ID 幂等、Capture 状态机、稳定错误码、e2e 覆盖 | DACL + Desktop binary/signature manifest + 内存 session capability、版本握手、幂等 receipt | production binary 认证与 capability 属于长期（09 §8.1 已延期） | V01-6 接入 Desktop |
 | 可信原生确认 | Design only | ADR-002、06、08 已冻结 React 无 token/consume 能力 | Clear/导出/隐私削弱由 Win32 原生确认后在 Rust 同流执行 | 当前目标 command/TrustedActionCapability/proof 均未实现 | SEC-003 / M6–M7 |
-| Process/Capture 生命周期分离 | Design only | ADR-002、05、06 已定义 | StartAgentProcess 与 CaptureStart/Stop 分离 | 当前 Tauri command 仍是 `agent_start/stop` 旧语义 | RUN-005 |
-| Settings Revision/Profile/Effectivity | Design only | 02/04/06 第二轮修订已定义 | Desktop 单写，Agent 对账，按首条事实生效 | 当前仍是 C#/Bridge settings path；无 Effectivity tables | SET-001–002 |
+| Process/Capture 生命周期分离 | Implemented | `agent_process_ensure_running`（detached，初始 stopped）与 `capture_start/pause/resume/stop`（IPC + FSM）已分离并经集成测试 | StartAgentProcess 与 CaptureStart/Stop 分离 | — | V01-8 包体验证 |
+| Settings Revision/Profile/Effectivity | Partial | v0.1 CAS（expectedRevision）+ 原子写 + saved/applied 分离 + Run Key 补偿 + Agent 对账已实现并通过集成测试 | Desktop 单写，Agent 对账，按首条事实生效 | Effectivity/Profile 属于长期（09 已延期） | 长期 |
 | 数据库 pointer / reader lifecycle | Design only | 04/06 定义版本文件、pointer、DatabaseReady | Windows 可恢复 major migration 切换 | 无 trusted pointer/migrator/reader close 实现 | DB-011 / REL-003 |
 | v1→v2 importer | Not started | 04/07 只有规则 | 离线、幂等、可恢复的导入与 Legacy Summary | 无 fixture、import job、报告或工具 | M8 / DB-012 |
 | Shadow / parity | Not started | 当前有 Bridge 阶段页面/lifecycle parity 脚本 | 同输入或 v1 快照的 v1/v2 语义/守恒比较 | 没有 Rust v2 输出，无法开展目标 parity | M8 / Parity gate |
@@ -115,7 +115,8 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 
 | 验证项 | 仓库能力 | 本基线结果 | 说明 |
 |---|---|---|---|
-| Rebuild `cargo test --workspace` / `cargo clippy -D warnings` / `cargo fmt --check` | 命令存在（`rebuild/`） | Passed（2026-07-19，82 项测试全过、零警告） | 覆盖 wuji-core、wuji-storage、wuji-windows、Agent 单元/黄金样本与 4 项 e2e 子进程测试；随 V01 阶段扩展 |
+| Rebuild `cargo test --workspace` / `cargo clippy -D warnings` / `cargo fmt --check` | 命令存在（`rebuild/`） | Passed（2026-07-19，88 项测试全过、零警告） | 覆盖 wuji-core、wuji-storage、wuji-windows、Agent 单元/黄金样本/e2e、Desktop 单元与集成测试；随 V01 阶段扩展 |
+| Rebuild Desktop `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` | `rebuild/apps/desktop/package.json` | Passed（2026-07-19，Vitest 2 项通过、零警告、dist 产出） | React 占位壳门禁；V01-7 页面接入后扩展 |
 | C# build / full xUnit | 命令和项目存在 | NotRun | 不能引用历史记录作为 2026-07-18 当前结果 |
 | React typecheck/lint/Vitest | package scripts 存在 | NotRun | 只覆盖当前 Bridge 阶段 UI，不覆盖 v2 Gate |
 | Tauri/Rust tests | Cargo tests 存在 | NotRun | 主要覆盖 Host/Bridge/lifecycle，不是 Rust Agent/Core/Storage |
@@ -149,8 +150,9 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 2. ~~按 `schema/schema.sql` 落地 bootstrap、Writer/Query 与触及桶重算幂等测试~~（V01-2 已完成）；
 3. ~~实现 Win32 foreground/process/idle、隐私过滤、bounded queue 与真实采集测试~~（V01-3 已完成）；
 4. ~~实现 Activity/Work 精确状态机与黄金样本守恒测试~~（V01-4 已完成）；
-5. ~~实现双 lane Writer、CommandServer、heartbeat、单实例与恢复（V01-5 已完成）~~；
-6. 接受第 4、8–9 节，实现 Tauri Query/IPC client、CAS Settings、detached Agent（V01-6）；
-7. 完成 UI、dev bundle、V01-7–V01-8 验收并更新本文件。
+5. ~~实现双 lane Writer、CommandServer、heartbeat、单实例与恢复~~（V01-5 已完成）；
+6. ~~实现 Tauri Query/IPC client、CAS Settings、detached Agent、无 Bridge Desktop 与端到端集成测试~~（V01-6 已完成）；
+7. 实现 Today、Timeline、Settings、Diagnostics 四页与四态验收（V01-7）；
+8. 完成 dev bundle、V01-8 验收并更新本文件。
 
 期间不得修改旧数据库或删除旧 C#/WPF/Bridge。长期 manifest、Importer、Snapshot/Lease 和 production cutover 保持延期。

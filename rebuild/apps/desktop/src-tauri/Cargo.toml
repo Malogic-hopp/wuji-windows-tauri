@@ -1,0 +1,39 @@
+[package]
+name = "wuji-rebuild-desktop"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "wuji_rebuild_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "=2.6.3", features = [] }
+
+[dependencies]
+chrono-tz = "=0.10.4"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.150"
+tauri = { version = "=2.11.5", features = ["tray-icon"] }
+thiserror = "=2.0.18"
+tokio = { version = "=1.52.3", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+ulid = "=3.0.0"
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_WindowsAndMessaging",
+] }
+wuji-core = { path = "../../../crates/wuji-core" }
+wuji-storage = { path = "../../../crates/wuji-storage" }
+wuji-windows = { path = "../../../crates/wuji-windows" }
+
+[dev-dependencies]
+rusqlite = "=0.40.1"
+tempfile = "=3.27.0"
+
+[[bin]]
+name = "wuji-rebuild-desktop-v01"
+path = "src/main.rs"

@@ -2,12 +2,13 @@
 resolver = "2"
 members = [
     "apps/agent",
+    "apps/desktop/src-tauri",
     "crates/wuji-core",
     "crates/wuji-storage",
     "crates/wuji-windows",
 ]
 
-# apps/desktop（React + Tauri Host）在 V01-6 迁入，不进入 V01-1 workspace。
+# apps/desktop/src（React）在 V01-6 起随 src-tauri 迁移（09 §4）。
 
 [workspace.package]
 edition = "2024"

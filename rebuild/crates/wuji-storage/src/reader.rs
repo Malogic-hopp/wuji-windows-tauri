@@ -333,6 +333,15 @@ impl Reader {
         })
     }
 
+    /// 已记录的最大 settings revision（无记录时为 None）。
+    pub fn max_settings_revision(&self) -> Result<Option<i64>> {
+        self.conn
+            .query_row("SELECT MAX(revision) FROM settings_revisions", [], |row| {
+                row.get(0)
+            })
+            .map_err(StorageError::from_sqlite)
+    }
+
     /// 最近一次 Agent runtime 快照（09 §8.4 AgentStatusDto 的 DB 部分）。
     pub fn latest_runtime(&self) -> Result<Option<RuntimeRow>> {
         self.conn
