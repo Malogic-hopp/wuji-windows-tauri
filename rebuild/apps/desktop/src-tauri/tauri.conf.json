@@ -29,7 +29,12 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "nsis"
+    "active": true,
+    "targets": "nsis",
+    "resources": {
+      "../../../target/release/wuji-rebuild-agent-v01.exe": "Agent/wuji-rebuild-agent-v01.exe"
+    },
+    "publisher": "WUJI",
+    "copyright": "WUJI Rebuild v0.1 dev-only package"
   }
 }

@@ -21,3 +21,4 @@ scripts/*.png
 .agents/
 .pnpm-store/
 target/
+rebuild/dist/
