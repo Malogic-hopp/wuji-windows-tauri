@@ -2,7 +2,7 @@
 
 状态：实施状态记录（不定义设计）
 基线日期：2026-07-18
-最近更新：2026-07-21（V01-1–V01-7 完成；V01-8 打包与资产校验完成，8h soak 进行中）
+最近更新：2026-07-22（V01-1–V01-8 全部完成）
 本次核对方式：仓库结构与源码只读检查 + rebuild workspace `cargo test`/`clippy`/`fmt` 实跑；旧系统 build、test、smoke、soak 未重新运行
 当前实施依据：[09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)
 长期目标依据：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -38,7 +38,7 @@ React 19 / TypeScript
 → C# Agent / SQLite v1
 ```
 
-目标架构的端到端链路已经打通并经真实窗口验证：React → Tauri Rust Host → Rust Agent → SQLite 完全脱离 .NET Bridge 运行。V01-1 建立 `rebuild/` workspace 与 `wuji-core`；V01-2 落地 `wuji-storage`；V01-3 落地 Win32 采集与隐私过滤；V01-4 落地 Activity/Work 精确状态机；V01-5 落地完整 Agent 运行时；V01-6 落地 Desktop Host；V01-7 落地四个正式页面并经真实窗口冒烟验证（按钮驱动采集、真实前台数据回显）；V01-8 已完成打包与资产校验：`bundle.active=true`，NSIS installer 产出，静默安装验证固定布局 `Agent/wuji-rebuild-agent-v01.exe`、包内无 Bridge/.NET/旧合同资产、Agent 二进制 byte 级一致、dev package manifest（版本 + SHA-256）生成、旧系统两个数据库（WUJI/WUJI-Dev）checksum 全程不变、安装包自包含启动并拉起 Agent 验证通过。8 小时 soak 已启动并正在后台执行，结果未出前 V01-8 保持未关闭。Rust 88 项测试、React 20 项测试、`clippy -D warnings`、`fmt --check`、typecheck/lint/build 全部通过。
+目标架构的端到端链路已经打通并经真实窗口验证：React → Tauri Rust Host → Rust Agent → SQLite 完全脱离 .NET Bridge 运行。V01-1 建立 `rebuild/` workspace 与 `wuji-core`；V01-2 落地 `wuji-storage`；V01-3 落地 Win32 采集与隐私过滤；V01-4 落地 Activity/Work 精确状态机；V01-5 落地完整 Agent 运行时；V01-6 落地 Desktop Host；V01-7 落地四个正式页面并经真实窗口冒烟验证；V01-8 打包与验收全部通过：NSIS installer 产出，静默安装验证固定布局 `Agent/wuji-rebuild-agent-v01.exe`、包内无 Bridge/.NET/旧合同资产、Agent 二进制 byte 级一致、dev package manifest（版本 + SHA-256）生成、安装包自包含启动并拉起 Agent、**8 小时 soak 通过**（28821 秒、240 采样点、RSS 14.3→16.3MB 有界、WAL 峰值 1.1MB 无无界增长、dropped=0、7904 条 Observation、quick_check ok、旧系统两个数据库 checksum 全程不变）。**Rebuild v0.1 全部八个阶段完成。** 保留的人工验收项（09 §12.2 手工门禁中只能人工执行的部分）：真实锁屏/休眠、DPI 100/150/200%、键盘导航、High Contrast、30 分钟受控对照；Light 主题与窗口渲染已截图验证。Rust 88 项测试、React 20 项测试、`clippy -D warnings`、`fmt --check`、typecheck/lint/build 全部通过。
 
 ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Result Set/Snapshot、Identity Resolution、Lease/GC、production binary/session 认证、Importer 和旧系统退役继续作为长期 Design only，不阻挡 dev-only v0.1，但在未来 production cutover 前仍需重新进入对应门禁。
 
@@ -66,7 +66,7 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 | 目标架构 ADR | Blocked | [ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 状态 Proposed | Accepted 并取代当前过渡 ADR 的最终架构 | 依赖规范尚未形成 Accepted 基线 | G-ADR |
 | React 19 UI 基座 | Implemented | `rebuild/apps/desktop`：Today/Timeline/Settings/Diagnostics 四页 + 四态 + 顶栏 Agent 控制 + 令牌主题；20 项 Vitest 通过；真实窗口冒烟（按钮驱动采集、真实前台数据回显） | Today/Timeline/Settings/Diagnostics 使用 v0.1 DTO | 手工矩阵（尺寸/DPI/HC/读屏）待 V01-8 验收 | V01-8 |
 | Tauri 2 Desktop shell | Implemented | `rebuild/apps/desktop/src-tauri`：IPC client、Query、Settings CAS、detached Agent 控制、托盘、单实例、12 语义命令、集成测试 | 直接使用 Rust Query/IPC/Settings/Process Controller | — | V01-7 页面接入 |
-| Bridge-free Tauri | Implemented | rebuild dev 包静默安装验证：固定 Agent 布局、包内无 Bridge/.NET/旧合同、Agent 二进制 byte 级一致、manifest 含版本+SHA-256、自包含启动拉起 Agent；旧 `src/QuantifiedSelf.Windows.Tauri` 仍含 BridgeSupervisor（回滚入口，属长期退役） | 安装包与运行时不含 `.NET Bridge` | 8h soak 进行中 | soak 通过后关闭 |
+| Bridge-free Tauri | Implemented | rebuild dev 包静默安装验证：固定 Agent 布局、包内无 Bridge/.NET/旧合同、Agent 二进制 byte 级一致、manifest 含版本+SHA-256、自包含启动拉起 Agent；旧 `src/QuantifiedSelf.Windows.Tauri` 仍含 BridgeSupervisor（回滚入口，属长期退役） | 安装包与运行时不含 `.NET Bridge` | — | 已关闭 |
 | Rust workspace / `wuji-core` | Verified | `rebuild/crates/wuji-core`（commit `c2ca961`）：schema 对齐领域枚举、Settings 默认值/验证/digest、21 个稳定错误码、固定命名空间、DTO + specta branded TS drift 门禁；`cargo test -p wuji-core` 21 项通过 | 纯领域、Settings、Privacy、Analytics、Protocol、Error | 长期 Privacy/Analytics 部分待后续版本 | V01-2 起持续回归 |
 | Rust `wuji-storage` | Verified | `rebuild/crates/wuji-storage`：唯一内嵌 DDL、六步 bootstrap 自检、Writer 行操作、触及桶重算、只读 Reader；`cargo test -p wuji-storage` 18 项通过（含 DST/幂等/分页/恢复） | v0.1 Single Writer、只读 Query、空库 bootstrap 和最小 projection | — | V01-4 状态机接入后回归 |
 | Rust Agent binary | Implemented | `rebuild/apps/agent`：独立进程真实采集写库；双 lane Writer、CommandServer、心跳、MaintenanceLite、单实例与启动恢复全部接入；4 项 e2e 子进程测试通过 | 独立 Rust Agent 长期进程 | Desktop 进程管理与 UI 路径未接入 | V01-6 |
@@ -116,7 +116,7 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 | 验证项 | 仓库能力 | 本基线结果 | 说明 |
 |---|---|---|---|
 | Rebuild `cargo test --workspace` / `cargo clippy -D warnings` / `cargo fmt --check` | 命令存在（`rebuild/`） | Passed（2026-07-19，88 项测试全过、零警告） | 覆盖 wuji-core、wuji-storage、wuji-windows、Agent 单元/黄金样本/e2e、Desktop 单元与集成测试；随 V01 阶段扩展 |
-| Rebuild dev package 构建与资产校验 | `rebuild/scripts/build_dev_package.py`、`rebuild/scripts/soak.py` | Passed（2026-07-21：installer 产出、静默安装布局/禁资产/Agent 一致性/manifest/旧库 checksum 全过；3 分钟 soak 冒烟 pass） | 8h soak（`bash` 后台任务）进行中，结果未出前 V01-8 不关闭 |
+| Rebuild dev package 构建与资产校验 | `rebuild/scripts/build_dev_package.py`、`rebuild/scripts/soak.py` | Passed（2026-07-22：installer/静默安装/禁资产/Agent 一致性/manifest/旧库 checksum 全过；8h soak verdict=pass：28821s、240 采样、RSS 有界、WAL 无无界增长、7904 Observation、quick_check ok） | 已关闭 |
 | Rebuild Desktop `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` | `rebuild/apps/desktop/package.json` | Passed（2026-07-19，Vitest 20 项通过、零警告、dist 产出） | 四页组件与顶栏门禁；手工矩阵待 V01-8 |
 | C# build / full xUnit | 命令和项目存在 | NotRun | 不能引用历史记录作为 2026-07-18 当前结果 |
 | React typecheck/lint/Vitest | package scripts 存在 | NotRun | 只覆盖当前 Bridge 阶段 UI，不覆盖 v2 Gate |
@@ -154,6 +154,8 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 5. ~~实现双 lane Writer、CommandServer、heartbeat、单实例与恢复~~（V01-5 已完成）；
 6. ~~实现 Tauri Query/IPC client、CAS Settings、detached Agent、无 Bridge Desktop 与端到端集成测试~~（V01-6 已完成）；
 7. ~~实现 Today、Timeline、Settings、Diagnostics 四页与四态验收~~（V01-7 已完成）；
-8. ~~完成 dev bundle、固定 Agent 布局、dev manifest、资产校验与旧库 checksum 不变验证~~（打包部分 2026-07-21 已完成；8h soak 进行中，通过后关闭 V01-8 并更新本文件）。
+8. ~~完成 dev bundle、固定 Agent 布局、dev manifest、资产校验、旧库 checksum 不变验证与 8 小时 soak~~（V01-8 已完成：2026-07-22 soak verdict=pass）。
+
+**Rebuild v0.1（V01-1–V01-8）至此全部完成。** 后续按 09 §14 选择 v0.2/v0.3/v0.4 方向；长期 manifest、Importer、Snapshot/Lease 和 production cutover 保持延期；旧系统继续保留为回滚入口。
 
 期间不得修改旧数据库或删除旧 C#/WPF/Bridge。长期 manifest、Importer、Snapshot/Lease 和 production cutover 保持延期。
