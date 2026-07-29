@@ -10,12 +10,15 @@ PRAGMA wal_autocheckpoint = 1000;
 
 CREATE TABLE schema_meta (
     singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
-    schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+    schema_version INTEGER NOT NULL CHECK (schema_version = 2),
     algorithm_version TEXT NOT NULL CHECK (length(algorithm_version) > 0),
     created_at_utc_ms INTEGER NOT NULL CHECK (created_at_utc_ms >= 0),
     reporting_time_zone_id TEXT NOT NULL CHECK (length(reporting_time_zone_id) > 0)
 ) STRICT;
 
+-- S2-01/S2-02：settings_revisions 只保留 revision/digest/时间戳等元数据。
+-- last-known-good 完整内容（含 excludedProcessNames）存储于独立私密双槽备份文件，
+-- 不得写入行为 SQLite（09 §12.3 隐私一票否决）。
 CREATE TABLE settings_revisions (
     revision INTEGER PRIMARY KEY CHECK (revision >= 0),
     -- digest 是内容指纹，用于一致性核对，不是身份：改回历史设置值会复用旧 digest，

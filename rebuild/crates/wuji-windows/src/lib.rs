@@ -9,6 +9,8 @@ pub mod foreground;
 pub mod idle;
 pub mod pipe;
 pub mod process;
+pub mod process_handle;
+pub mod session_power;
 
 pub use error::CaptureError;
 pub use foreground::{ForegroundSample, capture_foreground};
@@ -17,3 +19,9 @@ pub use process::{file_name_from_path, process_image_file_name};
 
 #[cfg(windows)]
 pub use pipe::{SingleInstanceGuard, create_pipe_server, current_user_sid};
+#[cfg(windows)]
+pub use process_handle::{ProcessHandle, ProcessWaitOutcome};
+#[cfg(not(windows))]
+pub use session_power::SessionPowerEvent;
+#[cfg(windows)]
+pub use session_power::{SessionPowerEvent, SessionPowerPumpHandle, start_event_pump};

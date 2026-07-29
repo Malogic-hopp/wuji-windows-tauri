@@ -65,7 +65,7 @@ fn bootstrap_creates_valid_database() {
     let writer = bootstrap(&dir);
 
     let meta = writer.schema_meta();
-    assert_eq!(meta.schema_version, 1);
+    assert_eq!(meta.schema_version, 2);
     assert_eq!(meta.algorithm_version, "rebuild-v0.1");
     assert_eq!(meta.reporting_time_zone_id, SHANGHAI);
 
@@ -784,4 +784,241 @@ fn open_rows_are_recoverable_after_reopen() {
     assert!(writer.find_open_segment().unwrap().is_none());
     assert!(writer.find_open_work_block().unwrap().is_none());
     assert!(writer.find_open_gap().unwrap().is_none());
+}
+
+// ---------- R02 回归：Today 聚合截断与 drop event_count ----------
+
+/// 21 个应用各 30s 活跃：Today.activeDurationMs 必须包含 Top 20 之外的应用（R02）。
+#[test]
+fn today_active_total_is_not_truncated_by_top20() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+    let runtime = RuntimeId::new();
+    {
+        let tz = writer_tz(writer.schema_meta());
+        let tx = writer.transaction().unwrap();
+        tx.insert_runtime(&runtime, T0).unwrap();
+        let mut seq = 0_i64;
+        for i in 0..21_i64 {
+            let name = format!("app{i:02}");
+            let app = seed_app(&tx, &name, T0);
+            let start = T0 + i * 60_000;
+            let end = start + 30_000;
+            seq += 1;
+            let o1 = insert_obs(&tx, &runtime, seq, start, app, ActivityState::Active);
+            seq += 1;
+            let o2 = insert_obs(&tx, &runtime, seq, end, app, ActivityState::Active);
+            let seg = tx
+                .open_segment(&runtime, 0, app, ActivityState::Active, start, o1)
+                .unwrap();
+            tx.update_open_segment(seg, end, o2).unwrap();
+            tx.close_open_segment("app_changed").unwrap();
+        }
+        tx.recompute_hours(&tz, &[T0, T0 + 3_600_000]).unwrap();
+        let date = LocalDate::parse("2026-07-18").unwrap();
+        tx.recompute_dates(&tz, std::slice::from_ref(&date), GAP_CAP_MS)
+            .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = reader
+        .today(&LocalDate::parse("2026-07-18").unwrap())
+        .unwrap();
+    assert_eq!(today.top_apps.len(), 20, "Top Apps 保持 LIMIT 20");
+    assert_eq!(
+        today.active_duration_ms.0,
+        21 * 30_000,
+        "Today 活跃时长必须包含 Top 20 之外的应用（R02）"
+    );
+    // 守恒：Today.active == 当日 Segment active 交集总和。
+    let conn = Connection::open(db_path(&dir)).unwrap();
+    let segment_sum: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(duration_ms), 0) FROM activity_segments WHERE activity_state = 'active'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(today.active_duration_ms.0, segment_sum);
+}
+
+/// 合并 gap 的 event_count 必须全部计入 droppedCount（R02）。
+#[test]
+fn today_dropped_count_sums_merged_gap_event_count() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+    let runtime = RuntimeId::new();
+    {
+        let tx = writer.transaction().unwrap();
+        tx.insert_runtime(&runtime, T0).unwrap();
+        tx.open_gap(&runtime, GapKind::CaptureQueueDrop, T0 + 60_000)
+            .unwrap();
+        tx.close_open_gap(T0 + 61_000).unwrap();
+        // 第二个 gap 连续三次同类事件合并（event_count = 3）。
+        tx.open_gap(&runtime, GapKind::WriterQueueDrop, T0 + 120_000)
+            .unwrap();
+        tx.extend_open_gap().unwrap();
+        tx.extend_open_gap().unwrap();
+        tx.close_open_gap(T0 + 121_000).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = reader
+        .today(&LocalDate::parse("2026-07-18").unwrap())
+        .unwrap();
+    assert_eq!(
+        today.quality.dropped_count.0, 4,
+        "droppedCount 必须是 event_count 总和（1 + 3），不是行数（R02）"
+    );
+    assert!(!today.quality.is_complete);
+}
+
+/// 跨本地午夜的 Segment 按 local date 正确拆分（R02 跨午夜聚合）。
+#[test]
+fn today_cross_midnight_splits_by_local_date() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+    let runtime = RuntimeId::new();
+    // Asia/Shanghai：本地 23:50 → 次日 00:10（UTC 15:50 → 16:10）。
+    let start = T0 + 57_000_000; // 本地 2026-07-18 23:50 = UTC 15:50
+    let end = start + 1_200_000;
+    {
+        let tz = writer_tz(writer.schema_meta());
+        let tx = writer.transaction().unwrap();
+        tx.insert_runtime(&runtime, T0).unwrap();
+        let app = seed_app(&tx, "code", T0);
+        let o1 = insert_obs(&tx, &runtime, 1, start, app, ActivityState::Active);
+        let o2 = insert_obs(&tx, &runtime, 2, end, app, ActivityState::Active);
+        let seg = tx
+            .open_segment(&runtime, 0, app, ActivityState::Active, start, o1)
+            .unwrap();
+        tx.update_open_segment(seg, end, o2).unwrap();
+        tx.close_open_segment("capture_stopped").unwrap();
+        let hour1 = start - start.rem_euclid(3_600_000);
+        let hour2 = end - end.rem_euclid(3_600_000);
+        tx.recompute_hours(&tz, &[hour1, hour2]).unwrap();
+        let d1 = LocalDate::parse("2026-07-18").unwrap();
+        let d2 = LocalDate::parse("2026-07-19").unwrap();
+        tx.recompute_dates(&tz, &[d1, d2], GAP_CAP_MS).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let d1 = reader
+        .today(&LocalDate::parse("2026-07-18").unwrap())
+        .unwrap();
+    let d2 = reader
+        .today(&LocalDate::parse("2026-07-19").unwrap())
+        .unwrap();
+    assert_eq!(d1.active_duration_ms.0, 600_000, "前一日得 10 分钟");
+    assert_eq!(d2.active_duration_ms.0, 600_000, "后一日得 10 分钟");
+}
+
+fn writer_tz(meta: &wuji_storage::SchemaMeta) -> chrono_tz::Tz {
+    meta.reporting_tz().unwrap()
+}
+
+#[test]
+fn settings_revision_persists_last_known_good_content() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+
+    // bootstrap 写入 revision 0 默认 digest（S2-01：不再包含 content_json）。
+    {
+        let (revision, digest) = writer
+            .latest_settings_revision_digest()
+            .unwrap()
+            .expect("bootstrap 必有 revision 0");
+        assert_eq!(revision, 0);
+        assert_eq!(
+            digest,
+            wuji_core::settings::Settings::default().content_digest()
+        );
+    }
+
+    // 应用 revision 1 后，latest 返回其 revision/digest；幂等重放不重复插入。
+    let settings = wuji_core::settings::Settings {
+        revision: "1".to_string(),
+        idle_threshold_seconds: 90,
+        ..wuji_core::settings::Settings::default()
+    };
+    {
+        let tx = writer.transaction().unwrap();
+        let outcome = tx
+            .ensure_settings_revision(1, &settings.content_digest(), T0)
+            .unwrap();
+        assert_eq!(
+            outcome,
+            wuji_storage::writer::SettingsRevisionOutcome::Inserted
+        );
+        tx.commit().unwrap();
+    }
+    let (revision, digest1) = writer.latest_settings_revision_digest().unwrap().unwrap();
+    assert_eq!(revision, 1);
+    assert_eq!(digest1, settings.content_digest());
+
+    // 同 revision 不同 digest → ConflictDigest，不覆盖已持久化内容。
+    let mut conflicting = settings.clone();
+    conflicting.sampling_interval_seconds = 5;
+    {
+        let tx = writer.transaction().unwrap();
+        let outcome = tx
+            .ensure_settings_revision(1, &conflicting.content_digest(), T0)
+            .unwrap();
+        assert_eq!(
+            outcome,
+            wuji_storage::writer::SettingsRevisionOutcome::ConflictDigest
+        );
+        tx.commit().unwrap();
+    }
+    let (revision, digest) = writer.latest_settings_revision_digest().unwrap().unwrap();
+    assert_eq!(revision, 1, "冲突不得改变 revision");
+    assert_eq!(digest, settings.content_digest(), "冲突不得覆盖原 digest");
+}
+
+#[test]
+fn old_v1_fixture_returns_schema_unsupported() {
+    use wuji_core::error::SafeErrorCode;
+    use wuji_storage::error::StorageError;
+
+    let dir = TempDir::new().unwrap();
+    let db_path = dir.path().join("old-v1.db");
+
+    // 手工创建 schema v1 数据库（无 content_json，schema_version = 1）。
+    let conn = rusqlite::Connection::open(&db_path).unwrap();
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         CREATE TABLE schema_meta (
+             singleton_id INTEGER PRIMARY KEY CHECK (singleton_id = 1),
+             schema_version INTEGER NOT NULL CHECK (schema_version = 1),
+             algorithm_version TEXT NOT NULL CHECK (length(algorithm_version) > 0),
+             created_at_utc_ms INTEGER NOT NULL CHECK (created_at_utc_ms >= 0),
+             reporting_time_zone_id TEXT NOT NULL CHECK (length(reporting_time_zone_id) > 0)
+         ) STRICT;
+         CREATE TABLE settings_revisions (
+             revision INTEGER PRIMARY KEY CHECK (revision >= 0),
+             content_digest TEXT NOT NULL CHECK (length(content_digest) = 64),
+             applied_at_utc_ms INTEGER NOT NULL CHECK (applied_at_utc_ms >= 0)
+         ) STRICT;
+         INSERT INTO schema_meta VALUES (1, 1, 'rebuild-v0.1', 0, 'Asia/Shanghai');
+         INSERT INTO settings_revisions VALUES (0, '0000000000000000000000000000000000000000000000000000000000000000', 0);",
+    )
+    .unwrap();
+    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+        .unwrap();
+    drop(conn);
+
+    let result = wuji_storage::Writer::open_existing(&db_path);
+    match result {
+        Err(StorageError {
+            code: SafeErrorCode::DbSchemaUnsupported,
+            ..
+        }) => {
+            // 预期：旧 schema v1 被拒绝。
+        }
+        other => panic!("旧 v1 fixture 应返回 DB_SCHEMA_UNSUPPORTED，实际: {other:?}"),
+    }
 }

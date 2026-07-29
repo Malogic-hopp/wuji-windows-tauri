@@ -64,6 +64,14 @@ impl Reader {
         let (_work_active, _work_idle, block_count, longest, raw_switches, gap_count) =
             work.unwrap_or((0, 0, 0, 0, 0, 0));
 
+        // Today 活跃时长 = 当日 daily_app_usage 全部应用总和（09 §7.3 守恒：
+        // 该总和恒等于当日可靠 Segment 的 active 交集），不受 Top Apps 的 LIMIT 20 截断（R02）。
+        let total_active: i64 = self.conn.query_row(
+            "SELECT COALESCE(SUM(active_duration_ms), 0) FROM daily_app_usage WHERE local_date = ?1",
+            params![date_str],
+            |row| row.get(0),
+        )?;
+
         let mut app_stmt = self.conn.prepare(
             "SELECT u.app_id, a.display_name, u.active_duration_ms
              FROM daily_app_usage u
@@ -80,10 +88,8 @@ impl Reader {
             ))
         })?;
         let mut top_apps = Vec::new();
-        let mut total_active = 0_i64;
         for app in app_rows {
             let (app_id, display_name, active) = app?;
-            total_active += active;
             top_apps.push(TopAppDto {
                 app: AppDto {
                     app_id: Int64String(app_id),
@@ -153,7 +159,8 @@ impl Reader {
             .map_err(StorageError::from)
     }
 
-    /// 当日 queue drop 类 gap 的事件计数（丢弃事件次数，非被丢 Observation 数）。
+    /// 当日 queue drop 类 gap 的 event_count 总和（R02：合并 gap 的事件必须全计）。
+    /// 语义：丢弃事件次数（每次事件至少丢弃一条 Observation），不是被丢 Observation 数。
     fn dropped_count_of_date(
         &self,
         tz: &chrono_tz::Tz,
@@ -162,16 +169,18 @@ impl Reader {
     ) -> Result<i64> {
         let (day_start, day_end) = local_day_range_utc_ms(tz, date)?;
         let mut stmt = self.conn.prepare(
-            "SELECT start_at_utc_ms FROM capture_gaps
+            "SELECT start_at_utc_ms, event_count FROM capture_gaps
              WHERE kind IN ('capture_queue_drop', 'writer_queue_drop')
                AND start_at_utc_ms >= ?1 AND start_at_utc_ms < ?2",
         )?;
-        let rows = stmt.query_map(params![day_start, day_end], |row| row.get::<_, i64>(0))?;
+        let rows = stmt.query_map(params![day_start, day_end], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?;
         let mut count = 0_i64;
-        for start in rows {
-            let start = start?;
+        for row in rows {
+            let (start, event_count) = row?;
             if local_date_of(tz, start)? == date_str {
-                count += 1;
+                count += event_count;
             }
         }
         Ok(count)
@@ -440,6 +449,10 @@ pub fn status_dto_from_runtime(
         writer_queue_depth: row.writer_queue_depth as u32,
         dropped_capture_count: Int64String(row.dropped_capture_count),
         dropped_writer_count: Int64String(row.dropped_writer_count),
-        safe_error_code: None,
+        // 离线诊断透传持久化的安全错误码（审核 R09）。
+        safe_error_code: row
+            .safe_error_code
+            .as_deref()
+            .and_then(wuji_core::error::SafeErrorCode::from_code),
     }
 }

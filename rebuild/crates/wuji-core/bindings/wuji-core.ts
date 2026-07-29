@@ -42,7 +42,7 @@ export type FieldError = {
 export type GapKind = "sampling_transition" | "capture_delayed" | "privacy_excluded" | "capture_queue_drop" | "writer_queue_drop" | "capture_paused" | "capture_stopped" | "system_sleep" | "session_locked" | "agent_restart" | "clock_changed" | "capture_error";
 
 /**  i64 的十进制字符串表示（branded；serde 只接受字符串，避免 JS number 精度问题）。 */
-export type Int64String = string;
+export type Int64String = string & { readonly __brand: "Int64String" };
 
 /**  严格 `YYYY-MM-DD` 本地日期（09 §8.4）。 */
 export type LocalDate = string;

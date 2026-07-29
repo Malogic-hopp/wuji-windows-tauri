@@ -4689,6 +4689,7 @@ dependencies = [
  "chrono-tz",
  "iana-time-zone",
  "rusqlite",
+ "serde_json",
  "tempfile",
  "ulid",
  "wuji-core",

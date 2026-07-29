@@ -10,13 +10,14 @@ use wuji_core::domain::{
     ActivityState, CaptureQuality, CaptureState, GapKind, ProcessState, WriterState,
 };
 use wuji_core::dto::RuntimeId;
+use wuji_core::error::SafeErrorCode;
 use wuji_core::settings::Settings;
 
 use crate::connection::{open_writer_connection, read_and_verify_schema_meta, verify_wal};
 use crate::error::{Result, StorageError};
 use crate::models::{
-    ALGORITHM_VERSION, GapRow, SchemaMeta, SegmentRow, WorkBlockRow, parse_gap_kind,
-    parse_row_status,
+    ALGORITHM_VERSION, GapRow, SUPPORTED_SCHEMA_VERSION, SchemaMeta, SegmentRow, WorkBlockRow,
+    parse_gap_kind, parse_row_status,
 };
 
 /// 编译期内嵌的唯一 DDL（09 §7.2）。
@@ -92,16 +93,16 @@ impl Writer {
                 conn.execute(
                     "INSERT INTO schema_meta
                      (singleton_id, schema_version, algorithm_version, created_at_utc_ms, reporting_time_zone_id)
-                     VALUES (1, 1, ?1, ?2, ?3)",
-                    params![ALGORITHM_VERSION, now_utc_ms, tz_id],
+                     VALUES (1, ?1, ?2, ?3, ?4)",
+                    params![SUPPORTED_SCHEMA_VERSION, ALGORITHM_VERSION, now_utc_ms, tz_id],
                 )
                 .map_err(StorageError::from_sqlite)?;
 
-                let digest = Settings::default().content_digest();
+                let default_digest = Settings::default().content_digest();
                 conn.execute(
                     "INSERT INTO settings_revisions (revision, content_digest, applied_at_utc_ms)
                      VALUES (0, ?1, ?2)",
-                    params![digest, now_utc_ms],
+                    params![default_digest, now_utc_ms],
                 )
                 .map_err(StorageError::from_sqlite)?;
 
@@ -193,14 +194,40 @@ impl Writer {
     }
 
     /// WAL checkpoint(TRUNCATE)（09 §5 MaintenanceLite 唯一维护动作；由 Writer 执行）。
+    /// busy（第一列非 0，如外部读事务持有 read mark）返回 AgentWriterDegraded，
+    /// 由调用方降级为安全诊断而不是误判成功（审核 §7 checkpoint 门禁）。
     pub fn checkpoint_truncate(&self) -> Result<()> {
-        self.conn
-            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
-            .map_err(StorageError::from_sqlite)
+        let (busy, _log, _checkpointed): (i64, i64, i64) = self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(StorageError::from_sqlite)?;
+        if busy != 0 {
+            return Err(StorageError::new(
+                SafeErrorCode::AgentWriterDegraded,
+                "checkpoint 被读者阻塞，下周期重试",
+            ));
+        }
+        Ok(())
     }
 
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    /// 最大已应用 settings revision 及其 digest（S2-01：不含 content_json；完整内容由独立备份文件保存）。
+    /// 返回 (revision, content_digest)；空库（不可能，bootstrap 必有 revision 0）为 None。
+    pub fn latest_settings_revision_digest(&self) -> Result<Option<(i64, String)>> {
+        self.conn
+            .query_row(
+                "SELECT revision, content_digest FROM settings_revisions
+                 ORDER BY revision DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(StorageError::from_sqlite)
     }
 
     /// 单事务批：Observation/Segment/Work/gap/projection 同一事务提交（09 §7.3）。

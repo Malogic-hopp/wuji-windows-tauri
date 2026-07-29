@@ -10,7 +10,7 @@ use crate::error::{Result, StorageError};
 /// 09 §5.1：v0.1 固定算法版本。
 pub const ALGORITHM_VERSION: &str = "rebuild-v0.1";
 /// 09 §7.2：唯一受支持的 schema 版本。
-pub const SUPPORTED_SCHEMA_VERSION: i64 = 1;
+pub const SUPPORTED_SCHEMA_VERSION: i64 = 2;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SchemaMeta {
