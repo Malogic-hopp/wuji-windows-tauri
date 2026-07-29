@@ -1,78 +1,108 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { GapKind, TimelineItem, TimelinePageDto } from '../../types/wuji-core';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { GapKind, TimelineItem } from '../../types/wuji-core';
 import { bridgeClient, toSafeError, type SafeError } from '../../bridge/client';
 import { PageStateView, type PagePhase } from '../../components/PageState';
 import { formatClock, formatDuration } from '../../lib/format';
+import { useDocumentVisible, usePolling } from '../../lib/polling';
 
 type TimelineModel =
   | { phase: 'loading' }
-  | { phase: 'ready'; page: TimelinePageDto; items: TimelineItem[] }
+  | { phase: 'ready'; items: TimelineItem[]; timeZoneId: string }
   | { phase: 'error'; error: SafeError };
 
-const PAGE_SIZE = 50;
+/** host 单页上限 500（query.rs limit 校验）；UI 不分页，超长一天在此循环取完。 */
+const PAGE_LIMIT = 500;
+/** 循环取页的安全上限（500 × 20 = 一万条），防异常数据导致死循环。 */
+const MAX_PAGES = 20;
+const REFRESH_INTERVAL_MS = 5000;
+/** 向下滚动超过该距离后出现「回到顶部」。 */
+const SHOW_TOP_BUTTON_OFFSET_PX = 300;
 
-/** 时间线（09 §10.2）：Segment/Gap 按时间展示，不显示标题/Context/Focus。 */
+/** 顺序取回当天全部条目；后端游标分页仅在此内部使用，页面本身不分页。 */
+async function fetchFullDayTimeline(
+  localDate: string,
+): Promise<{ items: TimelineItem[]; timeZoneId: string }> {
+  const items: TimelineItem[] = [];
+  let timeZoneId = '';
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const dto = await bridgeClient.activityGetTimeline(localDate, cursor, PAGE_LIMIT);
+    timeZoneId = dto.reportingTimeZoneId;
+    items.push(...dto.items);
+    if (dto.nextCursor == null) {
+      break;
+    }
+    cursor = dto.nextCursor;
+  }
+  return { items, timeZoneId };
+}
+
+/** 时间线（09 §10.2）：Segment/Gap 按时间展示，最新在顶部，不显示标题/Context/Focus。 */
 export default function TimelinePage() {
   const [model, setModel] = useState<TimelineModel>({ phase: 'loading' });
   const [showTransitions, setShowTransitions] = useState(false);
-  const [loadingMore, setLoadingMore] = useState(false);
+  const [showTopButton, setShowTopButton] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
+  const visible = useDocumentVisible();
 
-  const loadFirst = useCallback(async () => {
-    setLoadingMore(true);
+  const refresh = useCallback(async () => {
     try {
-      // 日期以数据库 reporting 时区为准（审核 R08），不用浏览器本地日期。
+      // 日期以数据库 reporting 时区为准（审核 R08），不用浏览器本地日期；
+      // 每轮刷新重取日期，跨午夜后自动切到新的一天。
       const today = await bridgeClient.activityGetToday();
-      const page = await bridgeClient.activityGetTimeline(today.localDate, undefined, PAGE_SIZE);
-      setModel({ phase: 'ready', page, items: page.items });
+      const { items, timeZoneId } = await fetchFullDayTimeline(today.localDate);
+      // 后端按时间升序返回；页面倒序展示，最新条目在顶部。
+      setModel({ phase: 'ready', items: items.slice().reverse(), timeZoneId });
     } catch (cause) {
-      setModel({ phase: 'error', error: toSafeError(cause) });
-    } finally {
-      setLoadingMore(false);
+      // 后台轮询失败保留已展示数据，下一轮自动重试；仅首次加载失败进入错误四态。
+      setModel((current) =>
+        current.phase === 'ready' ? current : { phase: 'error', error: toSafeError(cause) },
+      );
     }
   }, []);
 
-  const loadMore = useCallback(async () => {
-    if (model.phase !== 'ready' || model.page.nextCursor == null) return;
-    setLoadingMore(true);
-    try {
-      const page = await bridgeClient.activityGetTimeline(
-        model.page.localDate,
-        model.page.nextCursor,
-        PAGE_SIZE,
-      );
-      setModel({
-        phase: 'ready',
-        page,
-        items: [...model.items, ...page.items],
-      });
-    } catch (cause) {
-      setModel({ phase: 'error', error: toSafeError(cause) });
-    } finally {
-      setLoadingMore(false);
-    }
-  }, [model]);
+  usePolling(refresh, REFRESH_INTERVAL_MS, visible);
 
-  // 首次加载。
+  // 滚动容器是 AppLayout 的 .app-main；页面独立渲染（如测试）时不存在，滚动按钮静默失效。
+  const scrollContainer = useCallback(
+    (): Element | null => pageRef.current?.closest('.app-main') ?? null,
+    [],
+  );
+
+  // 「回到顶部」仅在向下滚动后出现。
   useEffect(() => {
-    const timer = setTimeout(() => {
-      void loadFirst();
-    }, 0);
-    return () => {
-      clearTimeout(timer);
+    const container = scrollContainer();
+    if (container == null) return;
+    const onScroll = () => {
+      setShowTopButton(container.scrollTop > SHOW_TOP_BUTTON_OFFSET_PX);
     };
-  }, [loadFirst]);
+    onScroll();
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+    };
+  }, [scrollContainer]);
+
+  const scrollToTop = useCallback(() => {
+    scrollContainer()?.scrollTo({ top: 0, behavior: 'smooth' });
+  }, [scrollContainer]);
+
+  const scrollToBottom = useCallback(() => {
+    const container = scrollContainer();
+    container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
+  }, [scrollContainer]);
 
   const phase: PagePhase =
     model.phase === 'loading'
       ? { kind: 'loading' }
       : model.phase === 'error'
-        ? { kind: 'error', error: model.error, onRetry: () => void loadFirst() }
+        ? { kind: 'error', error: model.error, onRetry: () => void refresh() }
         : model.items.length === 0
           ? { kind: 'empty', title: '今天还没有时间线记录', hint: '开始记录后，应用使用片段会按时间显示在这里。' }
           : { kind: 'ready' };
 
   return (
-    <div className="page">
+    <div className="page" ref={pageRef}>
       <h1 className="page__title">时间线</h1>
       <PageStateView phase={phase}>
         {model.phase === 'ready' && (
@@ -90,23 +120,31 @@ export default function TimelinePage() {
                 <TimelineRow
                   key={item.kind === 'segment' ? `s-${item.segmentId}` : `g-${item.gapId}`}
                   item={item}
-                  timeZoneId={model.page.reportingTimeZoneId}
+                  timeZoneId={model.timeZoneId}
                   hideTransition={!showTransitions}
                 />
               ))}
             </ul>
-            {model.page.nextCursor != null ? (
+            <div className="scroll-actions">
+              {showTopButton && (
+                <button
+                  className="button"
+                  type="button"
+                  aria-label="回到顶部"
+                  onClick={scrollToTop}
+                >
+                  ↑ 顶部
+                </button>
+              )}
               <button
                 className="button"
                 type="button"
-                disabled={loadingMore}
-                onClick={() => void loadMore()}
+                aria-label="跳到底部"
+                onClick={scrollToBottom}
               >
-                {loadingMore ? '正在加载…' : '加载更多'}
+                ↓ 底部
               </button>
-            ) : (
-              <div className="text-dim">已显示全部</div>
-            )}
+            </div>
           </>
         )}
       </PageStateView>
