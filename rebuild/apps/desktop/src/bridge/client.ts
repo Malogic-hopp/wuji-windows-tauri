@@ -44,13 +44,11 @@ export interface SettingsPatchInput {
 }
 
 export const bridgeClient = {
-  agentProcessEnsureRunning: () =>
-    invoke<AgentStatusDto>('agent_process_ensure_running'),
+  agentProcessStop: () => invoke<AgentStatusDto>('agent_process_stop'),
   agentGetStatus: () => invoke<AgentStatusDto>('agent_get_status'),
   captureStart: () => invoke<AgentStatusDto>('capture_start'),
   capturePause: () => invoke<AgentStatusDto>('capture_pause'),
   captureResume: () => invoke<AgentStatusDto>('capture_resume'),
-  captureStop: () => invoke<AgentStatusDto>('capture_stop'),
   activityGetToday: () => invoke<TodayDto>('activity_get_today'),
   activityGetTimeline: (localDate: string, cursor?: string, limit?: number) =>
     invoke<TimelinePageDto>('activity_get_timeline', {

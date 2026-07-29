@@ -47,14 +47,6 @@ export default function AppLayout() {
     }
   }, []);
 
-  // 启动时确保 Agent 进程存在（初始为 stopped，不自动开始记录）。
-  useEffect(() => {
-    bridgeClient
-      .agentProcessEnsureRunning()
-      .then(setStatus)
-      .catch((cause: unknown) => { setError(toSafeError(cause)); });
-  }, []);
-
   usePolling(refresh, 2000, visible);
 
   const run = useCallback(
@@ -73,6 +65,7 @@ export default function AppLayout() {
   );
 
   const captureState = status?.captureState;
+  const agentRunning = status != null && status.processState !== 'stopped';
   return (
     <div className="app-shell">
       <header className="app-topbar">
@@ -87,20 +80,20 @@ export default function AppLayout() {
           }`}
           data-testid="capture-state-badge"
         >
-          {status == null ? '连接中…' : captureLabel(captureState ?? 'stopped')}
+          {!agentRunning ? 'Agent 未运行' : captureLabel(captureState ?? 'stopped')}
         </span>
         {status?.writerState != null && status.writerState !== 'healthy' && (
           <span className="badge badge--error">写入异常</span>
         )}
         <span className="app-topbar__spacer" />
-        {captureState === 'stopped' && (
+        {(!agentRunning || captureState === 'stopped') && (
           <button
             className="button button--primary"
             type="button"
-            disabled={busy || status == null}
+            disabled={busy}
             onClick={() => void run(bridgeClient.captureStart)}
           >
-            开始记录
+            {agentRunning ? '开始记录' : '启动并记录'}
           </button>
         )}
         {captureState === 'running' && (
@@ -123,14 +116,14 @@ export default function AppLayout() {
             继续
           </button>
         )}
-        {(captureState === 'running' || captureState === 'paused') && (
+        {agentRunning && (
           <button
             className="button"
             type="button"
             disabled={busy}
-            onClick={() => void run(bridgeClient.captureStop)}
+            onClick={() => void run(bridgeClient.agentProcessStop)}
           >
-            停止
+            停止 Agent
           </button>
         )}
         <button

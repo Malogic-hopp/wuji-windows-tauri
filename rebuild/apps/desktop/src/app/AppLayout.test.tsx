@@ -12,12 +12,15 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: unknown): Promise<unknown> => invoke(command, args),
 }));
 
-function statusFixture(captureState: AgentStatusDto['captureState']): AgentStatusDto {
+function statusFixture(
+  captureState: AgentStatusDto['captureState'],
+  processState: AgentStatusDto['processState'] = 'running',
+): AgentStatusDto {
   return {
     agentVersion: '0.1.0',
     protocolVersion: 1,
     schemaVersion: 1,
-    processState: 'running',
+    processState,
     captureState,
     writerState: 'healthy',
     runtimeId: '01J0000000000000000000000X',
@@ -44,25 +47,40 @@ describe('AppLayout 顶栏', () => {
   beforeEach(() => {
     invoke.mockReset();
     invoke.mockImplementation((command: string) => {
-      if (command === 'agent_process_ensure_running' || command === 'agent_get_status') {
-        return Promise.resolve(statusFixture('stopped'));
+      if (command === 'agent_get_status') {
+        return Promise.resolve(statusFixture('stopped', 'stopped'));
       }
       return Promise.reject(new Error(`unexpected: ${command}`));
     });
   });
 
-  it('stopped 状态显示"未记录"与开始记录按钮、主题切换', async () => {
+  it('Agent 未运行时显示启动并记录按钮、主题切换', async () => {
+    renderLayout();
+    await waitFor(() => {
+      expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('Agent 未运行');
+    });
+    expect(screen.getByRole('button', { name: '启动并记录' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '切换主题' })).toBeInTheDocument();
+  });
+
+  it('运行中但未记录时区分进程与采集状态', async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(statusFixture('stopped'));
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
     renderLayout();
     await waitFor(() => {
       expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('未记录');
     });
     expect(screen.getByRole('button', { name: '开始记录' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '切换主题' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '停止 Agent' })).toBeInTheDocument();
   });
 
-  it('running 状态显示暂停与停止', async () => {
+  it('running 状态显示暂停与停止 Agent', async () => {
     invoke.mockImplementation((command: string) => {
-      if (command === 'agent_process_ensure_running' || command === 'agent_get_status') {
+      if (command === 'agent_get_status') {
         return Promise.resolve(statusFixture('running'));
       }
       return Promise.reject(new Error(`unexpected: ${command}`));
@@ -72,7 +90,49 @@ describe('AppLayout 顶栏', () => {
       expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('正在记录');
     });
     expect(screen.getByRole('button', { name: '暂停' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: '停止' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '停止 Agent' })).toBeInTheDocument();
+  });
+
+  it('停止 Agent 后切换到未运行状态', async () => {
+    let stopped = false;
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(
+          stopped ? statusFixture('stopped', 'stopped') : statusFixture('running'),
+        );
+      }
+      if (command === 'agent_process_stop') {
+        stopped = true;
+        return Promise.resolve(statusFixture('stopped', 'stopped'));
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
+    renderLayout();
+    const stop = await screen.findByRole('button', { name: '停止 Agent' });
+    stop.click();
+    await waitFor(() => {
+      expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('Agent 未运行');
+    });
+    expect(invoke).toHaveBeenCalledWith('agent_process_stop', undefined);
+  });
+
+  it('Agent 未运行时启动并记录', async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(statusFixture('stopped', 'stopped'));
+      }
+      if (command === 'capture_start') {
+        return Promise.resolve(statusFixture('running'));
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
+    renderLayout();
+    const start = await screen.findByRole('button', { name: '启动并记录' });
+    start.click();
+    await waitFor(() => {
+      expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('正在记录');
+    });
+    expect(invoke).toHaveBeenCalledWith('capture_start', undefined);
   });
 
   it('导航包含四个页面入口', async () => {
