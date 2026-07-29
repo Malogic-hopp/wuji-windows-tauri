@@ -22,6 +22,9 @@ use wuji_storage::Writer;
 const T0: i64 = 1_784_332_800_000;
 
 fn agent_bin() -> PathBuf {
+    if let Some(path) = std::env::var_os("WUJI_TEST_AGENT_BIN") {
+        return PathBuf::from(path);
+    }
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../target/debug")
         .join(wuji_core::runtime_names::AGENT_EXE_NAME)
@@ -163,16 +166,59 @@ async fn ensure_running_spawns_detached_agent_in_stopped_state() {
     let again = controller.ensure_running().await.expect("ensure again");
     assert_eq!(again["runtimeId"], status["runtimeId"]);
 
-    let ipc2 = AgentIpcClient::new(&channel, "0.1.0").expect("ipc2");
-    let shutdown = ipc2
-        .call("agent_shutdown_dev", serde_json::json!({}))
-        .await
-        .unwrap();
-    assert_eq!(shutdown["ok"], true);
+    controller.stop_agent().await.expect("正式停止 Agent");
     // willExit 只表示接受退出命令：必须等 Agent 真正退出后再清理（复审 P2-02：
     // 否则残留 detached 进程与测试目录竞态）。
     wait_agent_exit(&channel, Duration::from_secs(15)).await;
     let _ = ipc;
+    cleanup(&channel);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stop_agent_commits_boundary_exits_and_can_be_started_again() {
+    let channel = test_channel();
+    let ipc = Arc::new(AgentIpcClient::new(&channel, "0.1.0").expect("ipc"));
+    let controller = AgentController::with_exe(&channel, ipc.clone(), agent_bin());
+
+    let first = controller.ensure_running().await.expect("first start");
+    let first_runtime = first["runtimeId"].as_str().unwrap().to_string();
+    let running = ipc
+        .call("capture_start", serde_json::json!({}))
+        .await
+        .expect("capture start");
+    assert_eq!(running["result"]["captureState"], "running");
+
+    controller.stop_agent().await.expect("stop agent");
+    wait_agent_exit(&channel, Duration::from_secs(15)).await;
+
+    let query = QueryService::new(&channel).expect("query");
+    let runtime = query
+        .latest_runtime()
+        .expect("latest runtime")
+        .expect("runtime row");
+    assert_eq!(
+        runtime.process_state,
+        wuji_core::domain::ProcessState::Stopped
+    );
+    let database = data_root(&channel)
+        .join("data")
+        .join("wuji-rebuild-v0.1.db");
+    let connection = rusqlite::Connection::open(&database).expect("open database");
+    let stopped_gaps: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM capture_gaps WHERE kind = 'capture_stopped' AND status = 'closed'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("capture_stopped count");
+    assert_eq!(stopped_gaps, 1, "停止 Agent 前必须提交并关闭停止边界");
+    drop(connection);
+
+    let second = controller.ensure_running().await.expect("restart");
+    assert_ne!(second["runtimeId"], first_runtime);
+    assert_eq!(second["captureState"], "stopped");
+    controller.stop_agent().await.expect("stop restarted agent");
+    wait_agent_exit(&channel, Duration::from_secs(15)).await;
     cleanup(&channel);
 }
 

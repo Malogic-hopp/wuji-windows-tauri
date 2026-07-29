@@ -81,26 +81,46 @@ fn start_status_monitor(app: AppHandle, menu: TrayMenu) {
                     let state = response["result"]["captureState"]
                         .as_str()
                         .unwrap_or_default();
-                    match state {
-                        "running" => "Agent：正在记录",
-                        "paused" => "Agent：已暂停",
-                        "stopped" => "Agent：已停止",
-                        _ => "Agent：状态未知",
-                    }
+                    connected_capture_label(state)
                 }
-                Err(_) => "Agent：未连接",
+                Err(_) => "Agent：未运行",
             };
             let _ = menu.status.set_text(label);
         }
     });
 }
 
-/// 供 lib.rs 使用的状态标签映射（保留 CaptureState 引用避免死代码）。
-#[allow(dead_code)]
 fn capture_state_label(state: CaptureState) -> &'static str {
     match state {
-        CaptureState::Running => "Agent：正在记录",
-        CaptureState::Paused => "Agent：已暂停",
-        CaptureState::Stopped => "Agent：已停止",
+        CaptureState::Running => "Agent：运行中 · 正在记录",
+        CaptureState::Paused => "Agent：运行中 · 记录已暂停",
+        CaptureState::Stopped => "Agent：运行中 · 未记录",
+    }
+}
+
+fn connected_capture_label(state: &str) -> &'static str {
+    match state {
+        "running" => capture_state_label(CaptureState::Running),
+        "paused" => capture_state_label(CaptureState::Paused),
+        "stopped" => capture_state_label(CaptureState::Stopped),
+        _ => "Agent：运行中 · 状态未知",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_labels_distinguish_process_and_capture_state() {
+        assert_eq!(
+            connected_capture_label("running"),
+            "Agent：运行中 · 正在记录"
+        );
+        assert_eq!(
+            connected_capture_label("paused"),
+            "Agent：运行中 · 记录已暂停"
+        );
+        assert_eq!(connected_capture_label("stopped"), "Agent：运行中 · 未记录");
     }
 }

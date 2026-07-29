@@ -6,6 +6,7 @@
 use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
+use wuji_core::domain::{CaptureState, ProcessState};
 use wuji_core::dto::{AgentStatusDto, SettingsDto, TimelinePageDto, TodayDto};
 use wuji_core::error::{SafeError, SafeErrorCode};
 
@@ -36,6 +37,9 @@ pub struct DiagnosticsDto {
     pub agent_exe_masked: String,
 }
 
+const AGENT_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+const AGENT_STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+
 fn parse_status(value: Value) -> Result<AgentStatusDto, SafeError> {
     if !value["ok"].as_bool().unwrap_or(false) {
         let code = value["error"]["code"].as_str().unwrap_or_default();
@@ -53,13 +57,16 @@ async fn call_status(ipc: &AgentIpcClient, command: &str) -> Result<AgentStatusD
     parse_status(response)
 }
 
-#[tauri::command]
-pub async fn agent_process_ensure_running(
-    services: State<'_, AppServices>,
-) -> Result<AgentStatusDto, SafeError> {
-    let result = services.controller.ensure_running().await?;
-    serde_json::from_value::<AgentStatusDto>(result)
-        .map_err(|_| SafeError::new(SafeErrorCode::InternalSafeError, "状态响应解析失败"))
+fn offline_status(runtime: &wuji_storage::RuntimeRow) -> Result<AgentStatusDto, SafeError> {
+    let mut dto = wuji_storage::reader::status_dto_from_runtime(
+        runtime,
+        String::new(),
+        &wuji_core::dto::RuntimeId::parse(&runtime.runtime_id)?,
+    );
+    // IPC 不可达时，历史快照不能证明进程或采集仍在运行。
+    dto.process_state = ProcessState::Stopped;
+    dto.capture_state = CaptureState::Stopped;
+    Ok(dto)
 }
 
 /// 实时状态优先来自 IPC；Agent 离线时回退到 DB 最后已知快照（09 §10.4）。
@@ -76,18 +83,15 @@ pub async fn agent_get_status(
                     "无法连接 Agent，且没有历史运行记录",
                 )
             })?;
-            let dto = wuji_storage::reader::status_dto_from_runtime(
-                &runtime,
-                String::new(),
-                &wuji_core::dto::RuntimeId::parse(&runtime.runtime_id)?,
-            );
-            Ok(dto)
+            offline_status(&runtime)
         }
     }
 }
 
 #[tauri::command]
 pub async fn capture_start(services: State<'_, AppServices>) -> Result<AgentStatusDto, SafeError> {
+    // Agent 已被显式停止时，Start 负责重新创建进程并等待 hello，再开始记录。
+    services.controller.ensure_running().await?;
     call_status(&services.ipc, "capture_start").await
 }
 
@@ -102,8 +106,28 @@ pub async fn capture_resume(services: State<'_, AppServices>) -> Result<AgentSta
 }
 
 #[tauri::command]
-pub async fn capture_stop(services: State<'_, AppServices>) -> Result<AgentStatusDto, SafeError> {
-    call_status(&services.ipc, "capture_stop").await
+pub async fn agent_process_stop(
+    services: State<'_, AppServices>,
+) -> Result<AgentStatusDto, SafeError> {
+    services.controller.stop_agent().await?;
+
+    // willExit 是接受确认，不是退出证明。等待 Writer 把 runtime 标记为 stopped，
+    // 证明 capture_stopped + AgentShutdown 已按顺序提交完毕。
+    let deadline = tokio::time::Instant::now() + AGENT_STOP_WAIT;
+    loop {
+        if let Some(runtime) = services.query.latest_runtime()?
+            && runtime.process_state == ProcessState::Stopped
+        {
+            return offline_status(&runtime);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(SafeError::new(
+                SafeErrorCode::InternalSafeError,
+                "Agent 已接受退出请求，但未在限时内完成关闭",
+            ));
+        }
+        tokio::time::sleep(AGENT_STOP_POLL).await;
+    }
 }
 
 #[tauri::command]

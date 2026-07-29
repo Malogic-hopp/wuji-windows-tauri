@@ -47,7 +47,7 @@ impl AgentController {
         &self.agent_exe
     }
 
-    /// `agent_process_ensure_running`：先 hello，失败再 detached 启动并等待握手。
+    /// 开始记录前确保 Agent 在线：先 hello，失败再 detached 启动并等待握手。
     /// 普通启动不传 --capture-on-start（09 §9.3：新 Agent 初始为 stopped）。
     pub async fn ensure_running(&self) -> Result<Value, SafeError> {
         if let Ok(status) = self.ipc.status().await {
@@ -66,6 +66,28 @@ impl AgentController {
             SafeErrorCode::InternalSafeError,
             "Agent 启动超时，请查看诊断页",
         ))
+    }
+
+    /// 显式“停止 Agent”：先提交 capture_stopped 边界，再请求进程执行有界
+    /// graceful shutdown。`willExit` 只表示请求已接受；调用方继续通过数据库
+    /// runtime 终态确认完整退出序列已经推进。
+    pub async fn stop_agent(&self) -> Result<(), SafeError> {
+        let stopped = self.ipc.call("capture_stop", serde_json::json!({})).await?;
+        ensure_command_ok(&stopped, "停止记录失败")?;
+
+        let shutdown = self
+            .ipc
+            .call("agent_shutdown", serde_json::json!({}))
+            .await?;
+        ensure_command_ok(&shutdown, "停止 Agent 失败")?;
+        if shutdown["result"]["willExit"].as_bool() != Some(true) {
+            return Err(SafeError::new(
+                SafeErrorCode::InternalSafeError,
+                "Agent 未确认退出请求",
+            ));
+        }
+        self.ipc.disconnect().await;
+        Ok(())
     }
 
     /// CreateProcessW：DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW，
@@ -121,6 +143,17 @@ impl AgentController {
     }
 }
 
+fn ensure_command_ok(response: &Value, fallback: &str) -> Result<(), SafeError> {
+    if response["ok"].as_bool() == Some(true) {
+        return Ok(());
+    }
+    let code = response["error"]["code"].as_str().unwrap_or_default();
+    let mapped = serde_json::from_str::<SafeErrorCode>(&format!("\"{code}\""))
+        .unwrap_or(SafeErrorCode::InternalSafeError);
+    let message = response["error"]["message"].as_str().unwrap_or(fallback);
+    Err(SafeError::new(mapped, message))
+}
+
 /// 版本门（09 §9.3）：protocol major 与 Schema version 任一不兼容即拒绝运行控制。
 pub fn check_compatible(status: &Value) -> Result<(), SafeError> {
     let protocol = status["result"]["protocolVersion"].as_u64().unwrap_or(0);
@@ -155,5 +188,19 @@ mod tests {
             let error = check_compatible(&status).unwrap_err();
             assert_eq!(error.code, SafeErrorCode::VersionIncompatible);
         }
+    }
+
+    #[test]
+    fn command_error_is_preserved_for_process_controls() {
+        let response = json!({
+            "ok": false,
+            "error": {
+                "code": "CAPTURE_INVALID_STATE",
+                "message": "当前状态不能停止"
+            }
+        });
+        let error = ensure_command_ok(&response, "fallback").unwrap_err();
+        assert_eq!(error.code, SafeErrorCode::CaptureInvalidState);
+        assert_eq!(error.message, "当前状态不能停止");
     }
 }

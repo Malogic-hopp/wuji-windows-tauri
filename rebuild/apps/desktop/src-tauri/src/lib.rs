@@ -13,9 +13,9 @@ pub mod startup_registry;
 mod tray;
 
 use commands::{
-    AppServices, activity_get_timeline, activity_get_today, agent_get_status,
-    agent_process_ensure_running, capture_pause, capture_resume, capture_start, capture_stop,
-    diagnostics_get_summary, settings_get, settings_resync_login_startup, settings_update,
+    AppServices, activity_get_timeline, activity_get_today, agent_get_status, agent_process_stop,
+    capture_pause, capture_resume, capture_start, diagnostics_get_summary, settings_get,
+    settings_resync_login_startup, settings_update,
 };
 use tauri::Manager as _;
 
@@ -55,12 +55,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            agent_process_ensure_running,
+            agent_process_stop,
             agent_get_status,
             capture_start,
             capture_pause,
             capture_resume,
-            capture_stop,
             activity_get_today,
             activity_get_timeline,
             settings_get,

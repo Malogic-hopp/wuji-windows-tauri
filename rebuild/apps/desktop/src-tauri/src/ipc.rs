@@ -185,4 +185,10 @@ impl AgentIpcClient {
     pub async fn status(&self) -> Result<Value, SafeError> {
         self.call("status_get", json!({})).await
     }
+
+    /// 主动释放缓存连接。Agent 接受 graceful shutdown 后调用，避免 Desktop
+    /// 继续持有旧 Pipe，并确保后续 Start 重新握手到新的 runtime。
+    pub async fn disconnect(&self) {
+        *self.connection.lock().await = None;
+    }
 }
