@@ -19,12 +19,11 @@ function Assert-LastExitCode {
 }
 
 $repoRoot = $PSScriptRoot
-$rebuildDir = Join-Path $repoRoot 'rebuild'
-$agentExe = Join-Path $rebuildDir 'target\debug\wuji-rebuild-agent-v01.exe'
+$agentExe = Join-Path $repoRoot 'target\debug\wuji-rebuild-agent-v01.exe'
 $cargo = Get-RequiredCommand 'cargo.exe'
 
 Write-Host 'Building the debug Agent...'
-Push-Location $rebuildDir
+Push-Location $repoRoot
 try {
     & $cargo build -p wuji-rebuild-agent
     Assert-LastExitCode 'Agent debug build'

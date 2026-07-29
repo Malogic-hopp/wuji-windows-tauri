@@ -1,210 +1,69 @@
-# WUJI（吾迹）
+# WUJI（吾迹）Windows Desktop
 
-> Windows 桌面端自动活动追踪 —— 你的一天去了哪里，让数据说话。
+WUJI 是一个 local-first 的 Windows 活动记录桌面应用。当前仓库只维护 Rebuild 链路：React 19 UI、Tauri 2 Desktop Host、Rust Agent 与 SQLite v0.1 数据库。
 
-WUJI 在后台静默记录前台窗口活动（正在用什么软件、浏览器里看什么网页），自动聚合成工作时间段（Session），并通过 Dashboard、趋势分析、专注洞察等页面帮你回顾与优化每一天的时间分配。
+> 当前版本是 dev-only 的 Rebuild v0.1 工程里程碑，不等同于生产发布。验收状态以 [migration-status.md](docs/dev/migration-status.md) 为准。
 
-**本地优先**：所有数据只保存在你的电脑里，无需账号，无需联网。Agent 与 UI 分离运行，即使主界面关闭，后台也会持续记录。
+## 目录
 
-[![.NET 8](https://img.shields.io/badge/.NET-8-512BD4?logo=dotnet)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11-0078D4?logo=windows)](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
-[![Tests](https://img.shields.io/badge/tests-xUnit-green)](./tests/QuantifiedSelf.Windows.Tests/)
-
----
-
-## 系统需求
-
-- **操作系统**：Windows 10 19041 (20H1) 或更高 / Windows 11
-- **架构**：x64
-- **运行时**：无需预装 .NET —— 发布包为 [self-contained](https://learn.microsoft.com/en-us/dotnet/core/deploying/#publish-self-contained) 部署，所有依赖内嵌
-
-## 功能概览
-
-> 浏览器窗口标题采集支持 Chrome、Edge、Firefox 等主流 Chromium / Gecko 浏览器（通过窗口标题读取，不读取 URL）。
-
-| 模块 | 做什么 |
-|------|--------|
-| **自动采样** | 后台 Agent 每 3 秒采集当前前台窗口标题（包括浏览器当前页面标题），支持隐私过滤与标题脱敏 |
-| **会话聚合** | 把连续的同一窗口活动自动合并成工作 Session，记录起止时间及各状态时长 |
-| **Today** | 今日总览：摘要卡片、活动热力图（可聚焦逐格控件）、24h 时间线、Top Apps / Windows、洞察建议 |
-| **Timeline** | 应用/会话/原始记录三视图回放，支持按天筛选和活动状态过滤 |
-| **Insights** | 专注度分析、工作块检测、任务切换频率、中断来源与上下文切换方向 |
-| **Trends** | 7 天活跃趋势图、活动热力图（五级图例），仅展示真实可用数据 |
-| **Privacy** | 排除列表管理、保留周期、路径脱敏、导出确认、清空确认（独立 ViewModel） |
-| **Diagnostics** | Agent 进程状态、Tick 耗时诊断、IPC 通道状态、事件与告警（技术信息默认折叠） |
-| **Settings** | 常规 / 记录 / 通知 / 外观 / 高级五区设置；支持浅色、深色、高对比度三套主题 |
-| **系统托盘** | 最小化到托盘、后台常驻、开机自启（可选） |
-
-## 快速开始
-
-```bash
-# 1. 克隆仓库
-git clone <repo-url>
-cd wuji/Win
-
-# 2. 还原依赖
-dotnet restore QuantifiedSelf.Windows.sln
-
-# 3. 构建
-dotnet build QuantifiedSelf.Windows.sln
-
-# 4. 运行测试（覆盖状态机、数据流、并发 I/O 等核心路径）
-dotnet test
-
-# 5. 运行 App
-dotnet run --project src/QuantifiedSelf.Windows.App/
+```text
+apps/
+  desktop/          React + TypeScript UI 与 Tauri Rust Host
+  agent/            独立 Rust Agent 进程
+crates/
+  wuji-core/        领域、Settings、DTO 与错误合同
+  wuji-storage/     SQLite Schema、Writer 与只读查询
+  wuji-windows/     Win32、Named Pipe 与进程封装
+scripts/            打包、soak 和验收脚本
+docs/dev/           当前实施基线、ADR、审核与验收状态
 ```
 
-### 开发时的测试命令
+架构边界见 [ARCHITECTURE.md](ARCHITECTURE.md)，实施合同见 [09-Tauri-Rust-Rebuild-v0.1 实施基线](docs/dev/09-Tauri-Rust-Rebuild-v0.1实施基线.md)。
 
-日常迭代优先运行不依赖真实 I/O 和真实时间等待的快速测试；提交行为修改前仍须运行全量测试。
+## 开发环境
+
+- Windows 10/11；
+- Rust 1.97（由 `rust-toolchain.toml` 固定）；
+- Node.js 24.14.0；
+- pnpm 11.9.0；
+- Python 3（打包与 soak 脚本）。
+
+在仓库根目录执行：
 
 ```powershell
-# 快速反馈：纯逻辑、ViewModel 与布局测试
-dotnet test .\tests\QuantifiedSelf.Windows.Tests\QuantifiedSelf.Windows.Tests.csproj --no-build --filter "Category=Fast"
+cargo build --workspace
+cargo test --workspace
 
-# 按当前改动范围执行，例如 Today 与自适应布局
-dotnet test .\tests\QuantifiedSelf.Windows.Tests\QuantifiedSelf.Windows.Tests.csproj --no-build --filter "FullyQualifiedName~TodayPageTests|FullyQualifiedName~AdaptiveLayoutTests"
-
-# 集成与 WPF 相关回归可以按需单独筛选
-dotnet test .\tests\QuantifiedSelf.Windows.Tests\QuantifiedSelf.Windows.Tests.csproj --no-build --filter "Category=Integration|Category=Wpf"
-
-# 合并前：完整回归（包含 SQLite、IPC 与 Agent 生命周期）
-dotnet test .\QuantifiedSelf.Windows.sln
+Push-Location .\apps\desktop
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm lint
+pnpm test
+Pop-Location
 ```
 
-> 运行 App 后，点击 **Start Agent** 开始采样（如需自动启动，可在 Settings 中启用 `AutoStartAgentWhenAppStarts`）。Agent 运行时可在系统托盘找到图标，右键管理 Agent 状态。
-
-### UI 开发版
-
-App 通过双 Shell 架构同时维护稳定版和新 UI：
-
-- **默认启动**（不含 `--ui-preview`）：创建 `LegacyMainWindow`（传统工具栏 + Tab 标签页布局，功能完整稳定）。
-- **`--ui-preview`**：创建 `MainWindow`（Sidebar 导航 + DataTemplate 页面解析 + 浅色/深色/高对比度主题）。
-
-开发版通过 `--channel dev` 与稳定版数据完全隔离：
-
-```bash
-# 创建 UI 开发 worktree
-git worktree add ../Win-ui -b feature/ui-redesign
-
-# 启动开发版新 Shell（独立数据目录、Pipe、注册表项）
-cd ../Win-ui
-dotnet run --project src/QuantifiedSelf.Windows.App -- --channel dev --ui-preview
-
-# 启动开发版 Legacy Shell
-dotnet run --project src/QuantifiedSelf.Windows.App -- --channel dev
-```
-
-| 资源 | 稳定版 | 开发版 |
-|------|--------|--------|
-| 数据目录 | `%LOCALAPPDATA%\WUJI\WindowsAgent` | `%LOCALAPPDATA%\WUJI-Dev\WindowsAgent` |
-| 窗口标题 | `WUJI 吾迹` | `WUJI Dev - WUJI 吾迹` |
-| Shell（默认） | `LegacyMainWindow` | `LegacyMainWindow` |
-| Shell（`--ui-preview`） | `MainWindow` | `MainWindow` |
-
-详见 [UI重构开发基座说明](docs/design/UI重构开发基座-2026-07-12.md)。
-
-## 发布
+启动方式：
 
 ```powershell
-# self-contained win-x64 文件夹发布（含 Agent 嵌入与产物校验）
-.\publish\scripts\publish.ps1
+# 仅启动 Tauri dev；不会主动构建或启动 Agent
+.\rebuild-tauri-dev.ps1
+
+# 单独构建并启动 debug Agent
+.\rebuild-agent.ps1
+
+# 构建并验收 NSIS dev 安装包
+.\rebuild-package.ps1
 ```
 
-发布产物输出到 `publish/release/App/`，其中 `publish/release/App/Agent/` 子目录包含独立的 Agent 可执行文件与依赖，可直接复制到目标机器运行。
+## 进程语义
 
-## 架构
+- “暂停记录”只暂停 Capture，Agent 进程继续在线；
+- “停止 Agent”先提交 CaptureStop 边界，再请求 Agent graceful shutdown；
+- Desktop 退出不会隐式终止 Agent；
+- `capture_start` 会在 Tauri Host 内确保固定位置的 Agent 在线，再开始采集。
 
-```
-┌──────────────┐  Named Pipe (IPC)   ┌──────────────┐
-│   WPF App    │ ◄─────────────────► │    Agent     │
-│  (UI + 托盘)  │     fallback:        │  (后台采样)   │
-│              │     文件系统读写       │              │
-└──────┬───────┘                     └──────┬───────┘
-       │                                    │
-       │         SQLite (WAL)               │
-       └──────────────┬────────────────────┘
-                      │
-              ┌───────▼───────────────┐
-              │     本地数据库         │
-              │  foreground_samples   │
-              │  app_sessions         │
-              │  agent_events         │
-              └───────────────────────┘
-```
+## 数据安全
 
-详细架构说明见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**。
+Rebuild 使用独立的进程名、Pipe、mutex、数据目录和数据库。开发、测试、打包与 soak 不得修改旧 WUJI/WUJI-Dev 数据库；不得提交本机数据库、日志、安装产物、`target/`、`dist/` 或 `node_modules/`。
 
-## 项目结构
-
-```
-Win/
-├── src/
-│   ├── QuantifiedSelf.Windows.Core/            # 领域模型、配置、枚举（net8.0，跨平台）
-│   ├── QuantifiedSelf.Windows.Infrastructure/  # 数据层、Win32、IPC 传输、状态持久化
-│   ├── QuantifiedSelf.Windows.Agent/           # Agent 后台进程（Worker SDK，BackgroundService）
-│   └── QuantifiedSelf.Windows.App/             # WPF 桌面应用（UI + 系统托盘）
-├── tests/
-│   └── QuantifiedSelf.Windows.Tests/           # xUnit 测试
-├── publish/
-│   └── scripts/publish.ps1                     # 发布脚本
-├── docs/                                       # 设计文档与开发历史
-├── scripts/                                    # Python 辅助分析脚本
-└── ARCHITECTURE.md                             # 系统架构详细说明
-```
-
-## 技术栈
-
-| 层 | 技术 |
-|----|------|
-| 运行时 | .NET 8 |
-| UI | WPF + LiveChartsCore |
-| MVVM | CommunityToolkit.Mvvm |
-| 数据库 | SQLite (Microsoft.Data.Sqlite, WAL 模式) |
-| IPC | Windows Named Pipe（协议 v1） |
-| 宿主 | .NET Generic Host / BackgroundService |
-| 测试 | xUnit |
-| 发布 | dotnet publish self-contained win-x64 |
-
-## 配置
-
-Agent 行为通过 `windows-agent.json` 配置（在 App 的 Settings 页面可视化编辑）。
-
-配置文件位于运行时的数据目录（可在 Settings 页面查看具体路径）：
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `SamplingIntervalSeconds` | 3 | 前台窗口采样间隔 |
-| `IdleThresholdSeconds` | 60 | 判定为 Idle 的无操作时长 |
-| `HeartbeatIntervalSeconds` | 3 | 心跳文件写入间隔 |
-| `StaleThresholdSeconds` | 15 | 判定 Agent 不健康的心跳超时 |
-| `RetentionDays` | 30 | 数据保留天数 |
-| `ExcludedProcesses` | KeePass, 1Password, Bitwarden, explorer | 不记录的进程 |
-| `MaskWindowTitles` | true | 是否脱敏窗口标题 |
-
-完整配置项见 [ARCHITECTURE.md#配置](./ARCHITECTURE.md#配置windowsagentoptions)。
-
-## 卸载与数据清理
-
-- 在 Settings 页面点击「清空所有历史数据」可删除所有采样记录与聚合数据。
-- **数据目录**：可在 Settings 页面查看实际路径。默认为 `%LOCALAPPDATA%\WUJI\WindowsAgent`（含数据库 `data\`、配置文件 `config\`、运行时状态 `runtime\`）。删除此目录即可彻底清除所有本地数据。
-
-## 文档索引
-
-- **[ARCHITECTURE.md](./ARCHITECTURE.md)** — 系统架构完整说明：进程模型、IPC 通信、数据流、状态管理、数据库表结构、多进程文件读写保护、技术决策
-- **[MANUAL.md](./MANUAL.md)** — App 每个页面的文字版详细介绍（用户手册）
-- **[docs/design/](./docs/design/)** — 系统设计与方案文档（重构方案、调研报告）
-- **[docs/specs/](./docs/specs/)** — 功能需求规格
-- **[docs/fixes/](./docs/fixes/)** — Bug 修复记录与根因分析
-- **[docs/devlog/](./docs/devlog/)** — 各阶段 MVP 计划、实施说明与验收清单
-- **[docs/](./docs/)** — 完整文档目录索引
-
-## 反馈
-
-遇到问题或有功能建议，欢迎通过仓库 Issue 或开发反馈渠道提交。
-
-## License
-
-本软件及相关源代码保留所有权利（All Rights Reserved）。
-未经授权，不得转载、修改、分发或用于商业用途。
+旧 WPF/C#/Bridge 源码的退役决策、冻结提交与恢复方式见 [ADR-003](docs/dev/ADR-003-Rebuild-only仓库转换与旧系统源码退役.md)。

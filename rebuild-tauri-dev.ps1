@@ -19,9 +19,8 @@ function Assert-LastExitCode {
 }
 
 $repoRoot = $PSScriptRoot
-$rebuildDir = Join-Path $repoRoot 'rebuild'
-$desktopDir = Join-Path $rebuildDir 'apps\desktop'
-$agentExe = Join-Path $rebuildDir 'target\debug\wuji-rebuild-agent-v01.exe'
+$desktopDir = Join-Path $repoRoot 'apps\desktop'
+$agentExe = Join-Path $repoRoot 'target\debug\wuji-rebuild-agent-v01.exe'
 
 $pnpm = Get-RequiredCommand 'pnpm.cmd'
 

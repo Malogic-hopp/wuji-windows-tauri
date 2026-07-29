@@ -19,8 +19,8 @@ function Assert-LastExitCode {
 }
 
 $repoRoot = $PSScriptRoot
-$desktopDir = Join-Path $repoRoot 'rebuild\apps\desktop'
-$packageScript = Join-Path $repoRoot 'rebuild\scripts\build_dev_package.py'
+$desktopDir = Join-Path $repoRoot 'apps\desktop'
+$packageScript = Join-Path $repoRoot 'scripts\build_dev_package.py'
 
 if (-not (Test-Path -LiteralPath $packageScript)) {
     throw "Package script was not found: $packageScript"
@@ -51,5 +51,5 @@ finally {
     Pop-Location
 }
 
-$installerDir = Join-Path $repoRoot 'rebuild\target\release\bundle\nsis'
+$installerDir = Join-Path $repoRoot 'target\release\bundle\nsis'
 Write-Host "Package completed: $installerDir"
