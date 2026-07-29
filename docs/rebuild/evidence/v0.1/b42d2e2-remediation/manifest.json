@@ -1,0 +1,36 @@
+{
+  "schema": "wuji-rebuild-evidence-manifest/1",
+  "generatedAtUtc": "2026-07-22T11:30:00Z",
+  "codeState": {
+    "headCommit": "b42d2e248962990d04745d3da905a582200873a8",
+    "worktree": "审核整改 R02–R10 全部修改未提交（按用户要求不 commit）；证据对应 HEAD + 工作区",
+    "auditReport": "docs/rebuild/Rebuild-v0.1-代码与验收审核报告.md"
+  },
+  "files": {
+    "automated-gates.md": "09 §12.1 自动门禁 → 测试/命令逐项映射，含 2026-07-22 验证结果",
+    "soak-smoke-summary.json": "整改后 soak.py 的 42 秒 smoke 报告（verdict=pass）；仅证明脚本与优雅退出链路工作",
+    "soak-summary.json": "整改后 soak.py 的 8 小时正式报告（2026-07-22，verdict=pass：28801 秒、480 采样、优雅退出 exit code 0、RSS 15.3→17.9MB 有界、WAL 峰值 1.1MB、7764 条 Observation、dropped=0、quick_check ok、旧库 verified_stable）",
+    "package-validation.json": "整改后 build_dev_package.py 完整流程产出的 dev package manifest（安装版启动校验通过，旧库 verified_stable）",
+    "manual-checklist.md": "手工与长时间门禁清单：8 小时 soak 已完成；其余手工项 Pending，未完成前不得声称 v0.1 全部验收通过"
+  },
+  "automatedResults": {
+    "date": "2026-07-22",
+    "cargoFmtCheck": "pass",
+    "cargoClippyWarnings": 0,
+    "cargoTestWorkspace": { "passed": 119, "failed": 0 },
+    "pnpmTypecheck": "pass",
+    "pnpmLint": "pass",
+    "pnpmTest": { "passed": 22, "failed": 0 },
+    "pnpmBuild": "pass",
+    "dotnetBuild": { "errors": 0, "warnings": 0 },
+    "dotnetTest": { "passed": 660, "failed": 0 },
+    "soakSmoke": "pass",
+    "packageFull": "pass"
+  },
+  "pending": {
+    "soak8h": "Done（2026-07-22，verdict=pass，证据 soak-summary.json）",
+    "manualGates": "Pending：09 §12.2 全部手工项（见 manual-checklist.md）",
+    "diskFullInjection": "Pending：disk-full 为手工门禁（自动覆盖 busy/corruption/checkpoint）"
+  },
+  "privacy": "本目录所有文件均已脱敏：无用户名、SID、原始窗口标题、真实应用隐私数据或本机绝对私有路径"
+}

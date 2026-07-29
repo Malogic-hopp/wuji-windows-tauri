@@ -1,0 +1,43 @@
+{
+  "channel": "rebuild-v01-dev",
+  "productName": "吾迹 Rebuild v0.1（开发）",
+  "createdAtUtc": "2026-07-22T11:02:56Z",
+  "desktop": {
+    "name": "wuji-rebuild-desktop-v01.exe",
+    "version": "0.1.0",
+    "sha256": "b2ac4abfd7f020556ce3b953898c47c9dbcef74e5957fad7414646e345046cd9"
+  },
+  "agent": {
+    "name": "wuji-rebuild-agent-v01.exe",
+    "version": "0.1.0",
+    "sha256": "9f660661ef2ff015ab6fe9b9b647de0affc0cde348e5940cb293a07276cedd86"
+  },
+  "installer": {
+    "name": "吾迹 Rebuild v0.1（开发）_0.1.0_x64-setup.exe",
+    "sha256": "3ff7778186d9d8082125b43cd80b2450b2e263b2b2fb982dfd7371c0200a20fb"
+  },
+  "validation": {
+    "layout": [
+      "wuji-rebuild-desktop-v01.exe",
+      "Agent/wuji-rebuild-agent-v01.exe"
+    ],
+    "forbiddenAssetScan": "pass",
+    "installedLaunch": {
+      "performed": true,
+      "installedAgentSpawned": true,
+      "databaseCreated": true,
+      "note": "安装版 Desktop 拉起安装目录内 Agent 并完成 bootstrap（test channel 隔离）"
+    },
+    "oldDatabases": {
+      "prod": {
+        "present": true,
+        "sha256": "1191c8ba4b925b767c4331c2a9acf5510b6c71e4235b895313af85d98b4604af"
+      },
+      "dev": {
+        "present": true,
+        "sha256": "4ab91cf6eb373712d3b8759642e17df89e7d5760accf1626a6ffb0691451f91a"
+      }
+    },
+    "note": "dev-only 校验 hash，不充当生产身份认证（09 §9.3）；desktop exe 经 bundler 写入 bundle 元数据，错版校验以 Agent 为准"
+  }
+}

@@ -1,8 +1,8 @@
 # WUJI Tauri + Rust Rebuild v0.1 实施基线
 
-状态：Draft；V01-1 可启动，后续阶段须先接受对应合同
+状态：Draft；v0.1 合同与 §16 增补为实施对齐点，实现/验收结论以 migration-status 与证据包为准；Draft 的正式接受留待产品评审
 版本：v0.1
-最后更新：2026-07-18
+最后更新：2026-07-22（§16 审核整改增补）
 目标技术栈：React 19 + TypeScript + Tauri 2 + Rust Agent/Core + SQLite
 交付属性：dev-only 工程里程碑，不是用户生产发布
 长期规划：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -667,3 +667,56 @@ v0.1 对长期文档（01–06）做了以下有意的语义简化。本表是�
 | agent_runtime 形态 | 单行最后已知快照（04 §9.1） | 每 runtime 一行（Schema） | Observation/Segment 需要 FK 目标 | 长期模型落地时统一 |
 | busy_timeout | 5000 ms（04 §3） | 750 ms + 有限重试（§5.2） | 卡进 IPC 3 秒 timeout | 长期模型落地时统一 |
 | Settings 生效 | Effectivity Interval + Profile/Generation 投影（02 §14、05 §12） | 只影响未来数据，无 Effectivity 表（§5.1、§9） | v0.1 无历史重建 | 长期模型落地时统一 |
+
+## 16. 附录：审核整改增补合同（2026-07-22）
+
+本附录是 v0.1 合同的一部分，源自《Rebuild-v0.1-代码与验收审核报告》R02–R10 的整改。与上文冲突时以本附录为准。
+
+### 16.1 Settings last-known-good 持久化与启动对账
+
+`settings_revisions` 增加 `content_json`（规范 JSON 全文）。每次成功应用 revision 时与 digest 同事务写入，作为跨进程重启的 last-known-good。
+
+Agent 启动对账（`reconcile_startup_settings`）：
+
+- 文件缺失且 DB 最大已应用 revision 为 0：允许 revision 0 内建默认值（全新库）。
+- 文件缺失且最大已应用 revision > 0：从 DB `content_json` 恢复并上报 `SETTINGS_INVALID` 诊断；不得静默回 revision 0。
+- 文件损坏/验证失败：同上从 DB 恢复，上报 `SETTINGS_INVALID`。
+- 文件 revision 低于已应用值，或同 revision 但 digest 冲突：拒绝该文件，从 DB 恢复，上报 `SETTINGS_CONFLICT`。
+- DB 中 last-known-good 内容自身不可恢复（解析/验证/digest 任一失败）：禁止进入 Running，`capture_start` 返回 `SETTINGS_INVALID`，Agent 保持 IPC 在线等待人工处理。
+
+revision 单调性在三个位置强制：启动对账、IPC `settings_reload`（低于 `appliedRevision` 拒绝）、引擎 `apply_settings`（低于当前内存 revision 拒绝）。后台 reconciler 每 2 秒检查文件，仅在文件 revision 严格大于已应用值时经 control lane 重新应用（saved-not-applied 的自动重试）。
+
+Desktop 侧：`settings_get`/`settings_update` 遇到损坏文件返回 `SETTINGS_INVALID`，不得伪装成默认值；`settings_resync_login_startup` 返回的 `appliedRevision` 来自数据库最大已应用 revision，不得误报为 saved revision。
+
+### 16.2 生命周期与 Settings 的 sequence watermark
+
+`ContinuityState.latest_sequence` 记录采集循环最近一次分配的 Capture Sequence。CommandServer 接受 Pause/Stop 时：先冻结 capture watch，再取 `watermark = latest_sequence`，随 Lifecycle 控制进入 control lane。Writer 先把 data lane 排到有 watermark 为止（seq ≤ watermark 的 backlog 全部按边界前提交；迟到样本按 09 §6.7 作为边界后首条 Observation 关闭 gap），才应用边界。处理侧失联时 Writer 最多等待 1.5 秒，记录安全诊断后保守放行。
+
+`settings_reload` 与 reconciler 同样携带 watermark：seq ≤ watermark 的 Observation 保持旧 settings revision，之后采集的样本使用新 revision（“只影响未来数据”的可执行定义）。
+
+### 16.3 IPC 副作用与严格协议
+
+- 副作用命令（capture 状态转换、settings_reload、shutdown）在独立任务中执行；3 秒 timeout 只结束本次等待，不取消已接受命令。request cache 只在任务真正完成后写入 Completed；timeout 响应不落 cache。相同 ID 重试等待原任务结果；Desktop 在 timeout/断线后保存并用同一 request ID 重试一次。
+- 严格校验：消息必须是合法 UTF-8（拒绝替换解码）；`requestId` 必须是 ULID（26 位 Crockford Base32）；`sentAtUtcMs` 必须是十进制字符串；hello 校验 `desktopVersion` 非空、envelope 与 payload 的 `protocolVersion` 均为 1、channel 匹配；逐命令强类型 payload 并 `deny_unknown_fields`（无 payload 命令只接受缺省/null/空对象）。
+- Agent 任务内禁止阻塞 runtime：session/power 事件泵的 `std::sync::mpsc::Receiver::recv` 经专用桥接线程转发进 tokio 通道（current_thread runtime 上任何阻塞调用都会冻结全部任务）。
+
+### 16.4 checkpoint busy 的判定
+
+`PRAGMA wal_checkpoint(TRUNCATE)` 的 busy 通过结果行第一列返回，不以 SQL 错误出现。Writer 必须读取结果行：busy ≠ 0 视为 `AGENT_WRITER_DEGRADED` 安全诊断，下周期重试；不得把 execute_batch 的 Ok 当作 checkpoint 成功。
+
+### 16.5 soak 可执行判据
+
+`rebuild/scripts/soak.py` 的判据（脚本内 CRITERIA 常量为实现对齐点）：
+
+- 无 crash：进程全程存活；结束时先 hello 再 `agent_shutdown_dev`，校验两次响应 ok 且 `willExit=true`；进程在 20 秒内以 exit code 0 退出；任何强杀判失败。
+- RSS 有界：增长 < 64 MiB 且 < 50%。
+- WAL 趋势收敛：结束时 WAL ≤ 4 MiB，且末段（后 1/3 采样）均值 ≤ 前段均值 ×2 + 1 MiB。
+- 心跳严格单调推进；≥ 1 分钟的 soak 至少 2 个有效心跳采样。
+- writer 全程（任一采样点）不得为 faulted。
+- `PRAGMA quick_check = ok`。
+- 旧库隔离：prod/dev 两个候选各自记录存在性；存在的旧库 checksum 前后不变；不存在时报告 `not_verifiable_no_old_db_present`，不得声称 checksum 已验证。
+- 证据脱敏：报告不含用户名与本机绝对路径，包含 git commit、命令、OS、二进制 SHA-256、Cargo.lock SHA-256、采样摘要与判据文本，可直接提交到 evidence 目录。
+
+### 16.6 Schema 增补
+
+`settings_revisions` 增加 `content_json TEXT NOT NULL CHECK (length(content_json) > 2)`（§16.1）。v0.1 是全新数据库，直接修改内嵌 DDL；不提供旧 dev 库迁移。
