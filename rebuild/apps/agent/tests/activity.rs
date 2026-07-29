@@ -65,6 +65,7 @@ fn mk_obs(
         normalized_process_name: format!("{}.exe", name.to_lowercase()),
         activity_state: state,
         quality: CaptureQuality::Normal,
+        settings_revision: 0,
     }
 }
 

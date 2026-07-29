@@ -146,6 +146,11 @@ impl ActivityEngine {
         &self.runtime_id
     }
 
+    /// 当前已应用的 settings revision（启动对账与 SharedState 同步用）。
+    pub fn settings_revision(&self) -> i64 {
+        self.settings_revision
+    }
+
     /// 应用新 Settings（09 §9.1、§5.1）：先提交 settings_revisions，再切换内存值；
     /// 设置只影响未来数据，open 行与 gap 状态不变。
     /// 重启对账幂等：revision 已存在且 digest 相同则跳过插入；digest 冲突返回 SETTINGS_CONFLICT。
@@ -159,6 +164,13 @@ impl ActivityEngine {
             .revision
             .parse::<i64>()
             .map_err(|_| StorageError::internal("settings revision 非数字"))?;
+        // revision 单调性（R04）：低于当前已应用值的降级一律拒绝，内存与 DB 都不回退。
+        if revision < self.settings_revision {
+            return Err(StorageError::new(
+                wuji_core::error::SafeErrorCode::SettingsConflict,
+                "settings revision 低于已应用值，拒绝降级",
+            ));
+        }
         {
             let tx = writer.transaction()?;
             let outcome = tx.ensure_settings_revision(
@@ -317,6 +329,14 @@ impl ActivityEngine {
     }
 
     fn on_observation(&mut self, writer: &mut Writer, obs: &FilteredObservation) -> Result<()> {
+        // S2-04 返修：拒绝 revision 与引擎当前值不匹配的 Observation。
+        if obs.settings_revision != self.settings_revision {
+            return Err(StorageError::new(
+                wuji_core::error::SafeErrorCode::SettingsConflict,
+                "Observation revision 与引擎当前 revision 不匹配",
+            ));
+        }
+
         let tx = writer.transaction()?;
 
         // 有效 Observation 首先关闭任何 open gap（09 §6.7）。
@@ -343,7 +363,7 @@ impl ActivityEngine {
             app_id,
             obs.activity_state,
             obs.quality,
-            self.settings_revision,
+            obs.settings_revision,
         )?;
         let observation_id = match insert {
             ObservationInsert::Inserted(id) => id,
@@ -406,7 +426,13 @@ impl ActivityEngine {
 
         self.last_point = Some((obs.captured_at_utc_ms, obs.captured_monotonic_ms));
         // writer 侧时钟 bump 后，后续比较一律使用当前 epoch（09 §5.2 修订）。
-        self.last_message_epoch = Some(self.continuity.current_epoch().max(obs.continuity_epoch));
+        // last_message_epoch 只跟踪已见消息的最大 epoch（复审 P2-02 发现的缺陷：
+        // 不得混入共享 drop 计数器——writer lane 满载丢弃后，队列中的旧 backlog
+        // 仍是合法事实，不能被误标为 clock_changed）。
+        self.last_message_epoch = Some(
+            self.last_message_epoch
+                .map_or(obs.continuity_epoch, |last| last.max(obs.continuity_epoch)),
+        );
         if let Some((start, end)) = touched {
             self.recompute_touched(&tx, start, end)?;
         }
@@ -642,7 +668,10 @@ impl ActivityEngine {
             let mono_delta = obs.captured_monotonic_ms as i64 - prev_mono as i64;
             if utc_delta <= 0 || (utc_delta - mono_delta).abs() > CLOCK_SKEW_TOLERANCE_MS {
                 // Writer 自身增加 epoch（09 §6.5 第 5 条），不累计 drop。
+                // 同步 last_message_epoch 到 bump 后的值：后续按新 epoch 捕获的样本
+                // 不会被误判为 queue drop；旧 epoch 滞留消息仍按 clock_changed 处理。
                 self.continuity.bump_epoch();
+                self.last_message_epoch = Some(self.continuity.current_epoch());
                 return Some(Boundary::ClockChanged);
             }
             if utc_delta > self.gap_cap_ms {
