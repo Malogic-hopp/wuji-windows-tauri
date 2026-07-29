@@ -20,6 +20,12 @@ use commands::{
 use tauri::Manager as _;
 
 const DESKTOP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const PACKAGE_SMOKE_AUTOSTART_ENV: &str = "WUJI_REBUILD_PACKAGE_SMOKE_AUTOSTART";
+
+fn package_smoke_autostart_enabled(channel: &str) -> bool {
+    channel.starts_with("rebuild-v01-test-")
+        && std::env::var(PACKAGE_SMOKE_AUTOSTART_ENV).as_deref() == Ok("1")
+}
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -47,11 +53,22 @@ pub fn run() {
             return;
         }
     };
+    // 普通 Desktop 启动不拉起 Agent；只有 package 验收在隔离 test channel
+    // 显式启用此钩子，以验证安装目录固定 Agent 路径与 ensure_running 链路。
+    let package_smoke_controller =
+        package_smoke_autostart_enabled(&channel).then(|| services.controller.clone());
 
     tauri::Builder::default()
         .setup(move |app| {
             app.manage(services);
             tray::setup_tray(app)?;
+            if let Some(controller) = package_smoke_controller {
+                tauri::async_runtime::spawn(async move {
+                    if let Err(error) = controller.ensure_running().await {
+                        eprintln!("安装包启动烟测无法拉起 Agent: {}", error.message);
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -85,4 +102,15 @@ fn build_services(channel: &str) -> Result<AppServices, String> {
         settings,
         controller,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::package_smoke_autostart_enabled;
+
+    #[test]
+    fn package_smoke_autostart_never_accepts_normal_channel() {
+        // 无论调用环境是否设置 smoke 开关，正常 channel 都不能走自动拉起路径。
+        assert!(!package_smoke_autostart_enabled("rebuild-v01-dev"));
+    }
 }

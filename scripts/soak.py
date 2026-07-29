@@ -18,7 +18,7 @@
      - DB quick_check 通过、旧库 checksum 不变（仅对真实存在的旧库判定）
   6. 输出脱敏、可提交的 soak-report.json：不含用户名与本机绝对路径。
 
-用法：python rebuild/scripts/soak.py --minutes 480 [--interval 60] [--channel rebuild-v01-test-<ulid>]
+用法：python scripts/soak.py --minutes 480 [--interval 60] [--channel rebuild-v01-test-<ulid>]
 """
 
 import argparse
@@ -35,12 +35,11 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-REBUILD_DIR = REPO_ROOT / "rebuild"
-AGENT_EXE = REBUILD_DIR / "target" / "release" / "wuji-rebuild-agent-v01.exe"
-AGENT_EXE_LABEL = "rebuild/target/release/wuji-rebuild-agent-v01.exe"
-REPORT_OUT = REBUILD_DIR / "dist" / "soak-report.json"
-CARGO_LOCK = REBUILD_DIR / "Cargo.lock"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+AGENT_EXE = REPO_ROOT / "target" / "release" / "wuji-rebuild-agent-v01.exe"
+AGENT_EXE_LABEL = "target/release/wuji-rebuild-agent-v01.exe"
+REPORT_OUT = REPO_ROOT / "dist" / "soak-report.json"
+CARGO_LOCK = REPO_ROOT / "Cargo.lock"
 
 # 脱敏标签：旧库只以 prod/dev 标签出现在证据中，不输出本机绝对路径（审核 R06）。
 OLD_DB_CANDIDATES = {
@@ -430,7 +429,7 @@ def main() -> int:
             "cargoLockSha256": sha256_file(CARGO_LOCK) if CARGO_LOCK.exists() else None,
             "os": platform.platform(),
             "python": platform.python_version(),
-            "command": f"rebuild/scripts/soak.py --minutes {args.minutes} --interval {args.interval}",
+            "command": f"scripts/soak.py --minutes {args.minutes} --interval {args.interval}",
             "startedAtUtc": started_at_utc,
             "criteria": CRITERIA,
         },

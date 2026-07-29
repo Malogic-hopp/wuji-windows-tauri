@@ -9,11 +9,12 @@
   3. pnpm build（前端嵌入）。
   4. pnpm tauri build（NSIS installer）。
   5. 静默安装到临时目录，校验固定 Agent 布局与禁止资产（Bridge/.NET/旧合同）。
-  6. 安装版 Desktop 启动并拉起安装目录 Agent（test channel 隔离，自动验收）。
+  6. 安装版 Desktop 在 package-smoke test channel 中经 AgentController
+     拉起安装目录 Agent（普通 Desktop 启动语义不变）。
   7. 生成 dev package manifest（Desktop/Agent version + SHA-256 + 安装版启动证据）。
   8. 复检旧库 checksum 不变。
 
-用法：python rebuild/scripts/build_dev_package.py [--skip-build]
+用法：python scripts/build_dev_package.py [--skip-build]
 """
 
 import argparse
@@ -27,13 +28,12 @@ import tempfile
 import time
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-REBUILD_DIR = REPO_ROOT / "rebuild"
-DESKTOP_DIR = REBUILD_DIR / "apps" / "desktop"
-DESKTOP_EXE = REBUILD_DIR / "target" / "release" / "wuji-rebuild-desktop-v01.exe"
-AGENT_EXE = REBUILD_DIR / "target" / "release" / "wuji-rebuild-agent-v01.exe"
-MANIFEST_OUT = REBUILD_DIR / "dist" / "dev-package-manifest.json"
-INSTALLER_GLOB_DIR = REBUILD_DIR / "target" / "release" / "bundle" / "nsis"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+DESKTOP_DIR = REPO_ROOT / "apps" / "desktop"
+DESKTOP_EXE = REPO_ROOT / "target" / "release" / "wuji-rebuild-desktop-v01.exe"
+AGENT_EXE = REPO_ROOT / "target" / "release" / "wuji-rebuild-agent-v01.exe"
+MANIFEST_OUT = REPO_ROOT / "dist" / "dev-package-manifest.json"
+INSTALLER_GLOB_DIR = REPO_ROOT / "target" / "release" / "bundle" / "nsis"
 
 # 09 §12.3：旧系统数据库（prod 与既有 dev channel），全程只读。
 # 脱敏标签：证据中只出现 prod/dev，不输出本机绝对路径（审核 R06）。
@@ -113,7 +113,11 @@ def verify_installed_launch(install_dir: Path) -> dict:
     """
     suffix = ("pkg" + hex(time.time_ns())[2:]).ljust(26, "0")[:26]
     channel = f"rebuild-v01-test-{suffix}"
-    env = dict(os.environ, WUJI_REBUILD_CHANNEL=channel)
+    env = dict(
+        os.environ,
+        WUJI_REBUILD_CHANNEL=channel,
+        WUJI_REBUILD_PACKAGE_SMOKE_AUTOSTART="1",
+    )
     db_expected = (
         Path(os.environ["LOCALAPPDATA"])
         / "WUJI-Rebuild-V01"
@@ -135,7 +139,10 @@ def verify_installed_launch(install_dir: Path) -> dict:
                 break
             time.sleep(1)
         if not db_expected.exists():
-            raise SystemExit("安装版 Desktop 启动后 45 秒内未创建 channel 数据库（Agent 未被拉起）")
+            raise SystemExit(
+                "安装版 Desktop package-smoke 启动后 45 秒内未创建 channel 数据库"
+                "（AgentController 未拉起安装目录 Agent）"
+            )
         # 运行中的 Agent 必须来自安装目录（错版/混版检测）。
         for _ in range(15):
             agent_pids = [
@@ -152,7 +159,10 @@ def verify_installed_launch(install_dir: Path) -> dict:
             "performed": True,
             "installedAgentSpawned": True,
             "databaseCreated": True,
-            "note": "安装版 Desktop 拉起安装目录内 Agent 并完成 bootstrap（test channel 隔离）",
+            "note": (
+                "安装版 Desktop 通过 package-smoke test channel 调用 AgentController，"
+                "拉起安装目录内 Agent 并完成 bootstrap；普通启动不自动拉起 Agent"
+            ),
         }
     finally:
         desktop.kill()
@@ -213,7 +223,7 @@ def main() -> int:
 
     if not args.skip_build:
         print("== 2/8 cargo release 构建 ==")
-        run(["cargo", "build", "--release", "--workspace"], cwd=REBUILD_DIR)
+        run(["cargo", "build", "--release", "--workspace"], cwd=REPO_ROOT)
         print("== 3/8 前端构建 ==")
         run(["pnpm", "build"], cwd=DESKTOP_DIR)
         print("== 4/8 tauri bundle ==")
@@ -297,7 +307,7 @@ def main() -> int:
     MANIFEST_OUT.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
-    print("  manifest: rebuild/dist/dev-package-manifest.json")
+    print("  manifest: dist/dev-package-manifest.json")
 
     print("== 8/8 旧库 checksum（验收后） ==")
     after = old_db_checksums()
@@ -310,7 +320,7 @@ def main() -> int:
 
     print("\nDEV PACKAGE OK")
     print(f"  installer: {installer.name}")
-    print("  manifest:  rebuild/dist/dev-package-manifest.json")
+    print("  manifest:  dist/dev-package-manifest.json")
     return 0
 
 

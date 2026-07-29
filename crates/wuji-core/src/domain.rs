@@ -1,6 +1,6 @@
 //! 与 schema-v0.1.sql 对齐的领域枚举。
 //!
-//! 字符串值必须与 docs/rebuild/schema-v0.1.sql 的 CHECK 枚举完全一致；
+//! 字符串值必须与 docs/dev/schema-v0.1.sql 的 CHECK 枚举完全一致；
 //! 改值即改持久化合同，v0.1 内不允许。
 
 use serde::{Deserialize, Serialize};

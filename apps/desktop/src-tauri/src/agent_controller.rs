@@ -15,6 +15,7 @@ use crate::paths;
 const START_WAIT_ATTEMPTS: usize = 50;
 const START_WAIT_INTERVAL: Duration = Duration::from_millis(200);
 
+#[derive(Clone)]
 pub struct AgentController {
     agent_exe: PathBuf,
     channel: String,
