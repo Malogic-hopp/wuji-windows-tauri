@@ -219,6 +219,106 @@ describe('Timeline 页面', () => {
     }
   });
 
+  it('上一轮刷新未完成时跳过本轮轮询，不并发请求', async () => {
+    vi.useFakeTimers();
+    try {
+      let timelineCalls = 0;
+      let resolveFirst: ((dto: TimelinePageDto) => void) | null = null;
+      invoke.mockImplementation((command: string) => {
+        if (command === 'activity_get_today') {
+          return Promise.resolve({ localDate: TODAY_LOCAL_DATE });
+        }
+        if (command === 'activity_get_timeline') {
+          timelineCalls += 1;
+          if (timelineCalls === 1) {
+            // 首轮挂起，模拟超过轮询间隔的慢请求。
+            return new Promise<TimelinePageDto>((resolve) => {
+              resolveFirst = resolve;
+            });
+          }
+          return Promise.resolve(
+            pageFixture([segmentFixture('1', 'Code', '1784300000000')], null),
+          );
+        }
+        return Promise.reject(new Error(`unexpected command: ${command}`));
+      });
+      render(<TimelinePage />);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(timelineCalls).toBe(1);
+
+      // 首轮仍 pending：5 秒 tick 到达时必须跳过，不得并发。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(timelineCalls).toBe(1);
+
+      // 首轮完成后，下一轮 tick 正常执行。
+      await act(async () => {
+        resolveFirst?.(pageFixture([segmentFixture('1', 'Code', '1784300000000')], null));
+        await Promise.resolve();
+      });
+      expect(screen.getByText('Code')).toBeInTheDocument();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5000);
+      });
+      expect(timelineCalls).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('达到取页上限仍有后续时明确标记截断，不伪装成完整结果', async () => {
+    let calls = 0;
+    invoke.mockImplementation((command: string) => {
+      if (command === 'activity_get_today') {
+        return Promise.resolve({ localDate: TODAY_LOCAL_DATE });
+      }
+      if (command === 'activity_get_timeline') {
+        calls += 1;
+        // 每页都给出前进的游标，永远不到最后一页。
+        return Promise.resolve(
+          pageFixture(
+            [segmentFixture(String(calls), `App${String(calls)}`, '1784300000000')],
+            `cursor-${String(calls)}`,
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    render(<TimelinePage />);
+    await waitFor(() => {
+      expect(screen.getByText('当天记录条数过多，仅显示部分记录。')).toBeInTheDocument();
+    });
+    expect(calls).toBe(20);
+  });
+
+  it('游标不前进时停止取页并按截断处理', async () => {
+    let calls = 0;
+    invoke.mockImplementation((command: string) => {
+      if (command === 'activity_get_today') {
+        return Promise.resolve({ localDate: TODAY_LOCAL_DATE });
+      }
+      if (command === 'activity_get_timeline') {
+        calls += 1;
+        // 始终返回同一游标：第二页即检测到停滞。
+        return Promise.resolve(
+          pageFixture(
+            [segmentFixture(String(calls), `App${String(calls)}`, '1784300000000')],
+            'cursor-stuck',
+          ),
+        );
+      }
+      return Promise.reject(new Error(`unexpected command: ${command}`));
+    });
+    render(<TimelinePage />);
+    await waitFor(() => {
+      expect(screen.getByText('当天记录条数过多，仅显示部分记录。')).toBeInTheDocument();
+    });
+    expect(calls).toBe(2);
+  });
+
   it('「跳到底部」始终可用；向下滚动后出现「回到顶部」', async () => {
     mockRoutes([pageFixture([segmentFixture('1', 'Code', '1784300000000')], null)]);
     render(
@@ -232,6 +332,9 @@ describe('Timeline 页面', () => {
     const container = document.querySelector('.app-main') as HTMLElement;
     const scrollTo = vi.fn();
     container.scrollTo = scrollTo;
+
+    // 列表末尾预留了悬浮按钮的占位空间，避免遮挡。
+    expect(document.querySelector('.scroll-actions-spacer')).toBeInTheDocument();
 
     // 初始在顶部：只有「跳到底部」。
     expect(screen.queryByRole('button', { name: '回到顶部' })).not.toBeInTheDocument();

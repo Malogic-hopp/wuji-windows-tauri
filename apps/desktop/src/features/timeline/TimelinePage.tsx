@@ -7,7 +7,7 @@ import { useDocumentVisible, usePolling } from '../../lib/polling';
 
 type TimelineModel =
   | { phase: 'loading' }
-  | { phase: 'ready'; items: TimelineItem[]; timeZoneId: string }
+  | { phase: 'ready'; items: TimelineItem[]; timeZoneId: string; truncated: boolean }
   | { phase: 'error'; error: SafeError };
 
 /** host 单页上限 500（query.rs limit 校验）；UI 不分页，超长一天在此循环取完。 */
@@ -18,10 +18,15 @@ const REFRESH_INTERVAL_MS = 5000;
 /** 向下滚动超过该距离后出现「回到顶部」。 */
 const SHOW_TOP_BUTTON_OFFSET_PX = 300;
 
+interface FullDayTimeline {
+  items: TimelineItem[];
+  timeZoneId: string;
+  /** true = 达到取页上限或游标停滞，结果不完整（不得伪装成完整当天）。 */
+  truncated: boolean;
+}
+
 /** 顺序取回当天全部条目；后端游标分页仅在此内部使用，页面本身不分页。 */
-async function fetchFullDayTimeline(
-  localDate: string,
-): Promise<{ items: TimelineItem[]; timeZoneId: string }> {
+async function fetchFullDayTimeline(localDate: string): Promise<FullDayTimeline> {
   const items: TimelineItem[] = [];
   let timeZoneId = '';
   let cursor: string | undefined;
@@ -30,11 +35,16 @@ async function fetchFullDayTimeline(
     timeZoneId = dto.reportingTimeZoneId;
     items.push(...dto.items);
     if (dto.nextCursor == null) {
-      break;
+      return { items, timeZoneId, truncated: false };
+    }
+    // 游标不前进（空页或与请求相同的游标）：防重复条目/死循环，按截断处理。
+    if (dto.items.length === 0 || dto.nextCursor === cursor) {
+      return { items, timeZoneId, truncated: true };
     }
     cursor = dto.nextCursor;
   }
-  return { items, timeZoneId };
+  // 达到取页上限仍有后续：明确截断，不返回"伪完整"结果。
+  return { items, timeZoneId, truncated: true };
 }
 
 /** 时间线（09 §10.2）：Segment/Gap 按时间展示，最新在顶部，不显示标题/Context/Focus。 */
@@ -43,21 +53,27 @@ export default function TimelinePage() {
   const [showTransitions, setShowTransitions] = useState(false);
   const [showTopButton, setShowTopButton] = useState(false);
   const pageRef = useRef<HTMLDivElement>(null);
+  /** 轮询防重入：上一轮未结束跳过本轮，避免慢请求并发、旧结果后完成覆盖新结果。 */
+  const inFlightRef = useRef(false);
   const visible = useDocumentVisible();
 
   const refresh = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     try {
       // 日期以数据库 reporting 时区为准（审核 R08），不用浏览器本地日期；
       // 每轮刷新重取日期，跨午夜后自动切到新的一天。
       const today = await bridgeClient.activityGetToday();
-      const { items, timeZoneId } = await fetchFullDayTimeline(today.localDate);
+      const { items, timeZoneId, truncated } = await fetchFullDayTimeline(today.localDate);
       // 后端按时间升序返回；页面倒序展示，最新条目在顶部。
-      setModel({ phase: 'ready', items: items.slice().reverse(), timeZoneId });
+      setModel({ phase: 'ready', items: items.slice().reverse(), timeZoneId, truncated });
     } catch (cause) {
       // 后台轮询失败保留已展示数据，下一轮自动重试；仅首次加载失败进入错误四态。
       setModel((current) =>
         current.phase === 'ready' ? current : { phase: 'error', error: toSafeError(cause) },
       );
+    } finally {
+      inFlightRef.current = false;
     }
   }, []);
 
@@ -115,6 +131,11 @@ export default function TimelinePage() {
               />
               显示切换间隔（采样间隙，不计入时长）
             </label>
+            {model.truncated && (
+              <div className="notice notice--warn" role="status">
+                当天记录条数过多，仅显示部分记录。
+              </div>
+            )}
             <ul className="list" aria-label="时间线条目">
               {model.items.map((item) => (
                 <TimelineRow
@@ -125,6 +146,8 @@ export default function TimelinePage() {
                 />
               ))}
             </ul>
+            {/* 为右下角悬浮按钮预留空间，避免遮挡列表末尾条目。 */}
+            <div className="scroll-actions-spacer" aria-hidden="true" />
             <div className="scroll-actions">
               {showTopButton && (
                 <button

@@ -239,6 +239,11 @@ button {
   box-shadow: var(--shadow-raised);
 }
 
+/* 列表末尾的占位空间：保证最后的条目能滚出右下角悬浮按钮的覆盖范围。 */
+.scroll-actions-spacer {
+  height: calc(var(--space-6) * 2);
+}
+
 .list {
   display: flex;
   flex-direction: column;
