@@ -2,7 +2,7 @@
 
 状态：Draft；v0.1 合同与 §16 增补为实施对齐点，实现/验收结论以 migration-status 与证据包为准；Draft 的正式接受留待产品评审
 版本：v0.1
-最后更新：2026-07-22（§16 审核整改增补）
+最后更新：2026-07-29（Agent Pause/Stop 语义对齐）
 目标技术栈：React 19 + TypeScript + Tauri 2 + Rust Agent/Core + SQLite
 交付属性：dev-only 工程里程碑，不是用户生产发布
 长期规划：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -33,7 +33,7 @@ v0.1 不以完整行为分析、旧数据迁移或生产退役为完成条件。
 - Agent 是行为数据库唯一写入者；Tauri 对行为数据库严格只读，同时负责设置文件写入、Agent 进程管理和经 IPC 发出的运行控制；
 - 能生成 App Activity Segment 和 Work Block，而不是只展示离散采样；
 - Today、Timeline、Settings、Diagnostics 四条最小用户路径可用；
-- Desktop 退出不停止 Agent，CaptureStop 不退出 Agent 进程；
+- Desktop 退出不停止 Agent；“暂停记录”只暂停 Capture、Agent 继续在线；“停止 Agent”先提交 CaptureStop 边界，再请求 Agent graceful shutdown；
 - 新旧系统使用完全不同的进程、Pipe、mutex、数据目录和数据库；
 - 旧 WPF/C# 系统及旧数据库保持原样，可独立运行作为回滚入口；
 - v0.1 验收项全部通过，dev 包中不再携带或启动 Bridge sidecar。
@@ -345,6 +345,7 @@ capture_pause
 capture_resume
 capture_stop
 settings_reload
+agent_shutdown
 agent_shutdown_dev
 ```
 
@@ -352,7 +353,7 @@ agent_shutdown_dev
 
 v0.1 是 dev-only，不把长期规划中的 production binary 签名清单和逐帧 session capability 作为完成条件；因此 v0.1 不允许 production cutover，也不暴露 Clear/Export 等高风险命令。
 
-`agent_shutdown_dev` 仅供 dev 工具与脚本在同用户 DACL 内直连 Pipe 调用，不暴露为 Tauri command；React 没有触发 Agent 进程退出的路径。
+`agent_shutdown` 是 Desktop“停止 Agent”流程使用的正式退出命令；Agent 必须先返回 `{ willExit: true }`，再进入 graceful shutdown。Desktop 不允许绕过 Capture 状态机直接调用它：完整顺序固定为 `capture_stop` 提交并确认边界 → `agent_shutdown` → 断开旧 Pipe → 等待 runtime 状态落为 `stopped`。`agent_shutdown_dev` 保留给 dev 工具、测试与 soak 脚本在同用户 DACL 内直连 Pipe 使用，不暴露为 Tauri command。关闭 Desktop 窗口不触发上述流程，Agent 继续按原状态运行。
 
 ### 8.2 协议 envelope、幂等与状态机
 
@@ -417,12 +418,11 @@ Capture 转换合同：
 ### 8.3 React 可调用的 Tauri commands
 
 ```text
-agent_process_ensure_running
 agent_get_status
 capture_start
 capture_pause
 capture_resume
-capture_stop
+agent_process_stop
 activity_get_today
 activity_get_timeline
 settings_get
@@ -431,7 +431,7 @@ settings_resync_login_startup
 diagnostics_get_summary
 ```
 
-React 不直接连接 Pipe、不查询 SQLite、不传入 channel/path，也不计算时长和聚合。`settings_resync_login_startup` 对应 9.2 的 Diagnostics 修复动作：Tauri 按当前 Settings 重放 Run Key 同步流程，返回最终一致状态，不接受任何参数。
+React 不直接连接 Pipe、不查询 SQLite、不传入 channel/path，也不计算时长和聚合。`capture_start` 在 Tauri 内先确保固定位置的 Agent 在线，再发送 Capture start；因此 Agent 离线时同一“启动并记录”动作会重新拉起 Agent 并开始采集。`agent_process_stop` 在 Tauri 内执行 `capture_stop` 边界提交、`agent_shutdown`、旧 Pipe 断开和 runtime stopped 确认；它不是 `capture_stop` 的别名。`settings_resync_login_startup` 对应 9.2 的 Diagnostics 修复动作：Tauri 按当前 Settings 重放 Run Key 同步流程，返回最终一致状态，不接受任何参数。
 
 v0.1 的实时刷新使用安全低频轮询（Today 约 5 秒、Diagnostics 约 2 秒，页面隐藏时停止），不实现事件推送。轮询失败只影响实时性，不影响历史查询。
 
@@ -494,7 +494,7 @@ SettingsDto {
 
 字段口径：`currentApp` 取当前 open Segment 的 App（无 open Segment 时为空），`lastApp` 取最后一个 closed Segment 的 App；`longestWorkBlockActiveMs`、`workBlockCount`、`rawAppSwitchCount`、`topApps` 一律来自 daily 读模型；`quality.gapCount` 与 `daily_work_metrics.data_gap_count` 同口径（不含 `sampling_transition`，见 7.3），`quality.isComplete` 定义为该 local date 无非 `sampling_transition` gap 且 `droppedCount` 为 0。
 
-Pipe command payload/result 也固定：`status_get` 和四个 Capture command 使用空 payload 并返回 `AgentStatusDto`；`settings_reload` 使用 `{ savedRevision, contentDigest }` 并返回 `{ appliedRevision }`；`agent_shutdown_dev` 使用空 payload 并在关闭 Pipe 前返回 `{ willExit: true }`。
+Pipe command payload/result 也固定：`status_get` 和四个 Capture command 使用空 payload 并返回 `AgentStatusDto`；`settings_reload` 使用 `{ savedRevision, contentDigest }` 并返回 `{ appliedRevision }`；`agent_shutdown` 与 `agent_shutdown_dev` 均使用空 payload，并在关闭 Pipe 前返回 `{ willExit: true }`。
 
 ## 9. Settings v0.1
 
@@ -532,7 +532,7 @@ JSON 已保存但 Agent 离线或 reload 失败时不回滚普通设置：返回
 
 ### 9.3 Agent 脱离、版本与打包
 
-Desktop 只从自身安装目录的固定位置 `<desktop-exe-dir>\Agent\wuji-rebuild-agent-v01.exe` 启动 Agent。Windows 启动使用 `CreateProcessW`，设置 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`，不继承 Desktop handles，不加入会随 Desktop 关闭的 Job；启动后通过 `hello` 验证固定 channel/version，而不是把 child handle 当作运行状态。普通 `agent_process_ensure_running` 不传 `--capture-on-start`，新 Agent 初始为 `stopped`；只有 Run Key 登录启动明确传入该参数。v0.1 不做 Agent crash 自动重启。
+Desktop 只从自身安装目录的固定位置 `<desktop-exe-dir>\Agent\wuji-rebuild-agent-v01.exe` 启动 Agent。Windows 启动使用 `CreateProcessW`，设置 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`，不继承 Desktop handles，不加入会随 Desktop 关闭的 Job；启动后通过 `hello` 验证固定 channel/version，而不是把 child handle 当作运行状态。React 调用 `capture_start` 时，由 Tauri 在内部确保 Agent 在线；重新拉起的新 Agent 不传 `--capture-on-start`、初始为 `stopped`，随后才发送 `capture_start`。只有 Run Key 登录启动明确传入 `--capture-on-start`。Desktop 关闭不停止 Agent；用户显式调用 `agent_process_stop` 才执行 8.1/8.3 的边界提交与 graceful shutdown。v0.1 不做 Agent crash 自动重启。
 
 Desktop 与 Agent 的 protocol major、Schema version 任一不兼容时，禁止运行控制并显示 `VERSION_INCOMPATIBLE`；只读历史仅在 Desktop 明确支持 `schema_version=1` 时开放。不得自动启动另一个版本覆盖正在运行的 Agent。
 
