@@ -260,7 +260,7 @@ async fn run() -> Result<(), String> {
     let lifecycle_bridge: Option<wuji_rebuild_agent::session_power_events::SessionPowerBridge> =
         None;
 
-    // 等待退出：agent_shutdown_dev 或 Ctrl-C。
+    // 等待退出：正式 agent_shutdown（兼容 agent_shutdown_dev）或 Ctrl-C。
     tokio::select! {
         result = shutdown_rx.changed() => {
             let _ = result;

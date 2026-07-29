@@ -23,6 +23,7 @@ struct Harness {
     // watch 接收端必须存活（复审 P1-02：无消费者的发布会失败）。
     _capture_rx: watch::Receiver<CaptureState>,
     _settings_rx: watch::Receiver<Settings>,
+    shutdown_rx: watch::Receiver<bool>,
     // 三任务健康守卫（第二次复审 P1：注册在 spawn 前同步完成）。
     _guards: (
         wuji_rebuild_agent::pipeline_health::TaskHealthGuard,
@@ -43,7 +44,7 @@ fn harness_with_digest(digest: fn(&Settings) -> String) -> Harness {
     let (control_tx, control_rx) = mpsc::channel(8);
     let (capture_state_tx, capture_rx) = watch::channel(CaptureState::Stopped);
     let (settings_tx, settings_rx) = watch::channel(Settings::default());
-    let (shutdown_tx, _) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (barrier_request_tx, mut barrier_rx) =
         wuji_rebuild_agent::barrier::barrier_request_channel(4);
     // 模拟 Capture Loop：BarrierRequest 立即确认（本测试不涉及 Writer drain）。
@@ -84,6 +85,7 @@ fn harness_with_digest(digest: fn(&Settings) -> String) -> Harness {
         settings_path,
         _capture_rx: capture_rx,
         _settings_rx: settings_rx,
+        shutdown_rx,
         _guards: guards,
         _dir: dir,
     }
@@ -171,6 +173,26 @@ async fn unknown_payload_fields_are_rejected_per_command() {
     )
     .await;
     assert_eq!(error_code(&response), "IPC_INVALID_MESSAGE");
+}
+
+#[tokio::test]
+async fn formal_agent_shutdown_enters_shutting_down_and_signals_main() {
+    let mut harness = harness();
+    let response = handle_request_line(
+        &envelope(&ulid(), "agent_shutdown", serde_json::json!({})),
+        &harness.context,
+        &harness.request_ids,
+    )
+    .await;
+    let value: serde_json::Value = serde_json::from_str(&response).unwrap();
+    assert_eq!(value["ok"], true);
+    assert_eq!(value["result"]["willExit"], true);
+    harness.shutdown_rx.changed().await.unwrap();
+    assert!(*harness.shutdown_rx.borrow());
+    assert_eq!(
+        harness.context.shared.process_state(),
+        wuji_core::domain::ProcessState::ShuttingDown
+    );
 }
 
 /// timeout 只结束等待：原任务继续执行并在完成后写入 cache；

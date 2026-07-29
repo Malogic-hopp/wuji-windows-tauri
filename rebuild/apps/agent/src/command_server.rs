@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::watch;
+use wuji_core::domain::ProcessState;
 use wuji_core::error::{SafeError, SafeErrorCode};
 use wuji_core::settings::Settings;
 
@@ -417,9 +418,14 @@ async fn dispatch(
             let applied = context.coordinator.apply_settings(settings, now).await?;
             Ok(serde_json::json!({ "appliedRevision": applied.to_string() }))
         }
-        "agent_shutdown_dev" => {
+        // 正式进程停止命令。保留 agent_shutdown_dev 作为既有测试/soak 的兼容
+        // 别名；两者都只表示退出请求已接受，真正退出仍由 main 的有界关闭序列完成。
+        "agent_shutdown" | "agent_shutdown_dev" => {
             ensure_empty_payload(&request.payload)?;
-            let _ = context.shutdown_tx.send(true);
+            context.shared.set_process_state(ProcessState::ShuttingDown);
+            context.shutdown_tx.send(true).map_err(|_| {
+                SafeError::new(SafeErrorCode::InternalSafeError, "Agent 已无法进入关闭序列")
+            })?;
             Ok(serde_json::json!({ "willExit": true }))
         }
         _ => Err(SafeError::new(SafeErrorCode::IpcInvalidMessage, "未知命令")),
