@@ -169,8 +169,26 @@ async fn ensure_running_spawns_detached_agent_in_stopped_state() {
         .await
         .unwrap();
     assert_eq!(shutdown["ok"], true);
+    // willExit 只表示接受退出命令：必须等 Agent 真正退出后再清理（复审 P2-02：
+    // 否则残留 detached 进程与测试目录竞态）。
+    wait_agent_exit(&channel, Duration::from_secs(15)).await;
     let _ = ipc;
     cleanup(&channel);
+}
+
+/// 轮询 pipe 直到 Agent 退出（连接失败即视为已退出）。
+async fn wait_agent_exit(channel: &str, timeout: Duration) {
+    let (pipe_name, _) = paths::channel_names(channel).expect("channel names");
+    let deadline = Instant::now() + timeout;
+    loop {
+        match tokio::net::windows::named_pipe::ClientOptions::new().open(&pipe_name) {
+            Err(_) => return,
+            Ok(_) if Instant::now() < deadline => {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            Ok(_) => panic!("等待 Agent 退出超时"),
+        }
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -243,7 +261,12 @@ async fn settings_update_cas_run_key_and_saved_not_applied() {
         serde_json::from_str(&std::fs::read_to_string(service.path()).unwrap()).unwrap();
     settings.start_capture_on_login = true;
     std::fs::write(service.path(), settings.canonical_json()).unwrap();
-    service.resync_login_startup().expect("resync");
+    let query = QueryService::new(&channel).expect("query service");
+    let dto = service.resync_login_startup(&query).expect("resync");
+    assert_eq!(
+        dto.applied_revision, "0",
+        "无数据库时 appliedRevision 必须是 0，不得误报为 saved revision（R04）"
+    );
     assert!(
         startup_registry::get_run_key(&value_name)
             .expect("read")

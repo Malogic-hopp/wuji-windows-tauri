@@ -7,7 +7,7 @@ import { useDocumentVisible, usePolling } from '../../lib/polling';
 
 type DiagnosticsModel =
   | { phase: 'loading' }
-  | { phase: 'ready'; dto: DiagnosticsDto }
+  | { phase: 'ready'; dto: DiagnosticsDto; atMs: number }
   | { phase: 'error'; error: SafeError };
 
 /** 诊断（09 §10.4）：普通语言健康状态在前，高级信息默认折叠且路径脱敏。 */
@@ -19,7 +19,8 @@ export default function DiagnosticsPage() {
   const refresh = useCallback(async () => {
     try {
       const dto = await bridgeClient.diagnosticsGetSummary();
-      setModel({ phase: 'ready', dto });
+      // 时间基准随每次轮询更新（审核 R09）：相对年龄不能冻结在首次渲染。
+      setModel({ phase: 'ready', dto, atMs: Date.now() });
     } catch (cause) {
       setModel({ phase: 'error', error: toSafeError(cause) });
     }
@@ -53,6 +54,7 @@ export default function DiagnosticsPage() {
         {model.phase === 'ready' && (
           <DiagnosticsView
             dto={model.dto}
+            nowMs={model.atMs}
             resyncResult={resyncResult}
             onResync={() => void resync()}
           />
@@ -64,15 +66,17 @@ export default function DiagnosticsPage() {
 
 function DiagnosticsView({
   dto,
+  nowMs,
   resyncResult,
   onResync,
 }: {
   dto: DiagnosticsDto;
+  nowMs: number;
   resyncResult: string | null;
   onResync: () => void;
 }) {
   const status = dto.status;
-  const [now] = useState(() => Date.now());
+  const now = nowMs;
   const connected = status != null;
   return (
     <>

@@ -61,7 +61,10 @@ impl AgentIpcClient {
             "protocolVersion": PROTOCOL_VERSION,
             "channel": self.channel,
         });
-        let response = self.roundtrip_on(&mut connection, "hello", hello).await?;
+        let hello_request_id = ulid::Ulid::generate().to_string();
+        let response = self
+            .roundtrip_on(&mut connection, "hello", hello, &hello_request_id)
+            .await?;
         if !response["ok"].as_bool().unwrap_or(false) {
             let code = response["error"]["code"].as_str().unwrap_or_default();
             let mapped = match code {
@@ -79,14 +82,18 @@ impl AgentIpcClient {
         connection: &mut Connection,
         command: &str,
         payload: Value,
+        request_id: &str,
     ) -> Result<Value, SafeError> {
         let transport = || SafeError::new(SafeErrorCode::InternalSafeError, "与 Agent 的传输失败");
-        let request_id = ulid::Ulid::generate().to_string();
+        let sent_at_utc_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_millis().to_string())
+            .unwrap_or_else(|_| "0".to_string());
         let envelope = json!({
             "protocolVersion": PROTOCOL_VERSION,
             "requestId": request_id,
             "command": command,
-            "sentAtUtcMs": "0",
+            "sentAtUtcMs": sent_at_utc_ms,
             "payload": payload,
         });
         let mut line = serde_json::to_vec(&envelope)
@@ -140,17 +147,36 @@ impl AgentIpcClient {
     }
 
     /// 调用 Agent 命令；传输层失败后下次调用自动重连。
+    /// timeout/断线后用同一 request ID 重试一次（审核 R05）：服务端 request cache
+    /// 对已接受命令返回真实结果，不会重复执行副作用。
     pub async fn call(&self, command: &str, payload: Value) -> Result<Value, SafeError> {
+        let request_id = ulid::Ulid::generate().to_string();
         let mut guard = self.connection.lock().await;
         if guard.is_none() {
             *guard = Some(self.connect_locked().await?);
         }
         let connection = guard.as_mut().expect("connection just established");
-        match self.roundtrip_on(connection, command, payload).await {
+        match self
+            .roundtrip_on(connection, command, payload.clone(), &request_id)
+            .await
+        {
             Ok(response) => Ok(response),
-            Err(error) => {
+            Err(first_error) => {
                 *guard = None;
-                Err(error)
+                let mut fresh = match self.connect_locked().await {
+                    Ok(connection) => connection,
+                    Err(_) => return Err(first_error),
+                };
+                match self
+                    .roundtrip_on(&mut fresh, command, payload, &request_id)
+                    .await
+                {
+                    Ok(response) => {
+                        *guard = Some(fresh);
+                        Ok(response)
+                    }
+                    Err(_) => Err(first_error),
+                }
             }
         }
     }

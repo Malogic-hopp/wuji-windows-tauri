@@ -20,7 +20,9 @@ export default function TimelinePage() {
   const loadFirst = useCallback(async () => {
     setLoadingMore(true);
     try {
-      const page = await bridgeClient.activityGetTimeline(todayText(), undefined, PAGE_SIZE);
+      // 日期以数据库 reporting 时区为准（审核 R08），不用浏览器本地日期。
+      const today = await bridgeClient.activityGetToday();
+      const page = await bridgeClient.activityGetTimeline(today.localDate, undefined, PAGE_SIZE);
       setModel({ phase: 'ready', page, items: page.items });
     } catch (cause) {
       setModel({ phase: 'error', error: toSafeError(cause) });
@@ -112,14 +114,6 @@ export default function TimelinePage() {
   );
 }
 
-function todayText(): string {
-  const now = new Date();
-  const year = String(now.getFullYear());
-  const month = String(now.getMonth() + 1).padStart(2, '0');
-  const day = String(now.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
 function TimelineRow({
   item,
   timeZoneId,
@@ -131,8 +125,9 @@ function TimelineRow({
 }) {
   if (item.kind === 'gap' && item.gapKind === 'sampling_transition') {
     if (hideTransition) return null;
+    // 用户勾选显示时必须可被屏幕阅读器感知（审核 R10），不得 aria-hidden。
     return (
-      <li className="list__row--transition" aria-hidden="true">
+      <li className="list__row--transition" aria-label="切换间隔（采样间隙，不计入时长）">
         — 切换间隔 —
       </li>
     );

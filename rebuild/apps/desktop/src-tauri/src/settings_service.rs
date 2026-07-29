@@ -57,19 +57,27 @@ impl SettingsService {
         &self.path
     }
 
-    fn load_current(&self) -> (Settings, bool) {
+    /// 设置文件三态加载（R04）：损坏文件必须显式上报，不得伪装成默认值。
+    fn load_current(&self) -> Result<Option<Settings>, SafeError> {
         match std::fs::read_to_string(&self.path) {
             Ok(raw) => match serde_json::from_str::<Settings>(&raw) {
-                Ok(settings) => (settings, true),
-                Err(_) => (Settings::default(), true),
+                Ok(settings) => Ok(Some(settings)),
+                Err(_) => Err(SafeError::new(
+                    SafeErrorCode::SettingsInvalid,
+                    "设置文件损坏，无法读取；请备份后删除该文件以恢复默认设置",
+                )),
             },
-            Err(_) => (Settings::default(), false),
+            Err(_) => Ok(None),
         }
     }
 
     /// `settings_get`：saved 与 applied 分开返回（09 §8.4、§9.1）。
     pub fn get(&self, query: &QueryService) -> Result<SettingsDto, SafeError> {
-        let (settings, persisted) = self.load_current();
+        let loaded = self.load_current()?;
+        let (settings, persisted) = match loaded {
+            Some(settings) => (settings, true),
+            None => (Settings::default(), false),
+        };
         let applied = query
             .applied_settings_revision()
             .unwrap_or_else(|_| DEFAULT_REVISION.to_string());
@@ -83,7 +91,11 @@ impl SettingsService {
         ipc: &AgentIpcClient,
     ) -> Result<SettingsDto, SafeError> {
         let _guard = self.lock.lock().await;
-        let (current, persisted) = self.load_current();
+        let loaded = self.load_current()?;
+        let (current, persisted) = match loaded {
+            Some(settings) => (settings, true),
+            None => (Settings::default(), false),
+        };
         if current.revision != patch.expected_revision {
             return Err(SafeError::new(
                 SafeErrorCode::SettingsConflict,
@@ -160,14 +172,18 @@ impl SettingsService {
     }
 
     /// `settings_resync_login_startup`：按当前 Settings 重放 Run Key 同步（09 §9.2）。
-    pub fn resync_login_startup(&self) -> Result<SettingsDto, SafeError> {
-        let (current, persisted) = self.load_current();
+    /// appliedRevision 来自数据库最大已应用 revision（R04：不得误报为 saved revision）。
+    pub fn resync_login_startup(&self, query: &QueryService) -> Result<SettingsDto, SafeError> {
+        let loaded = self.load_current()?;
+        let (current, persisted) = match loaded {
+            Some(settings) => (settings, true),
+            None => (Settings::default(), false),
+        };
         self.apply_run_key(current.start_capture_on_login)?;
-        Ok(SettingsDto::from_settings(
-            &current,
-            persisted,
-            current.revision.clone(),
-        ))
+        let applied = query
+            .applied_settings_revision()
+            .unwrap_or_else(|_| DEFAULT_REVISION.to_string());
+        Ok(SettingsDto::from_settings(&current, persisted, applied))
     }
 
     fn apply_run_key(&self, enabled: bool) -> Result<(), SafeError> {

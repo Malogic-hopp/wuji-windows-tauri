@@ -2,31 +2,40 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import DiagnosticsPage from './DiagnosticsPage';
 import type { DiagnosticsDto } from '../../bridge/client';
+import type { AgentStatusDto, Int64String } from '../../types/wuji-core';
+
+/** Int64String 夹具断言（R07 品牌类型）。 */
+const i64 = (text: string): Int64String => text as Int64String;
 
 const invoke = vi.fn<(command: string, args?: unknown) => Promise<unknown>>();
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: (command: string, args?: unknown): Promise<unknown> => invoke(command, args),
 }));
 
+function statusFixture(overrides: Partial<AgentStatusDto> = {}): AgentStatusDto {
+  return {
+    agentVersion: '0.1.0',
+    protocolVersion: 1,
+    schemaVersion: 1,
+    processState: 'running',
+    captureState: 'running',
+    writerState: 'healthy',
+    runtimeId: '01J0000000000000000000000X',
+    heartbeatAtUtcMs: i64(String(Date.now() - 2000)),
+    lastObservationAtUtcMs: i64(String(Date.now() - 3000)),
+    lastWriteAtUtcMs: i64(String(Date.now() - 3000)),
+    captureQueueDepth: 0,
+    writerQueueDepth: 0,
+    droppedCaptureCount: i64('0'),
+    droppedWriterCount: i64('0'),
+    safeErrorCode: null,
+    ...overrides,
+  };
+}
+
 function dtoFixture(overrides: Partial<DiagnosticsDto> = {}): DiagnosticsDto {
   return {
-    status: {
-      agentVersion: '0.1.0',
-      protocolVersion: 1,
-      schemaVersion: 1,
-      processState: 'running',
-      captureState: 'running',
-      writerState: 'healthy',
-      runtimeId: '01J0000000000000000000000X',
-      heartbeatAtUtcMs: String(Date.now() - 2000),
-      lastObservationAtUtcMs: String(Date.now() - 3000),
-      lastWriteAtUtcMs: String(Date.now() - 3000),
-      captureQueueDepth: 0,
-      writerQueueDepth: 0,
-      droppedCaptureCount: '0',
-      droppedWriterCount: '0',
-      safeErrorCode: null,
-    },
+    status: statusFixture(),
     databaseReachable: true,
     settingsPersisted: true,
     appliedRevision: '3',
@@ -89,5 +98,43 @@ describe('Diagnostics 页面', () => {
     await waitFor(() => {
       expect(screen.getByRole('alert')).toHaveTextContent('无法连接 Agent，数据库也不可读');
     });
+  });
+
+  it('非零队列深度如实显示（R09）', async () => {
+    invoke.mockResolvedValue(
+      dtoFixture({
+        status: statusFixture({ captureQueueDepth: 7, writerQueueDepth: 3 }),
+      }),
+    );
+    render(<DiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getByText('采集 7 · 写入 3')).toBeInTheDocument();
+    });
+  });
+
+  it('相对年龄随轮询更新（R09：时间基准不冻结在首次渲染）', async () => {
+    const fixed = Date.now() - 2000;
+    invoke.mockImplementation((command: string) =>
+      command === 'diagnostics_get_summary'
+        ? Promise.resolve(
+            dtoFixture({
+              status: statusFixture({ heartbeatAtUtcMs: i64(String(fixed)) }),
+            }),
+          )
+        : Promise.reject(new Error(`unexpected: ${command}`)),
+    );
+    render(<DiagnosticsPage />);
+    await waitFor(() => {
+      expect(screen.getAllByText(/秒前/).length).toBeGreaterThan(0);
+    });
+    const firstAges = screen.getAllByText(/秒前/).map((node) => node.textContent);
+    // 下一轮 2 秒轮询后，年龄文本必须变化（now 基准随 dto 一起更新）。
+    await waitFor(
+      () => {
+        const current = screen.getAllByText(/秒前/).map((node) => node.textContent);
+        expect(current.some((text, index) => text !== firstAges[index])).toBe(true);
+      },
+      { timeout: 6000 },
+    );
   });
 });

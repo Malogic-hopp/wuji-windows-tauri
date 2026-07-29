@@ -138,7 +138,7 @@ pub async fn settings_update(
 pub async fn settings_resync_login_startup(
     services: State<'_, AppServices>,
 ) -> Result<SettingsDto, SafeError> {
-    services.settings.resync_login_startup()
+    services.settings.resync_login_startup(&services.query)
 }
 
 #[tauri::command]

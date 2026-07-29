@@ -2,7 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { vi } from 'vitest';
 import AppLayout from './AppLayout';
-import type { AgentStatusDto } from '../types/wuji-core';
+import type { AgentStatusDto, Int64String } from '../types/wuji-core';
+
+/** Int64String 夹具断言（R07 品牌类型）。 */
+const i64 = (text: string): Int64String => text as Int64String;
 
 const invoke = vi.fn<(command: string, args?: unknown) => Promise<unknown>>();
 vi.mock('@tauri-apps/api/core', () => ({
@@ -23,8 +26,8 @@ function statusFixture(captureState: AgentStatusDto['captureState']): AgentStatu
     lastWriteAtUtcMs: null,
     captureQueueDepth: 0,
     writerQueueDepth: 0,
-    droppedCaptureCount: '0',
-    droppedWriterCount: '0',
+    droppedCaptureCount: i64('0'),
+    droppedWriterCount: i64('0'),
     safeErrorCode: null,
   };
 }

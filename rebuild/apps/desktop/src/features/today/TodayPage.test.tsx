@@ -2,6 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import TodayPage from './TodayPage';
 import type { TodayDto } from '../../types/wuji-core';
+import type { Int64String } from '../../types/wuji-core';
+
+/** Int64String 夹具断言（R07 品牌类型）。 */
+const i64 = (text: string): Int64String => text as Int64String;
 
 const invoke = vi.fn<(command: string, args?: unknown) => Promise<unknown>>();
 vi.mock('@tauri-apps/api/core', () => ({
@@ -12,17 +16,17 @@ function todayFixture(overrides: Partial<TodayDto> = {}): TodayDto {
   return {
     localDate: '2026-07-19',
     reportingTimeZoneId: 'Asia/Shanghai',
-    activeDurationMs: '3723000',
-    currentApp: { appId: '1', displayName: 'Code' },
-    lastApp: { appId: '2', displayName: 'Edge' },
-    longestWorkBlockActiveMs: '1800000',
-    workBlockCount: '2',
-    rawAppSwitchCount: '5',
+    activeDurationMs: i64('3723000'),
+    currentApp: { appId: i64('1'), displayName: 'Code' },
+    lastApp: { appId: i64('2'), displayName: 'Edge' },
+    longestWorkBlockActiveMs: i64('1800000'),
+    workBlockCount: i64('2'),
+    rawAppSwitchCount: i64('5'),
     topApps: [
-      { app: { appId: '1', displayName: 'Code' }, activeDurationMs: '3000000' },
-      { app: { appId: '2', displayName: 'Edge' }, activeDurationMs: '723000' },
+      { app: { appId: i64('1'), displayName: 'Code' }, activeDurationMs: i64('3000000') },
+      { app: { appId: i64('2'), displayName: 'Edge' }, activeDurationMs: i64('723000') },
     ],
-    quality: { isComplete: true, gapCount: '0', droppedCount: '0' },
+    quality: { isComplete: true, gapCount: i64('0'), droppedCount: i64('0') },
     ...overrides,
   };
 }
@@ -47,7 +51,7 @@ describe('Today 页面', () => {
   it('数据不完整时显示 gap/drop 提示', async () => {
     invoke.mockResolvedValue(
       todayFixture({
-        quality: { isComplete: false, gapCount: '2', droppedCount: '1' },
+        quality: { isComplete: false, gapCount: i64('2'), droppedCount: i64('1') },
       }),
     );
     render(<TodayPage />);
@@ -59,10 +63,10 @@ describe('Today 页面', () => {
   it('无记录时显示 Empty 四态', async () => {
     invoke.mockResolvedValue(
       todayFixture({
-        activeDurationMs: '0',
-        workBlockCount: '0',
-        rawAppSwitchCount: '0',
-        longestWorkBlockActiveMs: '0',
+        activeDurationMs: i64('0'),
+        workBlockCount: i64('0'),
+        rawAppSwitchCount: i64('0'),
+        longestWorkBlockActiveMs: i64('0'),
         currentApp: null,
         lastApp: null,
         topApps: [],

@@ -2,6 +2,10 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 import TimelinePage from './TimelinePage';
 import type { TimelinePageDto } from '../../types/wuji-core';
+import type { Int64String } from '../../types/wuji-core';
+
+/** Int64String 夹具断言（R07 品牌类型）。 */
+const i64 = (text: string): Int64String => text as Int64String;
 
 const invoke = vi.fn<(command: string, args?: unknown) => Promise<unknown>>();
 vi.mock('@tauri-apps/api/core', () => ({
@@ -9,9 +13,25 @@ vi.mock('@tauri-apps/api/core', () => ({
 }));
 
 const TZ = 'Asia/Shanghai';
+/** 数据库 reporting 时区下的"今天"（与浏览器本地日期无关，R08）。 */
+const TODAY_LOCAL_DATE = '2026-07-18';
 
 function pageFixture(items: TimelinePageDto['items'], nextCursor: string | null): TimelinePageDto {
   return { localDate: '2026-07-19', reportingTimeZoneId: TZ, items, nextCursor };
+}
+
+/** 按命令路由：activity_get_today 提供 DB reporting 日期，activity_get_timeline 依序返回页。 */
+function mockRoutes(pages: TimelinePageDto[]) {
+  let index = 0;
+  invoke.mockImplementation((command: string) => {
+    if (command === 'activity_get_today') {
+      return Promise.resolve({ localDate: TODAY_LOCAL_DATE });
+    }
+    if (command === 'activity_get_timeline') {
+      return Promise.resolve(pages[Math.min(index++, pages.length - 1)]);
+    }
+    return Promise.reject(new Error(`unexpected command: ${command}`));
+  });
 }
 
 describe('Timeline 页面', () => {
@@ -19,55 +39,62 @@ describe('Timeline 页面', () => {
     invoke.mockReset();
   });
 
-  it('展示 Segment 状态徽章与时长，默认折叠切换间隔', async () => {
-    invoke.mockResolvedValue(
+  it('以 DB reporting 时区的日期查询时间线，展示徽章与时长，默认折叠切换间隔', async () => {
+    mockRoutes([
       pageFixture(
         [
           {
             kind: 'segment',
-            segmentId: '1',
-            app: { appId: '1', displayName: 'Code' },
+            segmentId: i64('1'),
+            app: { appId: i64('1'), displayName: 'Code' },
             activityState: 'active',
-            startAtUtcMs: '1784300000000',
-            endAtUtcMs: '1784303600000',
-            durationMs: '3600000',
+            startAtUtcMs: i64('1784300000000'),
+            endAtUtcMs: i64('1784303600000'),
+            durationMs: i64('3600000'),
             status: 'closed',
           },
           {
             kind: 'gap',
-            gapId: '10',
+            gapId: i64('10'),
             gapKind: 'sampling_transition',
-            startAtUtcMs: '1784303600000',
-            endAtUtcMs: '1784303603000',
+            startAtUtcMs: i64('1784303600000'),
+            endAtUtcMs: i64('1784303603000'),
             status: 'closed',
             eventCount: 1,
           },
           {
             kind: 'segment',
-            segmentId: '2',
-            app: { appId: '2', displayName: 'Edge' },
+            segmentId: i64('2'),
+            app: { appId: i64('2'), displayName: 'Edge' },
             activityState: 'idle',
-            startAtUtcMs: '1784303603000',
-            endAtUtcMs: '1784303903000',
-            durationMs: '300000',
+            startAtUtcMs: i64('1784303603000'),
+            endAtUtcMs: i64('1784303903000'),
+            durationMs: i64('300000'),
             status: 'closed',
           },
           {
             kind: 'gap',
-            gapId: '11',
+            gapId: i64('11'),
             gapKind: 'capture_paused',
-            startAtUtcMs: '1784303903000',
-            endAtUtcMs: '1784311103000',
+            startAtUtcMs: i64('1784303903000'),
+            endAtUtcMs: i64('1784311103000'),
             status: 'closed',
             eventCount: 1,
           },
         ],
         null,
       ),
-    );
+    ]);
     render(<TimelinePage />);
     await waitFor(() => {
       expect(screen.getByText('Code')).toBeInTheDocument();
+    });
+    // R08：首次查询必须使用 activity_get_today 的 localDate（DB reporting 时区），
+    // 不得使用浏览器本地日期。
+    expect(invoke).toHaveBeenCalledWith('activity_get_timeline', {
+      localDate: TODAY_LOCAL_DATE,
+      cursor: null,
+      limit: 50,
     });
     expect(screen.getByText('活跃')).toBeInTheDocument();
     expect(screen.getByText('空闲')).toBeInTheDocument();
@@ -75,23 +102,23 @@ describe('Timeline 页面', () => {
     expect(screen.queryByText('— 切换间隔 —')).not.toBeInTheDocument();
   });
 
-  it('勾选后显示切换间隔', async () => {
-    invoke.mockResolvedValue(
+  it('勾选后显示切换间隔，且切换间隔可被辅助技术感知', async () => {
+    mockRoutes([
       pageFixture(
         [
           {
             kind: 'gap',
-            gapId: '10',
+            gapId: i64('10'),
             gapKind: 'sampling_transition',
-            startAtUtcMs: '1784303600000',
-            endAtUtcMs: '1784303603000',
+            startAtUtcMs: i64('1784303600000'),
+            endAtUtcMs: i64('1784303603000'),
             status: 'closed',
             eventCount: 1,
           },
         ],
         null,
       ),
-    );
+    ]);
     render(<TimelinePage />);
     await waitFor(() => {
       expect(screen.getByRole('checkbox')).toBeInTheDocument();
@@ -100,44 +127,45 @@ describe('Timeline 页面', () => {
     await waitFor(() => {
       expect(screen.getByText('— 切换间隔 —')).toBeInTheDocument();
     });
+    // R10：显示时不得 aria-hidden，必须有可访问名。
+    const row = screen.getByText('— 切换间隔 —');
+    expect(row).not.toHaveAttribute('aria-hidden');
+    expect(row).toHaveAttribute('aria-label', '切换间隔（采样间隙，不计入时长）');
   });
 
   it('nextCursor 存在时加载更多并追加条目', async () => {
-    invoke
-      .mockResolvedValueOnce(
-        pageFixture(
-          [
-            {
-              kind: 'segment',
-              segmentId: '1',
-              app: { appId: '1', displayName: 'Code' },
-              activityState: 'active',
-              startAtUtcMs: '1784300000000',
-              endAtUtcMs: '1784303600000',
-              durationMs: '3600000',
-              status: 'closed',
-            },
-          ],
-          'cursor-1',
-        ),
-      )
-      .mockResolvedValueOnce(
-        pageFixture(
-          [
-            {
-              kind: 'segment',
-              segmentId: '2',
-              app: { appId: '2', displayName: 'Edge' },
-              activityState: 'active',
-              startAtUtcMs: '1784303603000',
-              endAtUtcMs: '1784307203000',
-              durationMs: '3600000',
-              status: 'closed',
-            },
-          ],
-          null,
-        ),
-      );
+    mockRoutes([
+      pageFixture(
+        [
+          {
+            kind: 'segment',
+            segmentId: i64('1'),
+            app: { appId: i64('1'), displayName: 'Code' },
+            activityState: 'active',
+            startAtUtcMs: i64('1784300000000'),
+            endAtUtcMs: i64('1784303600000'),
+            durationMs: i64('3600000'),
+            status: 'closed',
+          },
+        ],
+        'cursor-1',
+      ),
+      pageFixture(
+        [
+          {
+            kind: 'segment',
+            segmentId: i64('2'),
+            app: { appId: i64('2'), displayName: 'Edge' },
+            activityState: 'active',
+            startAtUtcMs: i64('1784303603000'),
+            endAtUtcMs: i64('1784307203000'),
+            durationMs: i64('3600000'),
+            status: 'closed',
+          },
+        ],
+        null,
+      ),
+    ]);
     render(<TimelinePage />);
     await waitFor(() => {
       expect(screen.getByText('Code')).toBeInTheDocument();
@@ -155,7 +183,7 @@ describe('Timeline 页面', () => {
   });
 
   it('无条目时显示 Empty 四态', async () => {
-    invoke.mockResolvedValue(pageFixture([], null));
+    mockRoutes([pageFixture([], null)]);
     render(<TimelinePage />);
     await waitFor(() => {
       expect(screen.getByText('今天还没有时间线记录')).toBeInTheDocument();
