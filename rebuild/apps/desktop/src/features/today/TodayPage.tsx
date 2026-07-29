@@ -57,12 +57,6 @@ function isEmpty(today: TodayDto): boolean {
 function TodayView({ today }: { today: TodayDto }) {
   return (
     <>
-      {!today.quality.isComplete && (
-        <div className="notice notice--warn" role="note">
-          今日数据不完整：{today.quality.gapCount} 个数据缺口、
-          {today.quality.droppedCount} 次丢弃。相关时段未计入。
-        </div>
-      )}
       <div className="card">
         <div className="metric-grid">
           <Metric label="活跃时长" value={formatDuration(today.activeDurationMs)} />

@@ -48,7 +48,7 @@ describe('Today 页面', () => {
     expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 
-  it('数据不完整时显示 gap/drop 提示', async () => {
+  it('数据不完整时不在今日页面显示 gap/drop 提示', async () => {
     invoke.mockResolvedValue(
       todayFixture({
         quality: { isComplete: false, gapCount: i64('2'), droppedCount: i64('1') },
@@ -56,8 +56,10 @@ describe('Today 页面', () => {
     );
     render(<TodayPage />);
     await waitFor(() => {
-      expect(screen.getByRole('note')).toHaveTextContent('今日数据不完整');
+      expect(screen.getByText('1 小时 2 分钟')).toBeInTheDocument();
     });
+    expect(screen.queryByText(/今日数据不完整/)).not.toBeInTheDocument();
+    expect(screen.queryByRole('note')).not.toBeInTheDocument();
   });
 
   it('无记录时显示 Empty 四态', async () => {
