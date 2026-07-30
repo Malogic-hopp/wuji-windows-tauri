@@ -7,7 +7,8 @@ use specta::Types;
 use specta_typescript::Typescript;
 
 use crate::dto::{
-    AgentStatusDto, AppDto, SettingsDto, TimelinePageDto, TodayDto, TodayQualityDto, TopAppDto,
+    AgentStatusDto, AppDto, HeatmapDto, SettingsDto, TimelinePageDto, TodayDto, TodayQualityDto,
+    TopAppDto,
 };
 use crate::error::{SafeError, SafeErrorCode};
 use crate::settings::{FieldError, Settings};
@@ -35,6 +36,7 @@ pub fn type_collection() -> Types {
         .register::<TopAppDto>()
         .register::<TodayQualityDto>()
         .register::<TimelinePageDto>()
+        .register::<HeatmapDto>()
         .register::<SettingsDto>()
         .register::<Settings>()
         .register::<FieldError>()

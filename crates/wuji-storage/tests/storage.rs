@@ -1022,3 +1022,159 @@ fn old_v1_fixture_returns_schema_unsupported() {
         other => panic!("旧 v1 fixture 应返回 DB_SCHEMA_UNSUPPORTED，实际: {other:?}"),
     }
 }
+
+#[test]
+fn heatmap_aggregates_hourly_projection_and_normalizes_intensity() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+    let runtime = RuntimeId::new();
+    let tz = writer.schema_meta().reporting_tz().unwrap();
+    let day = 86_400_000_i64;
+
+    {
+        let tx = writer.transaction().unwrap();
+        tx.insert_runtime(&runtime, T0).unwrap();
+        let code = seed_app(&tx, "code", T0);
+        let edge = seed_app(&tx, "edge", T0);
+        let mut seq = 0_i64;
+        // (app, state, 相对 T0 的起点, 时长)。UTC 小时桶起点 = 上海 local 08/09/10/11 时。
+        let segments: [(usize, ActivityState, i64, i64); 6] = [
+            // 07-18 08 时桶：code active 10 分钟。
+            (0, ActivityState::Active, 600_000, 600_000),
+            // 07-18 08 时桶：edge active 15 分钟（与 code 聚合 → 1_500_000）。
+            (1, ActivityState::Active, 900_000, 900_000),
+            // 07-19 08 时桶：code idle 30 分钟（active=0 → 强度 0）。
+            (0, ActivityState::Idle, day + 600_000, 1_800_000),
+            // 07-19 09 时桶：edge active 满 1 小时 → max=3_600_000，强度 4。
+            (1, ActivityState::Active, day + 3_600_000, 3_600_000),
+            // 07-19 10 时桶：edge active 15 分钟 = max/4 → 强度 1。
+            (1, ActivityState::Active, day + 7_200_000, 900_000),
+            // 07-19 11 时桶：edge active 45 分钟 = 3/4 max → 强度 3。
+            (1, ActivityState::Active, day + 10_800_000, 2_700_000),
+        ];
+        let apps = [code, edge];
+        for (app_index, state, offset, len) in segments {
+            let start = T0 + offset;
+            seq += 1;
+            let o1 = insert_obs(&tx, &runtime, seq, start, apps[app_index], state);
+            let seg = tx
+                .open_segment(&runtime, 0, apps[app_index], state, start, o1)
+                .unwrap();
+            seq += 1;
+            let o2 = insert_obs(&tx, &runtime, seq, start + len, apps[app_index], state);
+            tx.update_open_segment(seg, start + len, o2).unwrap();
+            tx.close_open_segment("app_changed").unwrap();
+        }
+        // 2026-07-10（7 天窗口外）的 active 段：必须被范围裁剪。
+        // 该段早于 T0，insert_obs 的 monotonic 基准（captured - T0）会为负，
+        // 直接写 monotonic=0 的夹具值。
+        let old = T0 - 8 * day;
+        let o1 = match tx.insert_observation(
+            &runtime,
+            seq + 1,
+            0,
+            old + 600_000,
+            0,
+            code,
+            ActivityState::Active,
+            CaptureQuality::Normal,
+            0,
+        ) {
+            Ok(ObservationInsert::Inserted(id)) => id,
+            other => panic!("observation 插入失败: {other:?}"),
+        };
+        let seg = tx
+            .open_segment(&runtime, 0, code, ActivityState::Active, old + 600_000, o1)
+            .unwrap();
+        let o2 = match tx.insert_observation(
+            &runtime,
+            seq + 2,
+            0,
+            old + 1_200_000,
+            0,
+            code,
+            ActivityState::Active,
+            CaptureQuality::Normal,
+            0,
+        ) {
+            Ok(ObservationInsert::Inserted(id)) => id,
+            other => panic!("observation 插入失败: {other:?}"),
+        };
+        tx.update_open_segment(seg, old + 1_200_000, o2).unwrap();
+        tx.close_open_segment("app_changed").unwrap();
+
+        tx.recompute_hours(
+            &tz,
+            &[
+                T0,
+                T0 + day,
+                T0 + day + 3_600_000,
+                T0 + day + 7_200_000,
+                T0 + day + 10_800_000,
+                old,
+            ],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = LocalDate::parse("2026-07-19").unwrap();
+    let heatmap = reader.heatmap(&today, 7).expect("heatmap 查询");
+    assert_eq!(heatmap.days, 7);
+    assert_eq!(heatmap.today.as_str(), "2026-07-19");
+    assert_eq!(heatmap.cells.len(), 5, "窗口外 2026-07-10 必须被裁剪");
+
+    let cell = |date: &str, hour: u32| {
+        heatmap
+            .cells
+            .iter()
+            .find(|c| c.local_date == date && c.local_hour == hour)
+            .unwrap_or_else(|| panic!("格子 {date} {hour} 必须存在"))
+            .clone()
+    };
+
+    let aggregated = cell("2026-07-18", 8);
+    assert_eq!(
+        aggregated.active_duration_ms.0, 1_500_000,
+        "多 app 同桶聚合"
+    );
+    assert_eq!(aggregated.intensity_level, 2, "1.5M/3.6M ≈ 0.42 → 等级 2");
+
+    let idle_only = cell("2026-07-19", 8);
+    assert_eq!(idle_only.idle_duration_ms.0, 1_800_000);
+    assert_eq!(idle_only.intensity_level, 0, "active 为 0 → 等级 0");
+
+    let busiest = cell("2026-07-19", 9);
+    assert_eq!(busiest.active_duration_ms.0, 3_600_000);
+    assert_eq!(busiest.intensity_level, 4, "最忙一小时 → 等级 4");
+
+    let quarter = cell("2026-07-19", 10);
+    assert_eq!(quarter.intensity_level, 1, "恰为 max/4 → 等级 1");
+
+    let three_quarter = cell("2026-07-19", 11);
+    assert_eq!(three_quarter.intensity_level, 3, "恰为 3/4 max → 等级 3");
+}
+
+#[test]
+fn heatmap_empty_range_returns_no_cells() {
+    let dir = TempDir::new().unwrap();
+    let _writer = bootstrap(&dir);
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = LocalDate::parse("2026-07-19").unwrap();
+    let heatmap = reader.heatmap(&today, 7).expect("heatmap 查询");
+    assert!(heatmap.cells.is_empty());
+}
+
+#[test]
+fn heatmap_rejects_out_of_range_days() {
+    let dir = TempDir::new().unwrap();
+    let _writer = bootstrap(&dir);
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = LocalDate::parse("2026-07-19").unwrap();
+    // days 不变量在 Reader 自身维护，不依赖 QueryService 拦截。
+    for days in [0_u32, 32_u32] {
+        let err = reader.heatmap(&today, days).expect_err("days 越界必须拒绝");
+        assert_eq!(err.code, SafeErrorCode::InvalidArgument);
+    }
+}

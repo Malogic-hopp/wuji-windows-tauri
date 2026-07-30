@@ -41,6 +41,24 @@ export type FieldError = {
 /**  数据缺口类型（schema `capture_gaps.kind`）。 */
 export type GapKind = "sampling_transition" | "capture_delayed" | "privacy_excluded" | "capture_queue_drop" | "writer_queue_drop" | "capture_paused" | "capture_stopped" | "system_sleep" | "session_locked" | "agent_restart" | "clock_changed" | "capture_error";
 
+/**  Heatmap 单格（09 §8.4）：稀疏返回，强度等级由 Rust 归一化，前端不得重推。 */
+export type HeatmapCellDto = {
+	localDate: string,
+	localHour: number,
+	activeDurationMs: Int64String,
+	idleDurationMs: Int64String,
+	unknownDurationMs: Int64String,
+	intensityLevel: number,
+};
+
+/**  Heatmap 响应：最近 days 天 × 24 小时（09 §8.4；cells 只含时长 > 0 的格子）。 */
+export type HeatmapDto = {
+	today: LocalDate,
+	reportingTimeZoneId: string,
+	days: number,
+	cells: HeatmapCellDto[],
+};
+
 /**  i64 的十进制字符串表示（branded；serde 只接受字符串，避免 JS number 精度问题）。 */
 export type Int64String = string & { readonly __brand: "Int64String" };
 

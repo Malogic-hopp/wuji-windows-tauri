@@ -5,12 +5,14 @@
 
 use std::path::Path;
 
+use chrono::NaiveDate;
 use rusqlite::{Connection, OptionalExtension, params};
 use wuji_core::dto::{
-    AgentStatusDto, AppDto, Int64String, LocalDate, RuntimeId, TimelineCursor, TimelineGapDto,
-    TimelineItem, TimelineItemKind, TimelinePageDto, TimelineSegmentDto, TodayDto, TodayQualityDto,
-    TopAppDto,
+    AgentStatusDto, AppDto, HeatmapCellDto, HeatmapDto, Int64String, LocalDate, RuntimeId,
+    TimelineCursor, TimelineGapDto, TimelineItem, TimelineItemKind, TimelinePageDto,
+    TimelineSegmentDto, TodayDto, TodayQualityDto, TopAppDto,
 };
+use wuji_core::error::SafeErrorCode;
 
 use crate::connection::{open_reader_connection, read_and_verify_schema_meta};
 use crate::error::{Result, StorageError};
@@ -342,6 +344,78 @@ impl Reader {
         })
     }
 
+    /// Heatmap：最近 days 天 × 24 小时聚合（hourly 投影；09 §8.4）。
+    /// cells 稀疏（仅含时长 > 0 的格子）；强度按结果集内最大 active 归一化为 0-4。
+    pub fn heatmap(&self, today: &LocalDate, days: u32) -> Result<HeatmapDto> {
+        // days 不变量由存储层自身维护：QueryService 之外的直接调用同样受约束，
+        // 不产生 days=0 却查询当天的矛盾 DTO。
+        if days == 0 || days > 31 {
+            return Err(StorageError::new(
+                SafeErrorCode::InvalidArgument,
+                "days 必须在 1 到 31 之间",
+            ));
+        }
+        let today_naive = NaiveDate::parse_from_str(today.as_str(), "%Y-%m-%d").map_err(|_| {
+            StorageError::new(
+                SafeErrorCode::InvalidArgument,
+                "日期必须使用 YYYY-MM-DD 格式",
+            )
+        })?;
+        let start = today_naive
+            .checked_sub_days(chrono::Days::new(u64::from(days - 1)))
+            .ok_or_else(|| StorageError::internal("日期越界"))?;
+        let start_str = start.format("%Y-%m-%d").to_string();
+        let today_str = today.as_str().to_string();
+
+        let mut stmt = self.conn.prepare(
+            "SELECT local_date, local_hour,
+                    COALESCE(SUM(active_duration_ms), 0),
+                    COALESCE(SUM(idle_duration_ms), 0),
+                    COALESCE(SUM(unknown_duration_ms), 0)
+             FROM hourly_app_usage
+             WHERE local_date >= ?1 AND local_date <= ?2
+             GROUP BY local_date, local_hour
+             ORDER BY local_date, local_hour",
+        )?;
+        let rows = stmt.query_map(params![start_str, today_str], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?;
+        let mut raw: Vec<(String, u32, i64, i64, i64)> = Vec::new();
+        for row in rows {
+            let (date, hour, active, idle, unknown) = row?;
+            // 逐字段逻辑或判断：极端数据下不做整数加法，避免 i64 相加溢出。
+            if active > 0 || idle > 0 || unknown > 0 {
+                raw.push((date, hour, active, idle, unknown));
+            }
+        }
+
+        let max_active = raw.iter().map(|r| r.2).max().unwrap_or(0);
+        let cells = raw
+            .into_iter()
+            .map(|(date, hour, active, idle, unknown)| HeatmapCellDto {
+                local_date: date,
+                local_hour: hour,
+                active_duration_ms: Int64String(active),
+                idle_duration_ms: Int64String(idle),
+                unknown_duration_ms: Int64String(unknown),
+                intensity_level: heatmap_intensity_level(active, max_active),
+            })
+            .collect();
+
+        Ok(HeatmapDto {
+            today: today.clone(),
+            reporting_time_zone_id: self.meta.reporting_time_zone_id.clone(),
+            days,
+            cells,
+        })
+    }
+
     /// 已记录的最大 settings revision（无记录时为 None）。
     pub fn max_settings_revision(&self) -> Result<Option<i64>> {
         self.conn
@@ -425,6 +499,26 @@ impl Reader {
                 },
             )
             .transpose()
+    }
+}
+
+/// Heatmap 强度 0-4：active 为 0 → 0；按结果集最大 active 归一化，
+/// ≤1/4 → 1、≤1/2 → 2、≤3/4 → 3、其余 → 4（与旧版 HourActivityHeatmapCalculator 分桶一致；
+/// u128 交叉乘比较，避免浮点）。
+fn heatmap_intensity_level(active: i64, max_active: i64) -> u32 {
+    if active <= 0 || max_active <= 0 {
+        return 0;
+    }
+    let a = active as u128;
+    let m = max_active as u128;
+    if a * 4 <= m {
+        1
+    } else if a * 2 <= m {
+        2
+    } else if a * 4 <= m * 3 {
+        3
+    } else {
+        4
     }
 }
 

@@ -400,3 +400,15 @@ async fn query_service_reads_seeded_database() {
 fn short_tag() -> String {
     ulid::Ulid::generate().to_string()[..8].to_string()
 }
+
+#[test]
+fn heatmap_rejects_out_of_range_days() {
+    let channel = test_channel();
+    let service = QueryService::new(&channel).expect("query service");
+    // 校验先于打开数据库：无种子库也必须返回 InvalidArgument。
+    for days in [Some(0_u32), Some(32_u32)] {
+        let err = service.heatmap(days).expect_err("days 越界必须拒绝");
+        assert_eq!(err.code, SafeErrorCode::InvalidArgument);
+    }
+    cleanup(&channel);
+}

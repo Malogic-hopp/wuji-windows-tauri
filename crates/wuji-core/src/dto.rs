@@ -302,6 +302,28 @@ impl TimelineCursor {
     }
 }
 
+/// Heatmap 单格（09 §8.4）：稀疏返回，强度等级由 Rust 归一化，前端不得重推。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapCellDto {
+    pub local_date: String,
+    pub local_hour: u32,
+    pub active_duration_ms: Int64String,
+    pub idle_duration_ms: Int64String,
+    pub unknown_duration_ms: Int64String,
+    pub intensity_level: u32,
+}
+
+/// Heatmap 响应：最近 days 天 × 24 小时（09 §8.4；cells 只含时长 > 0 的格子）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct HeatmapDto {
+    pub today: LocalDate,
+    pub reporting_time_zone_id: String,
+    pub days: u32,
+    pub cells: Vec<HeatmapCellDto>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

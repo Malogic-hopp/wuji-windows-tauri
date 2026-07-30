@@ -13,9 +13,9 @@ pub mod startup_registry;
 mod tray;
 
 use commands::{
-    AppServices, activity_get_timeline, activity_get_today, agent_get_status, agent_process_stop,
-    capture_pause, capture_resume, capture_start, diagnostics_get_summary, settings_get,
-    settings_resync_login_startup, settings_update,
+    AppServices, activity_get_heatmap, activity_get_timeline, activity_get_today, agent_get_status,
+    agent_process_stop, capture_pause, capture_resume, capture_start, diagnostics_get_summary,
+    settings_get, settings_resync_login_startup, settings_update,
 };
 use tauri::Manager as _;
 
@@ -79,6 +79,7 @@ pub fn run() {
             capture_resume,
             activity_get_today,
             activity_get_timeline,
+            activity_get_heatmap,
             settings_get,
             settings_update,
             settings_resync_login_startup,

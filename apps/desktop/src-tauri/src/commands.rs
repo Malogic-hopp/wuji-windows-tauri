@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::Value;
 use tauri::State;
 use wuji_core::domain::{CaptureState, ProcessState};
-use wuji_core::dto::{AgentStatusDto, SettingsDto, TimelinePageDto, TodayDto};
+use wuji_core::dto::{AgentStatusDto, HeatmapDto, SettingsDto, TimelinePageDto, TodayDto};
 use wuji_core::error::{SafeError, SafeErrorCode};
 
 use crate::agent_controller::AgentController;
@@ -143,6 +143,14 @@ pub async fn activity_get_timeline(
     limit: Option<u32>,
 ) -> Result<TimelinePageDto, SafeError> {
     services.query.timeline(&local_date, cursor, limit)
+}
+
+#[tauri::command]
+pub async fn activity_get_heatmap(
+    services: State<'_, AppServices>,
+    days: Option<u32>,
+) -> Result<HeatmapDto, SafeError> {
+    services.query.heatmap(days)
 }
 
 #[tauri::command]
