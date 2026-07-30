@@ -7,6 +7,7 @@ import { useDocumentVisible, usePolling } from '../lib/polling';
 const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
   { to: '/', label: '今日', end: true },
   { to: '/timeline', label: '时间线' },
+  { to: '/heatmap', label: '热力图' },
   { to: '/settings', label: '设置' },
   { to: '/diagnostics', label: '诊断' },
 ];

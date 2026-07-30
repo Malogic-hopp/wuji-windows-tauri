@@ -257,6 +257,128 @@ button {
   border-radius: var(--radius-md);
 }
 
+/* 热力图：24 行（小时 0→23）× N 列（日期），列数由页面经 --heatmap-dates 注入。
+   格子为横向矩形（高 20px、宽随列）；强度 0-4 级为 accent 与 accent-dim 的
+   color-mix 梯度（等级由后端归一化，前端不重推）。 */
+.heatmap-legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-sm);
+}
+
+.heatmap-legend__swatch {
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-sizing: border-box;
+}
+
+.heatmap-level--0 {
+  background: var(--surface-dim);
+}
+
+.heatmap-level--1 {
+  background: color-mix(in srgb, var(--accent) 18%, var(--accent-dim));
+}
+
+.heatmap-level--2 {
+  background: color-mix(in srgb, var(--accent) 38%, var(--accent-dim));
+}
+
+.heatmap-level--3 {
+  background: color-mix(in srgb, var(--accent) 64%, var(--accent-dim));
+}
+
+.heatmap-level--4 {
+  background: var(--accent);
+}
+
+.heatmap-line {
+  display: grid;
+  grid-template-columns: 3em 1fr;
+  gap: var(--space-2);
+  margin-bottom: var(--space-1);
+  align-items: stretch;
+}
+
+.heatmap-line--divider {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: var(--space-1);
+}
+
+.heatmap-time {
+  display: flex;
+  align-items: center;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.heatmap-cols {
+  display: grid;
+  grid-template-columns: repeat(var(--heatmap-dates), 1fr);
+  gap: var(--space-1);
+}
+
+.heatmap-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1.3;
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+}
+
+.heatmap-col--today {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.heatmap-grid__row {
+  display: grid;
+  grid-template-columns: repeat(var(--heatmap-dates), 1fr);
+  gap: var(--space-1);
+}
+
+.heatmap-grid__cell {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    border-color 0.12s ease;
+}
+
+.heatmap-grid__cell:hover {
+  border-color: var(--accent);
+  transform: scale(1.15);
+  z-index: 2;
+}
+
+.heatmap-grid__cell--now {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.heatmap-grid__cell:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .heatmap-grid__cell,
+  .heatmap-grid__cell:hover {
+    transition: none;
+    transform: none;
+  }
+}
+
 .list {
   display: flex;
   flex-direction: column;
@@ -467,5 +589,36 @@ button {
   a,
   .link {
     color: LinkText;
+  }
+
+  /* 热力图五级强度：自定义色在强制配色下会被映射掉，
+     改用系统色保持五级可区分（Canvas < GrayText < LinkText < Highlight < CanvasText）。 */
+  .heatmap-grid__cell,
+  .heatmap-legend__swatch {
+    border: 1px solid CanvasText;
+  }
+
+  .heatmap-level--0 {
+    background: Canvas;
+  }
+
+  .heatmap-level--1 {
+    background: GrayText;
+  }
+
+  .heatmap-level--2 {
+    background: LinkText;
+  }
+
+  .heatmap-level--3 {
+    background: Highlight;
+  }
+
+  .heatmap-level--4 {
+    background: CanvasText;
+  }
+
+  .heatmap-grid__cell--now {
+    outline-color: Highlight;
   }
 }

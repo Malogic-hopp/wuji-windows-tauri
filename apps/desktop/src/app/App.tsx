@@ -2,6 +2,7 @@ import { createHashRouter, RouterProvider } from 'react-router-dom';
 import AppLayout from './AppLayout';
 import TodayPage from '../features/today/TodayPage';
 import TimelinePage from '../features/timeline/TimelinePage';
+import HeatmapPage from '../features/heatmap/HeatmapPage';
 import SettingsPage from '../features/settings/SettingsPage';
 import DiagnosticsPage from '../features/diagnostics/DiagnosticsPage';
 
@@ -12,6 +13,7 @@ const router = createHashRouter([
     children: [
       { index: true, element: <TodayPage /> },
       { path: 'timeline', element: <TimelinePage /> },
+      { path: 'heatmap', element: <HeatmapPage /> },
       { path: 'settings', element: <SettingsPage /> },
       { path: 'diagnostics', element: <DiagnosticsPage /> },
     ],

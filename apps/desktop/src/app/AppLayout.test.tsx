@@ -135,12 +135,13 @@ describe('AppLayout 顶栏', () => {
     expect(invoke).toHaveBeenCalledWith('capture_start', undefined);
   });
 
-  it('导航包含四个页面入口', async () => {
+  it('导航包含五个页面入口', async () => {
     renderLayout();
     await waitFor(() => {
       expect(screen.getByRole('link', { name: '今日' })).toBeInTheDocument();
     });
     expect(screen.getByRole('link', { name: '时间线' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: '热力图' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '设置' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '诊断' })).toBeInTheDocument();
   });
