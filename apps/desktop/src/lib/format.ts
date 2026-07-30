@@ -72,6 +72,30 @@ export function formatDateTime(msText: string, timeZoneId: string): string {
   }).format(new Date(ms));
 }
 
+/** UTC 毫秒 → 指定时区的 (localDate, hour)；非法时间戳返回 null。 */
+export function localDateAndHour(
+  msText: string,
+  timeZoneId: string,
+): { date: string; hour: number } | null {
+  const ms = safeTimestampMs(msText);
+  if (ms === null) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timeZoneId,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? '';
+  const hour = Number(get('hour'));
+  const year = get('year');
+  const month = get('month');
+  const day = get('day');
+  if (Number.isNaN(hour) || year === '' || month === '' || day === '') return null;
+  return { date: `${year}-${month}-${day}`, hour };
+}
+
 /** 时间戳相对年龄（诊断页心跳用）。 */
 export function formatAge(msText: string, nowMs: number): string {
   const ms = safeTimestampMs(msText);

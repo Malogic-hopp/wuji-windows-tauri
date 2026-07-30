@@ -244,6 +244,19 @@ button {
   height: calc(var(--space-6) * 2);
 }
 
+/* 时间线日期导航与小时定位高亮。 */
+.date-nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.list__row--hour-target {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+  border-radius: var(--radius-md);
+}
+
 .list {
   display: flex;
   flex-direction: column;

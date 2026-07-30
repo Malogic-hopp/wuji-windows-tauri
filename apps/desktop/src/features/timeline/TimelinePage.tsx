@@ -1,14 +1,27 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import type { GapKind, TimelineItem } from '../../types/wuji-core';
 import { bridgeClient, toSafeError, type SafeError } from '../../bridge/client';
 import { PageStateView, type PagePhase } from '../../components/PageState';
-import { formatClock, formatDuration } from '../../lib/format';
-import { useDocumentVisible, usePolling } from '../../lib/polling';
+import { formatClock, formatDuration, localDateAndHour } from '../../lib/format';
+import { useDocumentVisible } from '../../lib/polling';
 
 type TimelineModel =
   | { phase: 'loading' }
-  | { phase: 'ready'; items: TimelineItem[]; timeZoneId: string; truncated: boolean }
+  | {
+      phase: 'ready';
+      /** 本数据所属的 localDate：迟到响应与失败保留都以此为准，不得串日。 */
+      localDate: string;
+      items: TimelineItem[];
+      timeZoneId: string;
+      truncated: boolean;
+    }
   | { phase: 'error'; error: SafeError };
+
+interface InFlightRequest {
+  target: string;
+  generation: number;
+}
 
 /** host 单页上限 500（query.rs limit 校验）；UI 不分页，超长一天在此循环取完。 */
 const PAGE_LIMIT = 500;
@@ -17,6 +30,8 @@ const MAX_PAGES = 20;
 const REFRESH_INTERVAL_MS = 5000;
 /** 向下滚动超过该距离后出现「回到顶部」。 */
 const SHOW_TOP_BUTTON_OFFSET_PX = 300;
+/** ?date= 只接受严格 YYYY-MM-DD，其他值视为未指定（今天）。 */
+const DATE_PARAM_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 interface FullDayTimeline {
   items: TimelineItem[];
@@ -47,37 +62,165 @@ async function fetchFullDayTimeline(localDate: string): Promise<FullDayTimeline>
   return { items, timeZoneId, truncated: true };
 }
 
-/** 时间线（09 §10.2）：Segment/Gap 按时间展示，最新在顶部，不显示标题/Context/Focus。 */
+/** ?hour= 解析：0-23 整数，其他值视为未指定。 */
+function parseHourParam(raw: string | null): number | null {
+  if (raw === null || !/^\d{1,2}$/.test(raw)) return null;
+  const hour = Number(raw);
+  return hour >= 0 && hour <= 23 ? hour : null;
+}
+
+/** YYYY-MM-DD 日历日平移（Date.UTC 归一化，跨月/跨年自动进位）。 */
+function shiftLocalDate(date: string, deltaDays: number): string {
+  const ms = Date.UTC(
+    Number(date.slice(0, 4)),
+    Number(date.slice(5, 7)) - 1,
+    Number(date.slice(8, 10)),
+  );
+  return new Date(ms + deltaDays * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * 定位覆盖目标小时的条目（items 为倒序），返回其下标；未命中返回 -1。
+ * sampling_transition 是切换标记，无论是否显示都不得成为小时目标；
+ * 跨午夜条目按当前查看日期裁剪（前一天 23:30 → 当天 00:15 在当天视图只覆盖 0 时）。
+ */
+function findHourTargetIndex(
+  items: TimelineItem[],
+  hour: number,
+  timeZoneId: string,
+  viewDate: string,
+): number {
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    // sampling_transition 是零语义时长的切换标记，即使用户选择显示，也不得
+    // 抢占按小时定位的活动/缺口目标。
+    if (item.kind === 'gap' && item.gapKind === 'sampling_transition') {
+      continue;
+    }
+    const start = localDateAndHour(item.startAtUtcMs, timeZoneId);
+    if (start === null) continue;
+    // 半开区间 [start, end)：end 减 1ms 取小时；进行中的 gap 覆盖到当天末尾。
+    let end = { date: viewDate, hour: 23 };
+    const endText = item.endAtUtcMs;
+    if (endText !== null) {
+      const endMs =
+        BigInt(endText) > BigInt(item.startAtUtcMs)
+          ? (BigInt(endText) - 1n).toString()
+          : item.startAtUtcMs;
+      const parsed = localDateAndHour(endMs, timeZoneId);
+      if (parsed !== null) end = parsed;
+    }
+    if (start.date > viewDate || end.date < viewDate) continue;
+    const startHour = start.date < viewDate ? 0 : start.hour;
+    const endHour = end.date > viewDate ? 23 : end.hour;
+    if (hour >= startHour && hour <= endHour) return index;
+  }
+  return -1;
+}
+
+function isSameInFlightRequest(
+  request: InFlightRequest | null,
+  target: string,
+  generation: number,
+): boolean {
+  return request?.target === target && request.generation === generation;
+}
+
+/** 时间线（09 §10.2）：Segment/Gap 按时间展示，最新在顶部，不显示标题/Context/Focus。
+ *  ?date=YYYY-MM-DD 查看历史日期（静态，不轮询）；?hour=H 定位对应小时的条目。 */
 export default function TimelinePage() {
   const [model, setModel] = useState<TimelineModel>({ phase: 'loading' });
   const [showTransitions, setShowTransitions] = useState(false);
   const [showTopButton, setShowTopButton] = useState(false);
+  const [todayDate, setTodayDate] = useState<string | null>(null);
   const pageRef = useRef<HTMLDivElement>(null);
-  /** 轮询防重入：上一轮未结束跳过本轮，避免慢请求并发、旧结果后完成覆盖新结果。 */
-  const inFlightRef = useRef(false);
+  const listRef = useRef<HTMLUListElement>(null);
+  /** 请求代际：每次发起 +1，迟到响应（代际落后）一律丢弃，不得覆盖新视图。 */
+  const generationRef = useRef(0);
+  /**
+   * 最新进行中的请求身份（'' = 今天视图）。target 负责同目标防重入，
+   * generation 保证 A→B→A 时旧 A 的 finally 不会清除新 A 的登记。
+   */
+  const inFlightRef = useRef<InFlightRequest | null>(null);
+  /** 最近一次成功的 DB reporting 今天（失败分支判断"同视图"用，避免 state 依赖）。 */
+  const todayDateRef = useRef<string | null>(null);
   const visible = useDocumentVisible();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const rawDate = searchParams.get('date');
+  const dateParam = rawDate !== null && DATE_PARAM_RE.test(rawDate) ? rawDate : null;
+  const hourParam = parseHourParam(searchParams.get('hour'));
 
   const refresh = useCallback(async () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
+    const target = dateParam ?? '';
+    if (inFlightRef.current?.target === target) return;
+    const generation = ++generationRef.current;
+    inFlightRef.current = { target, generation };
     try {
       // 日期以数据库 reporting 时区为准（审核 R08），不用浏览器本地日期；
       // 每轮刷新重取日期，跨午夜后自动切到新的一天。
       const today = await bridgeClient.activityGetToday();
-      const { items, timeZoneId, truncated } = await fetchFullDayTimeline(today.localDate);
+      const { items, timeZoneId, truncated } = await fetchFullDayTimeline(
+        dateParam ?? today.localDate,
+      );
+      if (generation !== generationRef.current) return; // 迟到响应丢弃
+      todayDateRef.current = today.localDate;
+      setTodayDate(today.localDate);
       // 后端按时间升序返回；页面倒序展示，最新条目在顶部。
-      setModel({ phase: 'ready', items: items.slice().reverse(), timeZoneId, truncated });
+      setModel({
+        phase: 'ready',
+        localDate: dateParam ?? today.localDate,
+        items: items.slice().reverse(),
+        timeZoneId,
+        truncated,
+      });
     } catch (cause) {
-      // 后台轮询失败保留已展示数据，下一轮自动重试；仅首次加载失败进入错误四态。
+      if (generation !== generationRef.current) return;
+      const error = toSafeError(cause);
+      // 只有同视图（同 localDate）轮询失败才保留旧数据；
+      // 日期变化后的失败进入错误四态，不得新日期标题配旧数据。
+      const requested = dateParam ?? todayDateRef.current;
       setModel((current) =>
-        current.phase === 'ready' ? current : { phase: 'error', error: toSafeError(cause) },
+        current.phase === 'ready' && requested !== null && current.localDate === requested
+          ? current
+          : { phase: 'error', error },
       );
     } finally {
-      inFlightRef.current = false;
+      if (isSameInFlightRequest(inFlightRef.current, target, generation)) {
+        inFlightRef.current = null;
+      }
     }
-  }, []);
+  }, [dateParam]);
 
-  usePolling(refresh, REFRESH_INTERVAL_MS, visible);
+  const isToday = dateParam === null || dateParam === todayDate;
+
+  // 加载入口：挂载、切换日期（refresh 随 dateParam 变更）、页面重新可见时各加载一次。
+  // isToday 不属本 effect 的依赖：?date=今天 在 todayDate 到达后的翻转不得触发二次加载。
+  // setTimeout 延迟首轮：effect 体内不得同步触发 setState（与 usePolling 同一模式）。
+  useEffect(() => {
+    if (!visible) return;
+    const immediate = setTimeout(() => {
+      void refresh();
+    }, 0);
+    return () => {
+      clearTimeout(immediate);
+    };
+  }, [visible, refresh]);
+
+  // 轮询入口：仅「今天」可见视图挂 5 秒 interval；历史日期是静态视图。
+  const savedRefresh = useRef(refresh);
+  useEffect(() => {
+    savedRefresh.current = refresh;
+  }, [refresh]);
+  useEffect(() => {
+    if (!visible || !isToday) return;
+    const timer = setInterval(() => {
+      void savedRefresh.current();
+    }, REFRESH_INTERVAL_MS);
+    return () => {
+      clearInterval(timer);
+    };
+  }, [visible, isToday]);
 
   // 滚动容器是 AppLayout 的 .app-main；页面独立渲染（如测试）时不存在，滚动按钮静默失效。
   const scrollContainer = useCallback(
@@ -108,13 +251,39 @@ export default function TimelinePage() {
     container?.scrollTo({ top: container.scrollHeight, behavior: 'smooth' });
   }, [scrollContainer]);
 
+  const selectDate = useCallback(
+    (next: string | null) => {
+      // 手动切换日期时丢弃小时定位。
+      setSearchParams(next === null ? {} : { date: next });
+    },
+    [setSearchParams],
+  );
+
+  // ?hour= 定位：按当前日期与可见过滤命中条目，加高亮类并滚动到可视区域中部。
+  const hourTargetIndex =
+    model.phase === 'ready' && hourParam !== null
+      ? findHourTargetIndex(
+          model.items,
+          hourParam,
+          model.timeZoneId,
+          model.localDate,
+        )
+      : -1;
+
+  useEffect(() => {
+    if (hourTargetIndex < 0) return;
+    listRef.current
+      ?.querySelector('.list__row--hour-target')
+      ?.scrollIntoView({ block: 'center' });
+  }, [hourTargetIndex]);
+
   const phase: PagePhase =
     model.phase === 'loading'
       ? { kind: 'loading' }
       : model.phase === 'error'
         ? { kind: 'error', error: model.error, onRetry: () => void refresh() }
         : model.items.length === 0
-          ? { kind: 'empty', title: '今天还没有时间线记录', hint: '开始记录后，应用使用片段会按时间显示在这里。' }
+          ? { kind: 'empty', title: '这一天还没有时间线记录', hint: '开始记录后，应用使用片段会按时间显示在这里。' }
           : { kind: 'ready' };
 
   return (
@@ -123,6 +292,39 @@ export default function TimelinePage() {
       <PageStateView phase={phase}>
         {model.phase === 'ready' && (
           <>
+            <div className="date-nav">
+              <button
+                className="button"
+                type="button"
+                onClick={() => { selectDate(shiftLocalDate(model.localDate, -1)); }}
+              >
+                前一天
+              </button>
+              <span className="text-dim">
+                {model.localDate}
+                {isToday ? ' · 今天' : ''}
+              </span>
+              <button
+                className="button"
+                type="button"
+                disabled={isToday}
+                onClick={() => { selectDate(shiftLocalDate(model.localDate, 1)); }}
+              >
+                后一天
+              </button>
+              {!isToday && (
+                <button
+                  className="button"
+                  type="button"
+                  onClick={() => { selectDate(null); }}
+                >
+                  回到今天
+                </button>
+              )}
+            </div>
+            {hourParam !== null && hourTargetIndex >= 0 && (
+              <div className="text-dim">已定位到 {hourParam} 时</div>
+            )}
             <label className="form__checkbox-row text-dim">
               <input
                 type="checkbox"
@@ -136,13 +338,14 @@ export default function TimelinePage() {
                 当天记录条数过多，仅显示部分记录。
               </div>
             )}
-            <ul className="list" aria-label="时间线条目">
-              {model.items.map((item) => (
+            <ul className="list" aria-label="时间线条目" ref={listRef}>
+              {model.items.map((item, index) => (
                 <TimelineRow
                   key={item.kind === 'segment' ? `s-${item.segmentId}` : `g-${item.gapId}`}
                   item={item}
                   timeZoneId={model.timeZoneId}
                   hideTransition={!showTransitions}
+                  highlighted={index === hourTargetIndex}
                 />
               ))}
             </ul>
@@ -179,10 +382,12 @@ function TimelineRow({
   item,
   timeZoneId,
   hideTransition,
+  highlighted,
 }: {
   item: TimelineItem;
   timeZoneId: string;
   hideTransition: boolean;
+  highlighted: boolean;
 }) {
   if (item.kind === 'gap' && item.gapKind === 'sampling_transition') {
     if (hideTransition) return null;
@@ -195,7 +400,7 @@ function TimelineRow({
   }
   if (item.kind === 'segment') {
     return (
-      <li className="list__row">
+      <li className={highlighted ? 'list__row list__row--hour-target' : 'list__row'}>
         <span className={`badge badge--${item.activityState}`}>
           {stateLabel(item.activityState)}
         </span>
@@ -212,7 +417,7 @@ function TimelineRow({
     );
   }
   return (
-    <li className="list__row list__row--gap">
+    <li className={highlighted ? 'list__row list__row--gap list__row--hour-target' : 'list__row list__row--gap'}>
       <span className="badge badge--dim">缺口</span>
       <div className="list__main">
         <div className="list__title">{gapLabel(item.gapKind)}</div>
