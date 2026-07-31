@@ -24,7 +24,7 @@ pub struct AppServices {
     pub controller: AgentController,
 }
 
-/// Diagnostics 摘要（09 §10.4：高级信息默认折叠且路径脱敏）。
+/// Diagnostics 摘要（09 §10.5：高级信息默认折叠且路径脱敏）。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsDto {
@@ -69,7 +69,7 @@ fn offline_status(runtime: &wuji_storage::RuntimeRow) -> Result<AgentStatusDto, 
     Ok(dto)
 }
 
-/// 实时状态优先来自 IPC；Agent 离线时回退到 DB 最后已知快照（09 §10.4）。
+/// 实时状态优先来自 IPC；Agent 离线时回退到 DB 最后已知快照（09 §10.5）。
 #[tauri::command]
 pub async fn agent_get_status(
     services: State<'_, AppServices>,
@@ -149,8 +149,9 @@ pub async fn activity_get_timeline(
 pub async fn activity_get_heatmap(
     services: State<'_, AppServices>,
     days: Option<u32>,
+    week_offset: Option<i32>,
 ) -> Result<HeatmapDto, SafeError> {
-    services.query.heatmap(days)
+    services.query.heatmap(days, week_offset)
 }
 
 #[tauri::command]
@@ -203,7 +204,7 @@ pub async fn diagnostics_get_summary(
     })
 }
 
-/// 路径脱敏（09 §10.4）：用户目录一律以 %LOCALAPPDATA% 表示。
+/// 路径脱敏（09 §10.5）：用户目录一律以 %LOCALAPPDATA% 表示。
 fn mask_local_app_data(path: &str) -> String {
     if let Some(prefix) = std::env::var_os("LOCALAPPDATA") {
         let prefix = prefix.to_string_lossy().to_string();

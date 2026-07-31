@@ -29,8 +29,18 @@ function cell(date: string, hour: number, active: string, level: number): Heatma
   };
 }
 
-function heatmap(cells: HeatmapCellDto[], today = '2026-07-19'): HeatmapDto {
-  return { today, reportingTimeZoneId: 'Asia/Shanghai', days: 7, cells };
+function heatmap(
+  cells: HeatmapCellDto[],
+  today = '2026-07-19',
+  rangeEndLocalDate = today,
+): HeatmapDto {
+  return {
+    today,
+    rangeEndLocalDate,
+    reportingTimeZoneId: 'Asia/Shanghai',
+    days: 7,
+    cells,
+  };
 }
 
 describe('heatmapModel', () => {
@@ -119,8 +129,36 @@ describe('heatmapModel', () => {
     );
     expect(getDefaultFocusPosition(grid, 10)).toEqual({ hourIndex: 10, dateIndex: 6 });
     // 防御路径：轴异常缺少今天列时退到最后一列（正常经 buildGrid 不可达）。
-    const noToday: HeatmapGridData = { dates: ['2026-07-18'], today: '2026-07-19', rows: [] };
+    const noToday: HeatmapGridData = {
+      dates: ['2026-07-18'],
+      today: '2026-07-19',
+      rangeEndLocalDate: '2026-07-18',
+      rows: [],
+    };
     expect(getDefaultFocusPosition(noToday, 25)).toEqual({ hourIndex: 23, dateIndex: 0 });
+  });
+
+  it('历史范围按 rangeEndLocalDate 建轴，today 保持真实今天且默认焦点退到末列', () => {
+    const grid = buildGrid(
+      heatmap(
+        [cell('2026-07-12', 8, '1', 1)],
+        '2026-07-19',
+        '2026-07-12',
+      ),
+    );
+
+    expect(grid.today).toBe('2026-07-19');
+    expect(grid.rangeEndLocalDate).toBe('2026-07-12');
+    expect(grid.dates).toEqual([
+      '2026-07-06',
+      '2026-07-07',
+      '2026-07-08',
+      '2026-07-09',
+      '2026-07-10',
+      '2026-07-11',
+      '2026-07-12',
+    ]);
+    expect(getDefaultFocusPosition(grid, 8)).toEqual({ hourIndex: 8, dateIndex: 6 });
   });
 
   it('方向键边缘收敛不环绕，Home/End 跳行首行尾', () => {

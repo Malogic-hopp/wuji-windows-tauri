@@ -51,8 +51,11 @@ export const bridgeClient = {
   capturePause: () => invoke<AgentStatusDto>('capture_pause'),
   captureResume: () => invoke<AgentStatusDto>('capture_resume'),
   activityGetToday: () => invoke<TodayDto>('activity_get_today'),
-  activityGetHeatmap: (days?: number) =>
-    invoke<HeatmapDto>('activity_get_heatmap', { days: days ?? null }),
+  activityGetHeatmap: (days?: number, weekOffset?: number) =>
+    invoke<HeatmapDto>('activity_get_heatmap', {
+      days: days ?? null,
+      weekOffset: weekOffset === 0 ? null : (weekOffset ?? null),
+    }),
   activityGetTimeline: (localDate: string, cursor?: string, limit?: number) =>
     invoke<TimelinePageDto>('activity_get_timeline', {
       localDate,

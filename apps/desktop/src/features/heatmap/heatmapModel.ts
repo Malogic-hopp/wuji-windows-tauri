@@ -16,6 +16,7 @@ export interface HeatmapGridRow {
 export interface HeatmapGridData {
   readonly dates: ReadonlyArray<string>;
   readonly today: string;
+  readonly rangeEndLocalDate: string;
   readonly rows: ReadonlyArray<HeatmapGridRow>;
 }
 
@@ -63,12 +64,17 @@ export function buildDateAxis(today: string, days: number): string[] {
 
 /** 转置：24 行（小时 0→23 从上到下）、完整日期轴从左到右，缺格补零。 */
 export function buildGrid(heatmap: HeatmapDto): HeatmapGridData {
-  const dates = buildDateAxis(heatmap.today, heatmap.days);
+  const dates = buildDateAxis(heatmap.rangeEndLocalDate, heatmap.days);
   const rows = Array.from({ length: heatmapHourCount }, (_, hour) => ({
     hour,
     cells: dates.map((date) => cellAt(heatmap.cells, date, hour) ?? createZeroCell(date, hour)),
   }));
-  return { dates, today: heatmap.today, rows };
+  return {
+    dates,
+    today: heatmap.today,
+    rangeEndLocalDate: heatmap.rangeEndLocalDate,
+    rows,
+  };
 }
 
 /** 后端强度等级防御性收敛到 0-4，避免异常值击穿样式与文案下标。 */

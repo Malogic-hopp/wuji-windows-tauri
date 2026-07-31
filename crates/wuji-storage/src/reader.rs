@@ -344,15 +344,24 @@ impl Reader {
         })
     }
 
-    /// Heatmap：最近 days 天 × 24 小时聚合（hourly 投影；09 §8.4）。
-    /// cells 稀疏（仅含时长 > 0 的格子）；强度按结果集内最大 active 归一化为 0-4。
-    pub fn heatmap(&self, today: &LocalDate, days: u32) -> Result<HeatmapDto> {
-        // days 不变量由存储层自身维护：QueryService 之外的直接调用同样受约束，
-        // 不产生 days=0 却查询当天的矛盾 DTO。
+    /// Heatmap：以 today 按 week_offset 整周平移后的锚点为终点、最近 days 天 × 24 小时聚合
+    /// （hourly 投影；09 §8.4）。cells 稀疏（仅含时长 > 0 的格子）；
+    /// 强度按结果集内最大 active 归一化为 0-4。DTO 的 today 始终保持真实今天，
+    /// range_end_local_date 承载历史范围终点。
+    pub fn heatmap(&self, today: &LocalDate, days: u32, week_offset: i32) -> Result<HeatmapDto> {
+        // days/week_offset 不变量由存储层自身维护：QueryService 之外的直接调用同样受约束，
+        // 不产生矛盾 DTO；先校验再算术，杜绝大 offset 溢出。
         if days == 0 || days > 31 {
             return Err(StorageError::new(
                 SafeErrorCode::InvalidArgument,
                 "days 必须在 1 到 31 之间",
+            ));
+        }
+        // 只允许查看当前周及最多 520 个历史周，不查询未来周。
+        if !(-520..=0).contains(&week_offset) {
+            return Err(StorageError::new(
+                SafeErrorCode::InvalidArgument,
+                "week_offset 必须在 -520 到 0 之间",
             ));
         }
         let today_naive = NaiveDate::parse_from_str(today.as_str(), "%Y-%m-%d").map_err(|_| {
@@ -361,11 +370,21 @@ impl Reader {
                 "日期必须使用 YYYY-MM-DD 格式",
             )
         })?;
-        let start = today_naive
+        // i64 算术（无 u32 乘法溢出）；历法越界显式报错。
+        let offset_days = i64::from(week_offset) * 7;
+        let anchor = if offset_days < 0 {
+            today_naive.checked_sub_days(chrono::Days::new(offset_days.unsigned_abs()))
+        } else {
+            today_naive.checked_add_days(chrono::Days::new(offset_days as u64))
+        }
+        .ok_or_else(|| {
+            StorageError::new(SafeErrorCode::InvalidArgument, "week_offset 导致日期越界")
+        })?;
+        let start = anchor
             .checked_sub_days(chrono::Days::new(u64::from(days - 1)))
             .ok_or_else(|| StorageError::internal("日期越界"))?;
         let start_str = start.format("%Y-%m-%d").to_string();
-        let today_str = today.as_str().to_string();
+        let anchor_str = anchor.format("%Y-%m-%d").to_string();
 
         let mut stmt = self.conn.prepare(
             "SELECT local_date, local_hour,
@@ -377,7 +396,7 @@ impl Reader {
              GROUP BY local_date, local_hour
              ORDER BY local_date, local_hour",
         )?;
-        let rows = stmt.query_map(params![start_str, today_str], |row| {
+        let rows = stmt.query_map(params![start_str, anchor_str], |row| {
             Ok((
                 row.get::<_, String>(0)?,
                 row.get::<_, u32>(1)?,
@@ -410,6 +429,8 @@ impl Reader {
 
         Ok(HeatmapDto {
             today: today.clone(),
+            range_end_local_date: LocalDate::parse(&anchor_str)
+                .map_err(|e| StorageError::new(e.code, e.message))?,
             reporting_time_zone_id: self.meta.reporting_time_zone_id.clone(),
             days,
             cells,

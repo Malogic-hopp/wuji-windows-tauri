@@ -76,12 +76,24 @@ impl QueryService {
     }
 
     /// `activity_get_heatmap`：最近 days 天 × 24 小时聚合（09 §8.4）。
-    pub fn heatmap(&self, days: Option<u32>) -> Result<HeatmapDto, SafeError> {
+    /// `week_offset` 按整周平移锚点：0（默认）为本周，-1 为上周，依此类推。
+    pub fn heatmap(
+        &self,
+        days: Option<u32>,
+        week_offset: Option<i32>,
+    ) -> Result<HeatmapDto, SafeError> {
         let days = days.unwrap_or(7);
         if days == 0 || days > 31 {
             return Err(SafeError::new(
                 SafeErrorCode::InvalidArgument,
                 "days 必须在 1 到 31 之间",
+            ));
+        }
+        let week_offset = week_offset.unwrap_or(0);
+        if !(-520..=0).contains(&week_offset) {
+            return Err(SafeError::new(
+                SafeErrorCode::InvalidArgument,
+                "week_offset 必须在 -520 到 0 之间",
             ));
         }
         let reader = self.open_reader()?;
@@ -92,10 +104,12 @@ impl QueryService {
         let date_text = local_date_of(&tz, now_utc_ms()).map_err(Self::storage_error)?;
         let date = LocalDate::parse(&date_text)
             .map_err(|_| SafeError::new(SafeErrorCode::InternalSafeError, "本地日期解析失败"))?;
-        reader.heatmap(&date, days).map_err(Self::storage_error)
+        reader
+            .heatmap(&date, days, week_offset)
+            .map_err(Self::storage_error)
     }
 
-    /// Agent 离线时的最后已知 runtime 快照（09 §10.4：不得单独证明 Running）。
+    /// Agent 离线时的最后已知 runtime 快照（09 §10.5：不得单独证明 Running）。
     pub fn latest_runtime(&self) -> Result<Option<wuji_storage::RuntimeRow>, SafeError> {
         let reader = self.open_reader()?;
         reader.latest_runtime().map_err(Self::storage_error)

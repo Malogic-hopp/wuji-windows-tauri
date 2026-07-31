@@ -314,11 +314,14 @@ pub struct HeatmapCellDto {
     pub intensity_level: u32,
 }
 
-/// Heatmap 响应：最近 days 天 × 24 小时（09 §8.4；cells 只含时长 > 0 的格子）。
+/// Heatmap 响应：以 `range_end_local_date` 为范围终点的最近 days 天 × 24 小时。
+/// `today` 始终是查询时 DB reporting 时区下的真实今天，不随历史范围改变；
+/// cells 只含时长 > 0 的格子（09 §8.4）。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct HeatmapDto {
     pub today: LocalDate,
+    pub range_end_local_date: LocalDate,
     pub reporting_time_zone_id: String,
     pub days: u32,
     pub cells: Vec<HeatmapCellDto>,

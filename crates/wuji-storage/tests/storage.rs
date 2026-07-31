@@ -1120,7 +1120,7 @@ fn heatmap_aggregates_hourly_projection_and_normalizes_intensity() {
 
     let reader = Reader::open(&db_path(&dir)).unwrap();
     let today = LocalDate::parse("2026-07-19").unwrap();
-    let heatmap = reader.heatmap(&today, 7).expect("heatmap 查询");
+    let heatmap = reader.heatmap(&today, 7, 0).expect("heatmap 查询");
     assert_eq!(heatmap.days, 7);
     assert_eq!(heatmap.today.as_str(), "2026-07-19");
     assert_eq!(heatmap.cells.len(), 5, "窗口外 2026-07-10 必须被裁剪");
@@ -1162,7 +1162,7 @@ fn heatmap_empty_range_returns_no_cells() {
     let _writer = bootstrap(&dir);
     let reader = Reader::open(&db_path(&dir)).unwrap();
     let today = LocalDate::parse("2026-07-19").unwrap();
-    let heatmap = reader.heatmap(&today, 7).expect("heatmap 查询");
+    let heatmap = reader.heatmap(&today, 7, 0).expect("heatmap 查询");
     assert!(heatmap.cells.is_empty());
 }
 
@@ -1174,7 +1174,134 @@ fn heatmap_rejects_out_of_range_days() {
     let today = LocalDate::parse("2026-07-19").unwrap();
     // days 不变量在 Reader 自身维护，不依赖 QueryService 拦截。
     for days in [0_u32, 32_u32] {
-        let err = reader.heatmap(&today, days).expect_err("days 越界必须拒绝");
+        let err = reader
+            .heatmap(&today, days, 0)
+            .expect_err("days 越界必须拒绝");
         assert_eq!(err.code, SafeErrorCode::InvalidArgument);
     }
+}
+
+#[test]
+fn heatmap_week_offset_shifts_anchor_week() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+    let runtime = RuntimeId::new();
+    let tz = writer.schema_meta().reporting_tz().unwrap();
+    let day = 86_400_000_i64;
+
+    {
+        let tx = writer.transaction().unwrap();
+        tx.insert_runtime(&runtime, T0).unwrap();
+        let code = seed_app(&tx, "code", T0);
+        // 2026-07-19（今天）与 2026-07-10（上上周内）各一段 active。
+        let o1 = insert_obs(
+            &tx,
+            &runtime,
+            1,
+            T0 + day + 600_000,
+            code,
+            ActivityState::Active,
+        );
+        let seg = tx
+            .open_segment(
+                &runtime,
+                0,
+                code,
+                ActivityState::Active,
+                T0 + day + 600_000,
+                o1,
+            )
+            .unwrap();
+        let o2 = insert_obs(
+            &tx,
+            &runtime,
+            2,
+            T0 + day + 1_200_000,
+            code,
+            ActivityState::Active,
+        );
+        tx.update_open_segment(seg, T0 + day + 1_200_000, o2)
+            .unwrap();
+        tx.close_open_segment("app_changed").unwrap();
+
+        let old = T0 - 8 * day;
+        let o3 = match tx.insert_observation(
+            &runtime,
+            3,
+            0,
+            old + 600_000,
+            0,
+            code,
+            ActivityState::Active,
+            CaptureQuality::Normal,
+            0,
+        ) {
+            Ok(ObservationInsert::Inserted(id)) => id,
+            other => panic!("observation 插入失败: {other:?}"),
+        };
+        let seg = tx
+            .open_segment(&runtime, 0, code, ActivityState::Active, old + 600_000, o3)
+            .unwrap();
+        let o4 = match tx.insert_observation(
+            &runtime,
+            4,
+            0,
+            old + 1_200_000,
+            0,
+            code,
+            ActivityState::Active,
+            CaptureQuality::Normal,
+            0,
+        ) {
+            Ok(ObservationInsert::Inserted(id)) => id,
+            other => panic!("observation 插入失败: {other:?}"),
+        };
+        tx.update_open_segment(seg, old + 1_200_000, o4).unwrap();
+        tx.close_open_segment("app_changed").unwrap();
+
+        tx.recompute_hours(&tz, &[T0 + day, old]).unwrap();
+        tx.commit().unwrap();
+    }
+
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = LocalDate::parse("2026-07-19").unwrap();
+
+    // 本周（offset 0）：只有 07-19 的格子。
+    let current = reader.heatmap(&today, 7, 0).expect("heatmap 查询");
+    assert_eq!(current.today.as_str(), "2026-07-19");
+    assert_eq!(current.range_end_local_date.as_str(), "2026-07-19");
+    assert_eq!(current.cells.len(), 1);
+    assert_eq!(current.cells[0].local_date, "2026-07-19");
+
+    // 上一周（offset -1）：锚点 2026-07-12，只有 07-10 的格子。
+    let previous = reader.heatmap(&today, 7, -1).expect("heatmap 查询");
+    assert_eq!(previous.today.as_str(), "2026-07-19");
+    assert_eq!(previous.range_end_local_date.as_str(), "2026-07-12");
+    assert_eq!(previous.cells.len(), 1);
+    assert_eq!(previous.cells[0].local_date, "2026-07-10");
+    assert_eq!(previous.cells[0].active_duration_ms.0, 600_000);
+    assert_eq!(previous.cells[0].intensity_level, 4, "唯一格子即最忙一小时");
+
+    // 上上周（offset -2）：锚点 2026-07-05，两段都不在范围内。
+    let two_weeks = reader.heatmap(&today, 7, -2).expect("heatmap 查询");
+    assert_eq!(two_weeks.today.as_str(), "2026-07-19");
+    assert_eq!(two_weeks.range_end_local_date.as_str(), "2026-07-05");
+    assert!(two_weeks.cells.is_empty());
+}
+
+#[test]
+fn heatmap_rejects_out_of_range_week_offset() {
+    let dir = TempDir::new().unwrap();
+    let _writer = bootstrap(&dir);
+    let reader = Reader::open(&db_path(&dir)).unwrap();
+    let today = LocalDate::parse("2026-07-19").unwrap();
+    // 只允许当前周与最多 520 个历史周；未来周和越界历史周必须拒绝。
+    for offset in [-521_i32, 1_i32, 521_i32] {
+        let err = reader
+            .heatmap(&today, 7, offset)
+            .expect_err("week_offset 越界必须拒绝");
+        assert_eq!(err.code, SafeErrorCode::InvalidArgument);
+    }
+    assert!(reader.heatmap(&today, 7, 0).is_ok());
+    assert!(reader.heatmap(&today, 7, -520).is_ok());
 }

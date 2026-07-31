@@ -402,12 +402,18 @@ fn short_tag() -> String {
 }
 
 #[test]
-fn heatmap_rejects_out_of_range_days() {
+fn heatmap_rejects_out_of_range_days_and_week_offset() {
     let channel = test_channel();
     let service = QueryService::new(&channel).expect("query service");
     // 校验先于打开数据库：无种子库也必须返回 InvalidArgument。
     for days in [Some(0_u32), Some(32_u32)] {
-        let err = service.heatmap(days).expect_err("days 越界必须拒绝");
+        let err = service.heatmap(days, None).expect_err("days 越界必须拒绝");
+        assert_eq!(err.code, SafeErrorCode::InvalidArgument);
+    }
+    for offset in [Some(-521_i32), Some(1_i32), Some(521_i32)] {
+        let err = service
+            .heatmap(None, offset)
+            .expect_err("week_offset 越界必须拒绝");
         assert_eq!(err.code, SafeErrorCode::InvalidArgument);
     }
     cleanup(&channel);
