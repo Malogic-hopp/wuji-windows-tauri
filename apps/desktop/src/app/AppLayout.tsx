@@ -23,7 +23,7 @@ function captureLabel(state: AgentStatusDto['captureState']): string {
   }
 }
 
-/** 顶栏：Agent 状态与控制（09 §10.4、AGENTS UI 规则：状态只在顶栏）。 */
+/** 顶栏：Agent 状态与控制（09 §10.5、AGENTS UI 规则：状态只在顶栏）。 */
 export default function AppLayout() {
   const [status, setStatus] = useState<AgentStatusDto | null>(null);
   const [busy, setBusy] = useState(false);

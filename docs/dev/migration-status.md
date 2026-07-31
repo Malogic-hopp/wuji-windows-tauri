@@ -2,8 +2,8 @@
 
 状态：实施状态记录（不定义设计）
 基线日期：2026-07-18
-最近更新：2026-07-30（Rebuild-only 仓库转换按 ADR-003 正式记录；根目录入口、基线路径与生命周期语义对齐）
-本次核对方式：仓库结构与源码检查 + 当前未提交根 workspace `fmt`/`check`/`clippy`/`cargo test --workspace` 实跑；2026-07-22 的旧 .NET 与 soak 结果仅保留为历史证据，不代表覆盖当前未提交工作区
+最近更新：2026-07-31（Heatmap 周导航、防串周语义与 v0.1 日常功能演进纪律对齐）
+本次核对方式：仓库结构与源码检查 + 本轮提交前根 workspace `fmt`/`check`/`clippy`/`cargo test --workspace` 实跑；2026-07-22 的旧 .NET 与 soak 结果仅保留为历史证据，不代表覆盖本轮工作区
 当前实施依据：[09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)（含 §16 审核整改增补合同）
 审核报告：[Rebuild-v0.1-代码与验收审核报告.md](./Rebuild-v0.1-代码与验收审核报告.md)
 长期目标依据：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -51,13 +51,13 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 
 | 能力/边界 | 当前状态 | 当前证据 | 目标 | 主要差距 | 下一门禁 |
 |---|---|---|---|---|---|
-| v0.1 实施基线 | Design only | [09](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)（Draft + §16 增补）定义范围、运行/算法/协议合同、阶段和验收；[DDL](../../crates/wuji-storage/schema/schema.sql) 可执行且已内嵌 | dev-only bridge-free React/Tauri/Rust Agent/SQLite 链路 | 合同 Draft 的正式接受留待产品评审 | 产品评审接受 |
+| v0.1 实施基线 | Design only | [09](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)（Draft + §1.1 演进纪律 + §16 增补）定义范围、运行/算法/协议合同、阶段和验收；Heatmap 固定命令、DTO 与 UI 合同已同步；[DDL](../../crates/wuji-storage/schema/schema.sql) 可执行且已内嵌 | dev-only bridge-free React/Tauri/Rust Agent/SQLite 链路 | 合同 Draft 的正式接受留待产品评审 | 产品评审接受 |
 | 产品语义与指标 | Design only | [01](./01-产品语义与指标词典.md) 为 Draft | Accepted 的 Observation/Activity/Context/Work/质量/时区词典 | 产品接受、延期项和候选阈值尚未签署 | G-ADR / ALG golden review |
 | 领域模型 | Design only | [02](./02-行为分析领域模型.md) 为 Draft | 事实、派生、Generation、Result Set、Snapshot 不变量可执行 | 尚无 Rust 类型与属性测试 | DOM-001–005 |
 | 目标架构 ADR | Blocked | [ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 状态 Proposed | Accepted 并取代当前过渡 ADR 的最终架构 | 依赖规范尚未形成 Accepted 基线 | G-ADR |
-| React 19 UI 基座 | Implemented | `apps/desktop`：Today/Timeline/Heatmap/Settings/Diagnostics 五页 + 四态 + 顶栏 Agent 控制 + 令牌主题 + forced-colors 适配；56 项 Vitest 通过；Timeline 日期使用 DB reporting 时区（R08），今天 5s 轮询整体重取（UI 不分页，最新在顶部，含到底/到顶悬浮按钮；超长一天明确截断提示；请求 generation 防串日 + 同目标防重入），支持 ?date/?hour 定位与日期导航、历史日期静态不轮询、小时定位排除切换标记并按查看日期裁剪；Heatmap 7 天 × 24 小时固定日期轴读 hourly 投影、强度 Rust 归一化 0-4（days 校验下沉 Reader）、格子 Enter/Space/点击跳转时间线对应日期小时（UI-005）、HC 五级系统色可区分；Diagnostics 时间基准随轮询更新（R09） | Today/Timeline/Settings/Diagnostics 使用 v0.1 DTO | 手工矩阵（尺寸/DPI/HC/键盘/读屏）Pending | 手工矩阵 |
+| React 19 UI 基座 | Implemented | `apps/desktop`：Today/Timeline/Heatmap/Settings/Diagnostics 五页 + 四态 + 顶栏 Agent 控制 + 令牌主题 + forced-colors 适配；71 项 Vitest 通过；Timeline 日期使用 DB reporting 时区（R08），今天 5s 轮询整体重取（UI 不分页，最新在顶部，含到底/到顶悬浮按钮；超长一天明确截断提示；请求 generation 防串日 + 同目标防重入），支持 ?date/?hour 定位与日期导航、历史日期静态不轮询、小时定位排除切换标记并按查看日期裁剪；Heatmap 7 天 × 24 小时固定日期轴读 hourly 投影、强度 Rust 归一化 0-4（days 校验下沉 Reader）、?week= 周翻页（真实 `today` 与 `rangeEndLocalDate` 分离，`weekOffset` 仅允许 -520..0 并下沉 Reader，非法/未来 URL 规范化回本周，历史周静态不轮询且不伪装今天/现在标记），请求以 target + generation 防 A→B→A 串周，格子 Enter/Space/点击跳转时间线对应日期小时（UI-005），HC 五级系统色可区分；Diagnostics 时间基准随轮询更新（R09） | Today/Timeline/Heatmap/Settings/Diagnostics 使用 09 v0.1 DTO；09 §8.3/§8.4/§10 已同步 | 手工矩阵（尺寸/DPI/HC/键盘/读屏）Pending | 手工矩阵 |
 | Tauri 2 Desktop shell | Implemented | `apps/desktop/src-tauri`：IPC client（副作用 timeout 后同 ID 重试）、Query、Settings CAS（损坏文件上报、resync appliedRevision 取自 DB MAX）、detached Agent 控制、托盘、单实例、13 语义命令、集成测试 | 直接使用 Rust Query/IPC/Settings/Process Controller | — | V01-8 重验收 |
-| Bridge-free Tauri | Verified（当前工作区 package） | 2026-07-30 从新根目录实跑 dev 包脚本：固定 Agent 布局、包内无 Bridge/.NET/旧合同、Agent 二进制 byte 级一致、manifest 含版本+SHA-256、安装版 Desktop 经 package-smoke test channel 调用同一 AgentController 拉起安装目录 Agent；普通 Desktop 启动不自动拉起 Agent；旧 prod/dev 数据库 checksum 前后不变 | 安装包与运行时不含 `.NET Bridge` | package 已通过；8h soak 与人工矩阵仍待重跑 | V01-8 收口 |
+| Bridge-free Tauri | Verified（2026-07-30 package 基线） | 2026-07-30 从新根目录实跑 dev 包脚本：固定 Agent 布局、包内无 Bridge/.NET/旧合同、Agent 二进制 byte 级一致、manifest 含版本+SHA-256、安装版 Desktop 经 package-smoke test channel 调用同一 AgentController 拉起安装目录 Agent；普通 Desktop 启动不自动拉起 Agent；旧 prod/dev 数据库 checksum 前后不变。本轮未改变目录、bundling、sidecar 或 release path，未重跑 package | 安装包与运行时不含 `.NET Bridge` | package 基线已通过；8h soak 与人工矩阵仍待重跑 | V01-8 收口 |
 | Rust workspace / `wuji-core` | Verified | `crates/wuji-core`：schema 对齐领域枚举、Settings 默认值/验证/digest、21 个稳定错误码（含 `as_str`/`from_code`）、固定命名空间、DTO + specta branded TS drift 门禁（Int64String 品牌 + crate/desktop 双副本一致性，R07）；`cargo test -p wuji-core` 通过 | 纯领域、Settings、Privacy、Analytics、Protocol、Error | 长期 Privacy/Analytics 部分待后续版本 | 持续回归 |
 | Rust `wuji-storage` | Verified | `crates/wuji-storage`：唯一内嵌 DDL（含 `settings_revisions.content_json` last-known-good）、bootstrap 自检、Writer 行操作、触及桶重算、只读 Reader、Today SUM 聚合与 drop event_count 修正（R02）、checkpoint busy 结果行判定（§16.4）；21 项测试通过（含 21+ 应用/跨午夜/DST/幂等/恢复） | v0.1 Single Writer、只读 Query、空库 bootstrap 和最小 projection | — | 持续回归 |
 | Rust Agent binary | Partial | `apps/agent`：双 lane Writer、可靠 Barrier/唯一 Coordinator、Settings 恢复/effectivity、CommandServer、心跳、MaintenanceLite、reconciler、单实例与启动恢复已接入；阶段 4.5 已加入 Lock/Sleep 双 suppression、Unlock/Resume 恢复、monitor fault、事务式事件链启动与有界 shutdown | 独立 Rust Agent 长期进程 | 阶段 4.5 自动化补修等待复审；真实 Lock/Sleep 人工验证 Pending | 阶段 4.5 复审 + 人工门禁 |
@@ -107,11 +107,12 @@ ADR-002 仍为 Proposed，01–08 仍为 Draft；Fact Boundary、Generation/Resu
 
 | 验证项 | 仓库能力 | 本基线结果 | 说明 |
 |---|---|---|---|
-| Rebuild `cargo fmt --all -- --check` | 命令存在 | Passed（2026-07-29，阶段 4.5 第六轮补修） | 当前未提交工作区通过 |
-| Rebuild `cargo clippy --workspace --all-targets -- -D warnings` | 命令存在 | Passed（2026-07-29，阶段 4.5 第六轮补修） | 0 Clippy warning |
-| Rebuild `cargo test --workspace` | 命令存在 | Passed（2026-07-29，297/297） | 获准环境全量通过；Agent E2E 8/8，测试前后 Agent 残留 0；真实 Lock/Sleep 仍 Pending |
-| Rebuild Desktop `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` | package scripts 存在 | Passed（2026-07-22，Vitest 22 项、零警告、dist 产出） | 含 R07 品牌夹具、R08 时区、R09 诊断、R10 切换间隔无障碍断言 |
-| Rebuild dev package（整改后脚本） | `scripts/build_dev_package.py` | Passed（2026-07-30，当前暂存工作区） | release、React/Tauri/NSIS、静默安装、固定布局、禁资产、Agent byte 一致、安装版启动、manifest、旧 prod/dev 数据库 checksum stable 全部通过；生成产物位于被忽略的 `target/` 与 `dist/`，不提交二进制 |
+| Rebuild `cargo fmt --all -- --check` | 命令存在 | Passed（2026-07-31，本轮提交前工作区） | 本轮提交前工作区通过 |
+| Rebuild `cargo check --workspace --all-targets` | 命令存在 | Passed（2026-07-31，本轮提交前工作区） | 0 errors |
+| Rebuild `cargo clippy --workspace --all-targets -- -D warnings` | 命令存在 | Passed（2026-07-31，本轮提交前工作区） | 0 Clippy warning |
+| Rebuild `cargo test --workspace` | 命令存在 | Passed（2026-07-31，308/308） | 普通用户权限全量通过；Agent E2E 8/8，测试前后 Agent 残留 0；受限环境不能写 `%LOCALAPPDATA%`，不作为代码失败；真实 Lock/Sleep 仍 Pending |
+| Rebuild Desktop `pnpm typecheck` / `pnpm lint` / `pnpm test` / `pnpm build` | package scripts 存在 | Passed（2026-07-31，Vitest 71/71、零警告、dist 产出） | 含 R07 品牌夹具、R08 时区、R09 诊断、R10 切换间隔、Timeline 防串日，以及 Heatmap 范围锚点/周边界/A→B→A 防串周断言 |
+| Rebuild dev package（整改后脚本） | `scripts/build_dev_package.py` | Passed（2026-07-30，目录整理与打包路径基线） | release、React/Tauri/NSIS、静默安装、固定布局、禁资产、Agent byte 一致、安装版启动、manifest、旧 prod/dev 数据库 checksum stable 全部通过；本轮无目录/bundling/sidecar/release-path 改动，未重跑 package；生成产物位于被忽略的 `target/` 与 `dist/`，不提交二进制 |
 | 8 小时 soak（整改后脚本） | `scripts/soak.py` | Historical Passed（2026-07-22）；当前工作区 NotRun | 历史 verdict=pass 仅作脚本/旧基线证据；4.7 对最终代码重新执行 |
 | 09 §12.2 手工门禁（锁屏/休眠、30 分钟对照、尺寸/DPI/主题/键盘/读屏、离线历史显示） | 手工流程 | Pending | 只能人工执行；未执行完不得声称 v0.1 验收完成 |
 | 旧 .NET `dotnet restore` / `build` / `test` | 已移除（2026-07-29） | Historical Passed（2026-07-22：restore 成功；build 0 错误 0 警告；test 失败 0） | 回归入口随旧系统移除失效；结果仅作历史证据 |

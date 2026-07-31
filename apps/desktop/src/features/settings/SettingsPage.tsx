@@ -20,7 +20,7 @@ type SaveOutcome =
   | { kind: 'warn'; message: string }
   | { kind: 'error'; error: SafeError };
 
-/** 设置（09 §10.3）：六个字段；保存成功与 Agent 已应用分开显示。 */
+/** 设置（09 §10.4）：六个字段；保存成功与 Agent 已应用分开显示。 */
 export default function SettingsPage() {
   const [model, setModel] = useState<SettingsModel>({ phase: 'loading' });
   const [outcome, setOutcome] = useState<SaveOutcome>({ kind: 'none' });

@@ -10,7 +10,7 @@ type DiagnosticsModel =
   | { phase: 'ready'; dto: DiagnosticsDto; atMs: number }
   | { phase: 'error'; error: SafeError };
 
-/** 诊断（09 §10.4）：普通语言健康状态在前，高级信息默认折叠且路径脱敏。 */
+/** 诊断（09 §10.5）：普通语言健康状态在前，高级信息默认折叠且路径脱敏。 */
 export default function DiagnosticsPage() {
   const [model, setModel] = useState<DiagnosticsModel>({ phase: 'loading' });
   const [resyncResult, setResyncResult] = useState<string | null>(null);

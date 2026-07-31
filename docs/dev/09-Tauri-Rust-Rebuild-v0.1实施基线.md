@@ -2,7 +2,7 @@
 
 状态：Draft；v0.1 合同与 §16 增补为实施对齐点，实现/验收结论以 migration-status 与证据包为准；Draft 的正式接受留待产品评审
 版本：v0.1
-最后更新：2026-07-30（Rebuild-only 仓库转换与 ADR-003 例外对齐）
+最后更新：2026-07-31（Heatmap 周导航合同与日常功能演进纪律）
 目标技术栈：React 19 + TypeScript + Tauri 2 + Rust Agent/Core + SQLite
 交付属性：dev-only 工程里程碑，不是用户生产发布
 长期规划：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
@@ -14,6 +14,12 @@
 本文是 Rebuild v0.1 的唯一实施范围入口，回答“第一版现在具体做什么、做到什么程度算完成”。
 
 01–08、ADR-002 和三轮审核回应保留为长期架构与风险规划，不要求 v0.1 一次实现其中所有机制。本文没有否定长期设计，而是选择一个可运行、可验证、可替换 `.NET Bridge` 的最小子集。
+
+### 1.1 合同演进纪律
+
+v0.1 已进入日常使用后的增量功能可以在产品负责人明确提出并确认范围后纳入本文，但实现代码或 `migration-status.md` 不能自行扩大合同。新增或改变用户功能时，同一逻辑改动必须同步更新本文相关的固定 Tauri command 白名单（§8.3）、输入与 DTO 语义（§8.4）、UI 行为（§10）、退出条件（§11）及确定性测试；未完成这些同步的功能不视为合同内完成。
+
+`migration-status.md` 只记录实际实现和验证状态，不授权功能、协议或架构例外。若需求改变 Agent 单写、Tauri 只读、固定命令白名单、单一 Coordinator/Barrier 路径、数据目录或进程身份等架构边界，仍须先形成并接受 ADR；普通页面、只读查询和交互增强不得借“日常迭代”绕开这些边界。
 
 v0.1 的首要任务是完成技术栈和运行链路替换：
 
@@ -34,7 +40,7 @@ v0.1 不以完整行为分析、旧数据迁移或生产退役为完成条件。
 - 独立 Rust Agent 能采集前台 App 和用户 idle，经过隐私过滤后写入全新 SQLite；
 - Agent 是行为数据库唯一写入者；Tauri 对行为数据库严格只读，同时负责设置文件写入、Agent 进程管理和经 IPC 发出的运行控制；
 - 能生成 App Activity Segment 和 Work Block，而不是只展示离散采样；
-- Today、Timeline、Settings、Diagnostics 四条最小用户路径可用；
+- Today、Timeline、Heatmap、Settings、Diagnostics 五条最小用户路径可用；
 - Desktop 退出不停止 Agent；“暂停记录”只暂停 Capture、Agent 继续在线；“停止 Agent”先提交 CaptureStop 边界，再请求 Agent graceful shutdown；
 - Rebuild 与旧系统使用完全不同的进程、Pipe、mutex、数据目录和数据库；
 - 旧 WPF/C# 源码按 ADR-003 从当前工作树移除，通过远程可达冻结提交恢复；用户机器上的旧安装与旧数据库保持原样；
@@ -55,7 +61,7 @@ v0.1 不以完整行为分析、旧数据迁移或生产退役为完成条件。
 | SQLite | 全新空库初始化、WAL、外键、单写、只读查询、最小小时/日读模型 |
 | IPC | 同用户 dev channel Named Pipe、固定命令、长度限制、request ID、超时 |
 | Settings | Tauri 原子写 JSON；Agent 完整 reload；采样、Idle、Work 和排除 App 设置 |
-| UI | Today、Timeline、Settings、Diagnostics；Loading/Empty/Ready/Error |
+| UI | Today、Timeline、Heatmap、Settings、Diagnostics；Loading/Empty/Ready/Error |
 | 诊断 | Agent 状态、最后采集、最后写入、安全错误码、队列深度、drop count |
 
 ### 3.2 明确延期
@@ -426,6 +432,7 @@ capture_resume
 agent_process_stop
 activity_get_today
 activity_get_timeline
+activity_get_heatmap
 settings_get
 settings_update
 settings_resync_login_startup
@@ -434,7 +441,7 @@ diagnostics_get_summary
 
 React 不直接连接 Pipe、不查询 SQLite、不传入 channel/path，也不计算时长和聚合。`capture_start` 在 Tauri 内先确保固定位置的 Agent 在线，再发送 Capture start；因此 Agent 离线时同一“启动并记录”动作会重新拉起 Agent 并开始采集。`agent_process_stop` 在 Tauri 内执行 `capture_stop` 边界提交、`agent_shutdown`、旧 Pipe 断开和 runtime stopped 确认；它不是 `capture_stop` 的别名。`settings_resync_login_startup` 对应 9.2 的 Diagnostics 修复动作：Tauri 按当前 Settings 重放 Run Key 同步流程，返回最终一致状态，不接受任何参数。
 
-v0.1 的实时刷新使用安全低频轮询（Today 约 5 秒、Diagnostics 约 2 秒，页面隐藏时停止），不实现事件推送。轮询失败只影响实时性，不影响历史查询。
+v0.1 的实时刷新使用安全低频轮询（Today 约 5 秒、当前周 Heatmap 约 15 秒、Diagnostics 约 2 秒，页面隐藏时停止），不实现事件推送。Heatmap 历史周是静态视图，不启动轮询。轮询失败只影响实时性，不影响历史查询。
 
 ### 8.4 Query DTO 与 TypeScript 表示
 
@@ -446,8 +453,9 @@ Rust DTO 以 `serde` 类型为唯一来源，通过 `specta`/`tauri-specta` 在 
 - ULID 和 opaque cursor 使用 string；local date 使用严格 `YYYY-MM-DD`；枚举使用小写稳定字符串；
 - `activity_get_today` 无任意日期参数，以 DB reporting time zone 的当前 local date 查询；
 - `activity_get_timeline` 输入 `{ localDate, cursor?, limit? }`，`limit` 默认 200、最大 500，只允许单个 local day；
+- `activity_get_heatmap` 输入 `{ days?, weekOffset? }`，默认分别为 `7` 和 `0`；`days` 只允许 `1..=31`，`weekOffset` 只允许 `-520..=0`（当前周和最多 520 个历史周，不查询未来周）；查询范围终点为 reporting time zone 下真实 `today + weekOffset × 7 天`，只读取 hourly projection，不扫描 Observation；
 - cursor 是由 `(start_at_utc_ms, item_kind, id)` 编码的 opaque base64url 字符串，`item_kind ∈ {segment, gap}`、`id` 为 `segment_id` 或 `gap_id`；排序固定为 `(start_at_utc_ms, item_kind, id)` 升序（segment 先于 gap），保证 Segment 与 Gap 混合序列的分页可重现；
-- Today 返回 `activeDurationMs`、current/last app、longest Work Block、block count、Top Apps、raw switch count 和 quality summary；Timeline 返回 Segment/Gaps 两种 discriminated item 及 `nextCursor`，返回全部 gap kind（含 `sampling_transition`），UI 可以默认折叠该 kind 但不得改变其数据语义；
+- Today 返回 `activeDurationMs`、current/last app、longest Work Block、block count、Top Apps、raw switch count 和 quality summary；Timeline 返回 Segment/Gaps 两种 discriminated item 及 `nextCursor`，返回全部 gap kind（含 `sampling_transition`），UI 可以默认折叠该 kind 但不得改变其数据语义；Heatmap 稀疏返回时长大于 0 的小时格，强度等级由 Rust 在结果集内归一化为 `0..=4`，React 不得重算；
 - Query 单次最多返回 500 items、Top Apps 最多 20；超限返回稳定参数错误，不静默截断日期范围。
 
 最小 DTO 字段冻结如下；`Int64String` 均遵循上述十进制字符串规则：
@@ -484,6 +492,17 @@ TimelineGapDto {
 TimelinePageDto {
   localDate, reportingTimeZoneId,
   items: (TimelineSegmentDto | TimelineGapDto)[], nextCursor?
+}
+
+HeatmapCellDto {
+  localDate, localHour,
+  activeDurationMs, idleDurationMs, unknownDurationMs,
+  intensityLevel
+}
+
+HeatmapDto {
+  today, rangeEndLocalDate, reportingTimeZoneId,
+  days, cells: HeatmapCellDto[]
 }
 
 SettingsDto {
@@ -558,13 +577,21 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 - 显示 gap、Pause 和 Stop 边界；
 - 不显示窗口标题、Context、Interruption 或 Focus。
 
-### 10.3 Settings
+### 10.3 Heatmap
+
+- 固定日期轴的 `days × 24` 小时网格，缺失的稀疏格补零展示；
+- 支持本周至前 520 周的周导航，非法、未来或越界 URL 参数规范化回本周；
+- `today` 始终表示 DB reporting time zone 下真实今天，`rangeEndLocalDate` 表示查询范围终点；历史周不得伪装“今天”或“现在”；
+- 当前周约 15 秒低频轮询，历史周不轮询；切周请求使用目标与 generation 身份隔离，迟到响应不得串周；
+- 格子点击、Enter 或 Space 跳转 Timeline 对应日期与小时，键盘焦点遵循 roving tabindex。
+
+### 10.4 Settings
 
 - v0.1 六个设置字段；
 - 保存成功与 Agent 已应用分开显示；
 - 字段错误使用中文安全提示。
 
-### 10.4 Diagnostics
+### 10.5 Diagnostics
 
 - Agent 连接/采集状态；
 - 最后 heartbeat、capture、write；
@@ -573,7 +600,7 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 
 离线判定：`status_get` 失败且数据库 `heartbeat_at_utc_ms` 距今超过 `max(3 × heartbeat 间隔, 15 秒)` 时，显示“无法连接 Agent，最后记录于 …”；仅有 SQLite heartbeat 不得显示实时 Running（口径沿用长期合同 06 §10）。
 
-四个页面统一使用 `Loading | Empty | Ready | Error`。普通 UI 不出现“任务切换”“上下文”“专注”或尚未实现的长期指标。
+五个页面统一使用 `Loading | Empty | Ready | Error`。普通 UI 不出现“任务切换”“上下文”“专注”或尚未实现的长期指标。
 
 ## 11. 实施顺序
 
@@ -587,7 +614,7 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 | V01-4 Activity | 精确 Activity/Work 状态机、gap 和小时/日重算 | switch/idle/crash/DST 固定输入黄金样本守恒通过 |
 | V01-5 Agent | 双 lane Writer、CommandServer、heartbeat、单实例和恢复 | drop epoch、disk fault、Desktop exit、Agent restart、Capture 状态机通过 |
 | V01-6 Desktop | Tauri Query/IPC client、CAS Settings、detached Agent、新 Desktop 不携带 bridge 代码与 BridgeSupervisor（旧树按 ADR-003 在冻结提交保留） | handshake/DTO/版本错误；React→Tauri→Rust Agent/SQLite 端到端通过 |
-| V01-7 UI | Today、Timeline、Settings、Diagnostics | 四态、键盘和基础主题验收通过 |
+| V01-7 UI | Today、Timeline、Heatmap、Settings、Diagnostics | 五页四态、键盘和基础主题验收通过；Heatmap 周边界、稀疏日期轴与请求防串周测试通过 |
 | V01-8 Dev package | 启用 bundle、固定 Agent 布局、dev manifest、soak、旧系统隔离 | 包内无 Bridge/.NET；8 小时 soak；旧库 checksum 不变 |
 
 替代链路验证期间不得先删除旧 C#/WPF/Bridge。该约束在 2026-07-22 dev package 与 soak 已形成历史通过证据后满足；2026-07-29 产品负责人通过 ADR-003 批准从当前工作树移除旧源码。此次移除不关闭当前工作区的 V01-8 重验收，也不表示旧安装、旧数据或生产系统已经退役。
