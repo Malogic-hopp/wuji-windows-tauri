@@ -208,6 +208,27 @@ describe('Timeline 页面', () => {
     });
   });
 
+  it('空数据日期仍显示日期导航，可继续翻页', async () => {
+    mockRoutes([pageFixture([], null)]);
+    renderPage('/?date=2026-07-17');
+    await waitFor(() => {
+      expect(screen.getByText('这一天还没有时间线记录')).toBeInTheDocument();
+    });
+    // 空态在四态内，日期导航在四态外：空数据日期仍可前后翻页。
+    expect(screen.getByText('2026-07-17')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '前一天' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: '回到今天' })).toBeInTheDocument();
+
+    screen.getByRole('button', { name: '后一天' }).click();
+    await waitFor(() => {
+      expect(invoke).toHaveBeenLastCalledWith('activity_get_timeline', {
+        localDate: '2026-07-18',
+        cursor: null,
+        limit: 500,
+      });
+    });
+  });
+
   it('每 5 秒自动整体重取；轮询失败保留已展示数据', async () => {
     vi.useFakeTimers();
     try {

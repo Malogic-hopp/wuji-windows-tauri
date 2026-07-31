@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import type { GapKind, TimelineItem } from '../../types/wuji-core';
 import { bridgeClient, toSafeError, type SafeError } from '../../bridge/client';
 import { PageStateView, type PagePhase } from '../../components/PageState';
-import { formatClock, formatDuration, localDateAndHour } from '../../lib/format';
+import { formatClock, formatDuration, localDateAndHour, shiftLocalDate } from '../../lib/format';
 import { useDocumentVisible } from '../../lib/polling';
 
 type TimelineModel =
@@ -67,16 +67,6 @@ function parseHourParam(raw: string | null): number | null {
   if (raw === null || !/^\d{1,2}$/.test(raw)) return null;
   const hour = Number(raw);
   return hour >= 0 && hour <= 23 ? hour : null;
-}
-
-/** YYYY-MM-DD 日历日平移（Date.UTC 归一化，跨月/跨年自动进位）。 */
-function shiftLocalDate(date: string, deltaDays: number): string {
-  const ms = Date.UTC(
-    Number(date.slice(0, 4)),
-    Number(date.slice(5, 7)) - 1,
-    Number(date.slice(8, 10)),
-  );
-  return new Date(ms + deltaDays * 86_400_000).toISOString().slice(0, 10);
 }
 
 /**
@@ -289,39 +279,42 @@ export default function TimelinePage() {
   return (
     <div className="page" ref={pageRef}>
       <h1 className="page__title">时间线</h1>
+      {/* 日期导航在四态之外：空数据日期同样要能继续翻页。 */}
+      {model.phase === 'ready' && (
+        <div className="date-nav">
+          <button
+            className="button"
+            type="button"
+            onClick={() => { selectDate(shiftLocalDate(model.localDate, -1)); }}
+          >
+            前一天
+          </button>
+          <span className="text-dim">
+            {model.localDate}
+            {isToday ? ' · 今天' : ''}
+          </span>
+          <button
+            className="button"
+            type="button"
+            disabled={isToday}
+            onClick={() => { selectDate(shiftLocalDate(model.localDate, 1)); }}
+          >
+            后一天
+          </button>
+          {!isToday && (
+            <button
+              className="button"
+              type="button"
+              onClick={() => { selectDate(null); }}
+            >
+              回到今天
+            </button>
+          )}
+        </div>
+      )}
       <PageStateView phase={phase}>
         {model.phase === 'ready' && (
           <>
-            <div className="date-nav">
-              <button
-                className="button"
-                type="button"
-                onClick={() => { selectDate(shiftLocalDate(model.localDate, -1)); }}
-              >
-                前一天
-              </button>
-              <span className="text-dim">
-                {model.localDate}
-                {isToday ? ' · 今天' : ''}
-              </span>
-              <button
-                className="button"
-                type="button"
-                disabled={isToday}
-                onClick={() => { selectDate(shiftLocalDate(model.localDate, 1)); }}
-              >
-                后一天
-              </button>
-              {!isToday && (
-                <button
-                  className="button"
-                  type="button"
-                  onClick={() => { selectDate(null); }}
-                >
-                  回到今天
-                </button>
-              )}
-            </div>
             {hourParam !== null && hourTargetIndex >= 0 && (
               <div className="text-dim">已定位到 {hourParam} 时</div>
             )}

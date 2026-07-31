@@ -72,6 +72,16 @@ export function formatDateTime(msText: string, timeZoneId: string): string {
   }).format(new Date(ms));
 }
 
+/** YYYY-MM-DD 日历日平移（Date.UTC 归一化，跨月/跨年自动进位）。 */
+export function shiftLocalDate(date: string, deltaDays: number): string {
+  const ms = Date.UTC(
+    Number(date.slice(0, 4)),
+    Number(date.slice(5, 7)) - 1,
+    Number(date.slice(8, 10)),
+  );
+  return new Date(ms + deltaDays * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** UTC 毫秒 → 指定时区的 (localDate, hour)；非法时间戳返回 null。 */
 export function localDateAndHour(
   msText: string,
