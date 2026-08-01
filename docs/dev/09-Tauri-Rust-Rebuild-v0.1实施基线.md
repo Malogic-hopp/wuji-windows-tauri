@@ -351,6 +351,7 @@ capture_start
 capture_pause
 capture_resume
 capture_stop
+capture_ensure_recording（内部，仅 Desktop 启动编排；不暴露给 React）
 settings_reload
 agent_shutdown
 agent_shutdown_dev
@@ -421,6 +422,9 @@ Capture 转换合同：
 | `capture_pause` | `CAPTURE_INVALID_STATE` | → `paused` | 幂等成功 |
 | `capture_resume` | `CAPTURE_INVALID_STATE` | 幂等成功 | → `running` |
 | `capture_stop` | 幂等成功 | → `stopped` | → `stopped` |
+| `capture_ensure_recording`（内部） | → `running` | 幂等成功 | → `running` |
+
+`capture_ensure_recording` 是内部命令（09 §9.3）：仅 Desktop 启动编排经同一 `ControlService` 提交，不暴露给 React。语义等价 `capture_start` 与 `capture_resume` 的合成，但由 Agent 在唯一 `CaptureCoordinator` 内**原子判定**当前 desired 状态后执行，消除 Host 先查状态再决定命令的竞态；同样经过 writer fault、settings 不可用、Lock/Sleep 抑制与 Barrier 不变量——被抑制时 desired 置为 Running、effective 保持 Paused，解除后自动恢复。**lifecycle monitor 永久故障（仅重启可恢复）与 Lock/Sleep 临时抑制必须区分**：后者允许 `Ok(Paused)` 且解除后自动恢复，前者 ensure 显式返回稳定错误并保持安全停止（desired 不被置为 Running），使自动启动结果标记 failed，不得伪装成功；用户显式 `capture_start`/`capture_resume` 仍保留“允许但受 gate 抑制”的既有合同（L17）。
 
 ### 8.3 React 可调用的 Tauri commands
 
@@ -436,10 +440,13 @@ activity_get_heatmap
 settings_get
 settings_update
 settings_resync_login_startup
+desktop_prefs_get
+desktop_prefs_update
+auto_start_status
 diagnostics_get_summary
 ```
 
-React 不直接连接 Pipe、不查询 SQLite、不传入 channel/path，也不计算时长和聚合。`capture_start` 在 Tauri 内先确保固定位置的 Agent 在线，再发送 Capture start；因此 Agent 离线时同一“启动并记录”动作会重新拉起 Agent 并开始采集。`agent_process_stop` 在 Tauri 内执行 `capture_stop` 边界提交、`agent_shutdown`、旧 Pipe 断开和 runtime stopped 确认；它不是 `capture_stop` 的别名。`settings_resync_login_startup` 对应 9.2 的 Diagnostics 修复动作：Tauri 按当前 Settings 重放 Run Key 同步流程，返回最终一致状态，不接受任何参数。
+React 不直接连接 Pipe、不查询 SQLite、不传入 channel/path，也不计算时长和聚合。`capture_start` 在 Tauri 内先确保固定位置的 Agent 在线，再发送 Capture start；因此 Agent 离线时同一“启动并记录”动作会重新拉起 Agent 并开始采集。启动编排（9.3/9.4）不调用 `capture_start`，而是发送内部 `capture_ensure_recording`（8.2 原子语义，不暴露为 Tauri command）。`agent_process_stop` 在 Tauri 内执行 `capture_stop` 边界提交、`agent_shutdown`、旧 Pipe 断开和 runtime stopped 确认；它不是 `capture_stop` 的别名。顶栏命令与托盘菜单共用同一 `ControlService`（统一解析 `ok=false`、in-flight 互斥、Stop 等待终态），托盘不得复制一份独立的控制语义。`desktop_prefs_get`/`desktop_prefs_update` 对应 9.4 的 Desktop 本地偏好，与 Agent effectivity Settings 分离。`auto_start_status` 返回启动编排状态（9.3 启动结果可见化：`idle/starting/recording/failed` + 安全错误），纯 Host 侧状态，不进 Specta/DTO 合同。`settings_resync_login_startup` 对应 9.2 的 Diagnostics 修复动作：Tauri 按当前 Settings 重放 Run Key 同步流程，返回最终一致状态，不接受任何参数。
 
 v0.1 的实时刷新使用安全低频轮询（Today 约 5 秒、当前周 Heatmap 约 15 秒、Diagnostics 约 2 秒，页面隐藏时停止），不实现事件推送。Heatmap 历史周是静态视图，不启动轮询。轮询失败只影响实时性，不影响历史查询。
 
@@ -552,11 +559,21 @@ JSON 已保存但 Agent 离线或 reload 失败时不回滚普通设置：返回
 
 ### 9.3 Agent 脱离、版本与打包
 
-Desktop 只从自身安装目录的固定位置 `<desktop-exe-dir>\Agent\wuji-rebuild-agent-v01.exe` 启动 Agent。Windows 启动使用 `CreateProcessW`，设置 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`，不继承 Desktop handles，不加入会随 Desktop 关闭的 Job；启动后通过 `hello` 验证固定 channel/version，而不是把 child handle 当作运行状态。React 调用 `capture_start` 时，由 Tauri 在内部确保 Agent 在线；重新拉起的新 Agent 不传 `--capture-on-start`、初始为 `stopped`，随后才发送 `capture_start`。普通 Desktop 启动不自动拉起 Agent；打包自动验收可以在固定 `rebuild-v01-test-*` channel 设置 package-smoke 环境开关，调用同一 `AgentController::ensure_running` 验证安装目录链路，该开关对正常 channel 无效。只有 Run Key 登录启动明确传入 `--capture-on-start`。Desktop 关闭不停止 Agent；用户显式调用 `agent_process_stop` 才执行 8.1/8.3 的边界提交与 graceful shutdown。v0.1 不做 Agent crash 自动重启。
+Desktop 只从自身安装目录的固定位置 `<desktop-exe-dir>\Agent\wuji-rebuild-agent-v01.exe` 启动 Agent。Windows 启动使用 `CreateProcessW`，设置 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW`，不继承 Desktop handles，不加入会随 Desktop 关闭的 Job；启动后通过 `hello` 验证固定 channel/version，而不是把 child handle 当作运行状态。React 调用 `capture_start` 时，由 Tauri 在内部确保 Agent 在线；重新拉起的新 Agent 不传 `--capture-on-start`、初始为 `stopped`，随后才发送 `capture_start`。Desktop 启动时按 9.4 的本地偏好（缺失默认开启，可在设置页关闭）决定是否**自动开始记录**：偏好开启时先确保 Agent 在线再提交内部 `capture_ensure_recording`（8.2 原子语义：Stopped→开始、Paused→恢复、Running→幂等，新拉起 Agent 仍以 `stopped` 初始、由命令开录）；偏好关闭时普通 Desktop 启动不拉起 Agent。启动决策是**三态枚举**，package-smoke 验收**优先**：smoke 在固定 `rebuild-v01-test-*` channel 显式设置环境开关时启用，调用同一 `AgentController::ensure_running` 验证安装目录链路，一律 `SmokeEnsureOnly`（只拉起、不自动开录），与偏好无关——新 test channel 无偏好文件、缺失默认开启，若按偏好走 `capture_ensure_recording` 会意外开始采集；普通启动才按偏好取 `StartRecording`/`DoNothing`。该开关对正常 channel 无效。决策合并为单一动作，setup 只 spawn 一次；`ensure_running` 内部持有启动互斥，自动启动、顶栏、托盘等多来源并发请求也绝不双开 Agent。**启动结果可见化**：编排期间 Host 侧 `AutoStartOutcome` 置为 `starting`（顶栏显示“正在开始记录…”），成功置 `recording`，失败保留稳定安全错误置 `failed`——经 `auto_start_status`（8.3）由顶栏可见提示，不伪装成功，也不只写 stderr；`AutoStartOutcome` 是纯 Host 侧状态，不进 Specta/DTO 合同。失败判定含 lifecycle monitor 永久故障（8.2：ensure 显式失败）；用户手动开始/继续成功即清除 `failed`（重试成功后红色提示消失）。只有 Run Key 登录启动直接以 `--capture-on-start` 开录。Desktop 关闭不停止 Agent；用户显式调用 `agent_process_stop`（含托盘“停止 Agent”，两者共用同一 `ControlService`）才执行 8.1/8.3 的边界提交与 graceful shutdown，并等待 SQLite runtime 终态 `stopped` 确认后返回。v0.1 不做 Agent crash 自动重启。
 
 Desktop 与 Agent 的 protocol major、Schema version 任一不兼容时，禁止运行控制并显示 `VERSION_INCOMPATIBLE`；只读历史仅在 Desktop 明确支持 `schema_version=1` 时开放。不得自动启动另一个版本覆盖正在运行的 Agent。
 
 V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Agent` 目录，并生成包含 Desktop/Agent version 与 SHA-256 的 dev package manifest。v0.1 不用该 hash 充当生产身份认证，但安装/验收会校验缺失、错版和意外 `.NET`/Bridge 资产。当前 `bundle.active=false` 只是 V01-1–V01-7 开发态，不满足 V01-8。
+
+### 9.4 Desktop 本地偏好与 Settings 分离
+
+`autoStartRecordingWhenAppStarts` 是纯 Desktop 偏好，不属于 Agent effectivity Settings：它决定 Desktop 启动时是否**自动开始记录**（先 `ensure_running` 确保 Agent 在线，再提交内部 `capture_ensure_recording`，8.2 的原子语义），不进入 Settings digest/CAS/LKG/数据库。因此旧 settings.json、双槽 LKG 与数据库中间 revision 摘要不受影响，升级无需迁移（R07 摘要兼容由 9 的 Settings 字段集冻结保证）。
+
+- 位置：`<data-root>\config\desktop_prefs.json`，字段集只含 `autoStartRecordingWhenAppStarts`（缺失默认 `true`），禁止混入 Agent effectivity 字段。解析**严格**：未知字段或字段类型错误一律视为损坏（`SETTINGS_INVALID`），不得静默忽略。兼容 v0.1 引入初期的旧键名 `autoStartAgentWhenAppStarts`（语义仅为“拉起进程”）：仅在新键缺失时读旧键值（类型错误同样视为损坏），保存一律写新键。
+- 自动开始记录的语义：进程就绪后提交内部 `capture_ensure_recording`（8.2）——Stopped→开始、Paused→恢复、Running→幂等成功。Agent 处于用户暂停时同样**恢复记录**（启动吾迹是新的意图表达，暂停不阻塞下次启动）；Lock/Sleep 抑制下 desired 置为 Running、保持安全暂停，解除后自动恢复；Writer 故障不伪装成功，失败经 `auto_start_status` 在顶栏可见提示。
+- 由 Tauri 唯一写入，临时文件 + flush + 原子替换，与 9 的 Settings 同法；无 CAS（纯本地偏好，无共享摘要），并发由进程内锁串行化。
+- 三态加载（R04 同口径）：**只有文件缺失（NotFound）视为首次运行**；损坏/未知字段由 `desktop_prefs_get` 显式上报 `SETTINGS_INVALID`，UI 显示警告并按默认值继续，启动决策失败开放（与缺失同默认 `true`），合法保存覆盖损坏文件即自愈；**权限拒绝等其他 I/O 故障返回稳定安全错误（`DB_UNAVAILABLE`），不伪装成首次运行**——文件存在却读不到说明用户已保存过选择，启动决策失败关闭（不自动开始记录）并在 stderr 说明，`desktop_prefs_get` 同样显式上报。
+- `desktop_prefs_update` 与 `settings_update` 相互独立，按 dirty 状态分别提交：只改偏好不得推进 Settings revision、不触发 Barrier/effectivity，只改 Settings 不触碰偏好文件。部分失败矩阵：Settings 失败不阻断偏好保存（偏好成功仍落盘并提示），偏好失败不掩盖 Settings 已保存并应用。
 
 ## 10. UI v0.1
 

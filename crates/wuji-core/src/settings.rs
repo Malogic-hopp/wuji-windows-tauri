@@ -17,7 +17,8 @@ pub const SAMPLING_INTERVAL_DEFAULT_SECONDS: u32 = 3;
 pub const IDLE_THRESHOLD_DEFAULT_SECONDS: u32 = 60;
 pub const WORK_BREAK_IDLE_DEFAULT_SECONDS: u32 = 300;
 
-/// Settings JSON 完整字段集（09 §9：只允许这六个业务字段加 schemaVersion/revision）。
+/// Settings JSON 完整字段集（09 §9：只允许这五个业务字段加 schemaVersion/revision）。
+/// Desktop 本地偏好（如自动拉起 Agent）不在此集合，见 09 §9.4。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {

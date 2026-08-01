@@ -89,7 +89,10 @@ export type SafeError = {
 /**  09 §8.2 冻结的稳定错误码。 */
 export type SafeErrorCode = "IPC_PROTOCOL_UNSUPPORTED" | "IPC_CHANNEL_MISMATCH" | "IPC_INVALID_MESSAGE" | "IPC_PAYLOAD_TOO_LARGE" | "IPC_REQUEST_ID_REUSED" | "INVALID_ARGUMENT" | "CAPTURE_INVALID_STATE" | "AGENT_WRITER_DEGRADED" | "AGENT_WRITER_FAULTED" | "DB_UNAVAILABLE" | "DB_SCHEMA_UNSUPPORTED" | "TIME_ZONE_UNAVAILABLE" | "SETTINGS_CONFLICT" | "SETTINGS_INVALID" | "SETTINGS_SAVED_NOT_APPLIED" | "STARTUP_REGISTRY_FAILED" | "STARTUP_RECONCILIATION_REQUIRED" | "VERSION_INCOMPATIBLE" | "INTERNAL_SAFE_ERROR";
 
-/**  Settings JSON 完整字段集（09 §9：只允许这六个业务字段加 schemaVersion/revision）。 */
+/**
+ *  Settings JSON 完整字段集（09 §9：只允许这五个业务字段加 schemaVersion/revision）。
+ *  Desktop 本地偏好（如自动拉起 Agent）不在此集合，见 09 §9.4。
+ */
 export type Settings = {
 	schemaVersion: number,
 	/**  十进制字符串（09 §9：revision 是 string，不是 number）。 */
