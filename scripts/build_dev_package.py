@@ -18,14 +18,17 @@
 """
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
+from ctypes import wintypes
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +60,96 @@ REQUIRED_LAYOUT = [
     "wuji-rebuild-desktop-v01.exe",
     "Agent/wuji-rebuild-agent-v01.exe",
 ]
+
+PROCESS_TERMINATE = 0x0001
+SYNCHRONIZE = 0x00100000
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+WAIT_OBJECT_0 = 0x00000000
+WAIT_TIMEOUT = 0x00000102
+WAIT_FAILED = 0xFFFFFFFF
+
+_KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
+_OPEN_PROCESS = _KERNEL32.OpenProcess
+_OPEN_PROCESS.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+_OPEN_PROCESS.restype = wintypes.HANDLE
+_QUERY_FULL_PROCESS_IMAGE_NAME = _KERNEL32.QueryFullProcessImageNameW
+_QUERY_FULL_PROCESS_IMAGE_NAME.argtypes = [
+    wintypes.HANDLE,
+    wintypes.DWORD,
+    wintypes.LPWSTR,
+    ctypes.POINTER(wintypes.DWORD),
+]
+_QUERY_FULL_PROCESS_IMAGE_NAME.restype = wintypes.BOOL
+_TERMINATE_PROCESS = _KERNEL32.TerminateProcess
+_TERMINATE_PROCESS.argtypes = [wintypes.HANDLE, wintypes.UINT]
+_TERMINATE_PROCESS.restype = wintypes.BOOL
+_WAIT_FOR_SINGLE_OBJECT = _KERNEL32.WaitForSingleObject
+_WAIT_FOR_SINGLE_OBJECT.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+_WAIT_FOR_SINGLE_OBJECT.restype = wintypes.DWORD
+_CLOSE_HANDLE = _KERNEL32.CloseHandle
+_CLOSE_HANDLE.argtypes = [wintypes.HANDLE]
+_CLOSE_HANDLE.restype = wintypes.BOOL
+
+
+def normalized_windows_path(path: str | Path) -> str:
+    """Windows 路径身份比较：绝对化、分隔符归一化并忽略大小写。"""
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+class VerifiedProcessHandle:
+    """已验证映像路径的稳定进程对象句柄。
+
+    句柄绑定具体进程对象而非裸 PID；即使进程退出后 PID 被系统复用，后续
+    `terminate_and_wait` 也绝不会作用于新进程。
+    """
+
+    def __init__(self, pid: int, handle, image_path: str):
+        self.pid = pid
+        self._handle = handle
+        self.image_path = image_path
+
+    @classmethod
+    def open_verified(cls, pid: int, expected_exe: Path):
+        access = PROCESS_TERMINATE | SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION
+        handle = _OPEN_PROCESS(access, False, pid)
+        if not handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            length = wintypes.DWORD(32768)
+            buffer = ctypes.create_unicode_buffer(length.value)
+            if not _QUERY_FULL_PROCESS_IMAGE_NAME(handle, 0, buffer, ctypes.byref(length)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            actual = buffer.value
+            if normalized_windows_path(actual) != normalized_windows_path(expected_exe):
+                raise RuntimeError(
+                    f"PID {pid} 映像身份不符，拒绝终止 package-smoke 进程"
+                )
+            return cls(pid, handle, actual)
+        except BaseException:
+            _CLOSE_HANDLE(handle)
+            raise
+
+    def terminate_and_wait(self, timeout_ms: int = 10_000) -> None:
+        """通过稳定句柄终止并确认退出；查询/等待失败一律不当成已退出。"""
+        if self._handle is None:
+            raise RuntimeError("进程句柄已关闭")
+        terminated = bool(_TERMINATE_PROCESS(self._handle, 1))
+        terminate_error = ctypes.get_last_error() if not terminated else 0
+        wait_result = _WAIT_FOR_SINGLE_OBJECT(self._handle, timeout_ms)
+        if wait_result == WAIT_OBJECT_0:
+            return
+        if wait_result == WAIT_TIMEOUT:
+            raise RuntimeError(f"PID {self.pid} 在 {timeout_ms}ms 内未退出")
+        if wait_result == WAIT_FAILED:
+            raise ctypes.WinError(ctypes.get_last_error())
+        if not terminated:
+            raise ctypes.WinError(terminate_error)
+        raise RuntimeError(f"PID {self.pid} 等待结果异常：{wait_result}")
+
+    def close(self) -> None:
+        if self._handle is not None:
+            _CLOSE_HANDLE(self._handle)
+            self._handle = None
 
 
 def sha256_file(path: Path) -> str:
@@ -104,12 +197,146 @@ def processes_by_name(image_name: str) -> list[dict]:
     return data if isinstance(data, list) else [data]
 
 
+def process_matches_smoke_identity(process: dict, expected_exe: Path, channel: str) -> bool:
+    """CIM 交付候选时同时证明固定映像路径与隔离 channel。"""
+    executable = process.get("ExecutablePath")
+    command_line = process.get("CommandLine") or ""
+    if not executable:
+        return False
+    if normalized_windows_path(executable) != normalized_windows_path(expected_exe):
+        return False
+    tokens = command_line.replace('"', "").split()
+    return any(
+        token == "--channel" and index + 1 < len(tokens) and tokens[index + 1] == channel
+        for index, token in enumerate(tokens)
+    )
+
+
+def acquire_smoke_agent_handles(expected_exe: Path, channel: str) -> list[VerifiedProcessHandle]:
+    """将 CIM 的 path+channel 候选升级为稳定进程句柄。
+
+    打开句柄后再次查询 CIM，关闭“候选查询→OpenProcess”之间的身份变化窗口；
+    句柄自身再校验映像路径，之后 PID 复用不影响清理目标。
+    """
+    handles = []
+    for process in processes_by_name("wuji-rebuild-agent-v01.exe"):
+        if not process_matches_smoke_identity(process, expected_exe, channel):
+            continue
+        pid = int(process["ProcessId"])
+        try:
+            handle = VerifiedProcessHandle.open_verified(pid, expected_exe)
+        except (OSError, RuntimeError):
+            continue
+        try:
+            confirmed = any(
+                int(current["ProcessId"]) == pid
+                and process_matches_smoke_identity(current, expected_exe, channel)
+                for current in processes_by_name("wuji-rebuild-agent-v01.exe")
+            )
+        except BaseException:
+            handle.close()
+            raise
+        if confirmed:
+            handles.append(handle)
+        else:
+            handle.close()
+    return handles
+
+
+def read_smoke_state(db_path: Path):
+    """只读查询 smoke channel 数据库的最新 runtime 与 Observation 数。
+
+    WAL 并发读：Agent（写者）运行中仍可安全查询。返回
+    (process_state, capture_state) 与 Observation 计数；库尚不可读返回 (None, None)。
+    """
+    try:
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            row = con.execute(
+                "SELECT process_state, capture_state FROM agent_runtime "
+                "ORDER BY rowid DESC LIMIT 1"
+            ).fetchone()
+            observations = con.execute(
+                "SELECT COUNT(*) FROM foreground_observations"
+            ).fetchone()[0]
+            return row, observations
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None, None
+
+
+def wait_for_smoke_stopped(
+    read_state,
+    *,
+    ready_attempts: int = 20,
+    stable_samples: int = 5,
+    sample_interval_seconds: float = 1.0,
+    sleep=time.sleep,
+) -> dict:
+    """等待 Agent 完成启动，并证明一个稳定窗口内从未开始采集。
+
+    `read_state` 可注入，测试无需真实休眠；生产默认在首次看到
+    Running/Stopped/0 后继续观察 4 秒（共 5 个样本）。
+    """
+    if ready_attempts < 1 or stable_samples < 1:
+        raise ValueError("ready_attempts 与 stable_samples 必须为正数")
+
+    ready_state = None
+    last_state = None
+    for attempt in range(ready_attempts):
+        row, observations = read_state()
+        if row is not None:
+            last_state = {
+                "processState": row[0],
+                "captureState": row[1],
+                "observationCount": observations,
+            }
+            if row[1] != "stopped" or observations != 0:
+                raise RuntimeError(
+                    "package-smoke 检测到意外采集："
+                    f"{last_state}"
+                )
+            if row[0] == "running":
+                ready_state = last_state
+                break
+        if attempt + 1 < ready_attempts:
+            sleep(sample_interval_seconds)
+    if ready_state is None:
+        raise RuntimeError(
+            "package-smoke 未进入 Running/Stopped/0 就绪态："
+            f"{last_state}"
+        )
+
+    for _ in range(stable_samples - 1):
+        sleep(sample_interval_seconds)
+        row, observations = read_state()
+        current = None if row is None else {
+            "processState": row[0],
+            "captureState": row[1],
+            "observationCount": observations,
+        }
+        if current != ready_state:
+            raise RuntimeError(
+                "package-smoke 稳定观察窗口内状态发生变化："
+                f"expected={ready_state}, actual={current}"
+            )
+
+    return {
+        **ready_state,
+        "stableSamples": stable_samples,
+        "stableWindowSeconds": sample_interval_seconds * (stable_samples - 1),
+    }
+
+
 def verify_installed_launch(install_dir: Path) -> dict:
     """安装版 Desktop 启动并拉起安装版 Agent（审核 R06：并入自动验收）。
 
     以隔离 test channel 启动安装目录中的 Desktop；等待该 channel 数据库出现
     （证明 Agent 已启动并完成 bootstrap），并校验运行中的 Agent 进程
-    确实来自安装目录。返回脱敏证据；失败抛 SystemExit。
+    确实来自安装目录。随后**真实断言** smoke 只拉起不自动开录（09 §9.3）：
+    最新 runtime 的 capture_state 必须保持 `stopped` 且 Observation 数为 0，
+    而不是仅靠说明文字。返回脱敏证据；失败抛 SystemExit。
     """
     suffix = ("pkg" + hex(time.time_ns())[2:]).ljust(26, "0")[:26]
     channel = f"rebuild-v01-test-{suffix}"
@@ -132,7 +359,8 @@ def verify_installed_launch(install_dir: Path) -> dict:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    agent_pids: list[int] = []
+    expected_agent_exe = install_dir / "Agent" / "wuji-rebuild-agent-v01.exe"
+    agent_handles: list[VerifiedProcessHandle] = []
     try:
         for _ in range(45):
             if db_expected.exists():
@@ -145,23 +373,39 @@ def verify_installed_launch(install_dir: Path) -> dict:
             )
         # 运行中的 Agent 必须来自安装目录（错版/混版检测）。
         for _ in range(15):
-            agent_pids = [
-                int(p["ProcessId"])
-                for p in processes_by_name("wuji-rebuild-agent-v01.exe")
-                if p.get("ExecutablePath") and str(install_dir) in str(p["ExecutablePath"])
-            ]
-            if agent_pids:
+            agent_handles = acquire_smoke_agent_handles(expected_agent_exe, channel)
+            if agent_handles:
                 break
             time.sleep(1)
-        if not agent_pids:
+        if not agent_handles:
             raise SystemExit("未发现来自安装目录的 Agent 进程（可能拉起了错误位置的 Agent）")
+
+        # smoke 只拉起、不自动开录（09 §9.3）：真实断言最新 runtime 保持
+        # capture_state=stopped 且零 Observation。若安装版 Desktop 意外走了
+        # 自动开始记录，capture_state 会变为 running 且 Observation 增长——
+        # 必须先进入 process=running，再在稳定窗口内连续保持 stopped/0；不能在
+        # bootstrap 与异步自动开录之间抢读一个瞬时 stopped 就提前通过。
+        try:
+            smoke_state = wait_for_smoke_stopped(
+                lambda: read_smoke_state(db_expected),
+            )
+        except RuntimeError as error:
+            raise SystemExit(str(error)) from error
         return {
             "performed": True,
             "installedAgentSpawned": True,
             "databaseCreated": True,
+            "captureStayedStopped": True,
+            "observationCount": smoke_state["observationCount"],
+            "stableSamples": smoke_state["stableSamples"],
+            "stableWindowSeconds": smoke_state["stableWindowSeconds"],
             "note": (
                 "安装版 Desktop 通过 package-smoke test channel 调用 AgentController，"
-                "拉起安装目录内 Agent 并完成 bootstrap；普通启动不自动拉起 Agent"
+                "拉起安装目录内 Agent 并完成 bootstrap；smoke 只验证拉起链路，"
+                "自动开始记录由 Desktop 本地偏好（09 §9.4）决定；实测最新 runtime "
+                f"process_state=running、capture_state=stopped、Observation 数 "
+                f"{smoke_state['observationCount']}，连续稳定观察 "
+                f"{smoke_state['stableWindowSeconds']} 秒"
             ),
         }
     finally:
@@ -170,11 +414,34 @@ def verify_installed_launch(install_dir: Path) -> dict:
             desktop.wait(timeout=10)
         except subprocess.TimeoutExpired:
             pass
-        # Agent 设计上脱离 Desktop 生命周期存活；按 PID 结束并清理 test channel 数据。
-        for pid in agent_pids:
-            subprocess.run(["taskkill", "/F", "/PID", str(pid)], check=False,
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        time.sleep(2)
+        # Agent 设计上脱离 Desktop 生命周期存活。补抓早期失败窗口中可能已启动
+        # 但尚未登记的同 path+channel 进程；随后只通过稳定句柄终止，绝不裸 PID。
+        cleanup_discovery_error = None
+        try:
+            for process in acquire_smoke_agent_handles(expected_agent_exe, channel):
+                # 即使 PID 数值相同也保留新句柄：旧进程退出后 PID 可能复用，
+                # 两个句柄分别绑定各自进程对象；重复终止同一对象也是安全幂等的。
+                agent_handles.append(process)
+        except (OSError, subprocess.SubprocessError, RuntimeError) as error:
+            cleanup_discovery_error = str(error)
+
+        cleanup_errors = []
+        for process in agent_handles:
+            try:
+                process.terminate_and_wait()
+            except (OSError, RuntimeError) as error:
+                cleanup_errors.append(f"PID {process.pid}: {error}")
+            finally:
+                process.close()
+        if cleanup_discovery_error is not None or cleanup_errors:
+            details = []
+            if cleanup_discovery_error is not None:
+                details.append(f"身份确认失败: {cleanup_discovery_error}")
+            details.extend(cleanup_errors)
+            raise SystemExit(
+                "package-smoke Agent 未确认退出，保留 channel 目录："
+                + "; ".join(details)
+            )
         shutil.rmtree(channel_root, ignore_errors=True)
 
 
