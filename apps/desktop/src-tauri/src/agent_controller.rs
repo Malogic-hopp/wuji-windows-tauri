@@ -20,6 +20,10 @@ pub struct AgentController {
     agent_exe: PathBuf,
     channel: String,
     ipc: std::sync::Arc<AgentIpcClient>,
+    /// 并发 `ensure_running` 互斥（09 §9.3 启动仲裁）：自动启动、顶栏、
+    /// 托盘等多来源同时请求时只允许一个 spawn 路径，避免双开 Agent；
+    /// 后到者等待后直接复用已上线进程。
+    start_lock: std::sync::Arc<tokio::sync::Mutex<()>>,
 }
 
 impl AgentController {
@@ -28,6 +32,7 @@ impl AgentController {
             agent_exe: paths::agent_exe_path(),
             channel: channel.to_string(),
             ipc,
+            start_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         })
     }
 
@@ -41,6 +46,7 @@ impl AgentController {
             agent_exe,
             channel: channel.to_string(),
             ipc,
+            start_lock: std::sync::Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -51,6 +57,8 @@ impl AgentController {
     /// 开始记录前确保 Agent 在线：先 hello，失败再 detached 启动并等待握手。
     /// 普通启动不传 --capture-on-start（09 §9.3：新 Agent 初始为 stopped）。
     pub async fn ensure_running(&self) -> Result<Value, SafeError> {
+        // 启动仲裁：整个流程持锁，保证并发调用只有一个走 spawn 路径。
+        let _start_guard = self.start_lock.lock().await;
         if let Ok(status) = self.ipc.status().await {
             check_compatible(&status)?;
             return Ok(status["result"].clone());

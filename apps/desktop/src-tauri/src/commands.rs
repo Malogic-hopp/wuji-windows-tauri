@@ -4,13 +4,13 @@
 //! 不越过本层（ADR-002 §4.3）。
 
 use serde::Serialize;
-use serde_json::Value;
 use tauri::State;
-use wuji_core::domain::{CaptureState, ProcessState};
+use wuji_core::domain::CaptureState;
 use wuji_core::dto::{AgentStatusDto, HeatmapDto, SettingsDto, TimelinePageDto, TodayDto};
 use wuji_core::error::{SafeError, SafeErrorCode};
 
-use crate::agent_controller::AgentController;
+use crate::control::ControlService;
+use crate::desktop_prefs::{DesktopPrefs, DesktopPrefsPatch, DesktopPrefsService};
 use crate::ipc::AgentIpcClient;
 use crate::query::QueryService;
 use crate::settings_service::{SettingsPatch, SettingsService};
@@ -21,7 +21,100 @@ pub struct AppServices {
     pub ipc: std::sync::Arc<AgentIpcClient>,
     pub query: QueryService,
     pub settings: SettingsService,
-    pub controller: AgentController,
+    pub desktop_prefs: DesktopPrefsService,
+    pub control: ControlService,
+    /// 自动开始记录编排结果（09 §9.3）：启动任务写入，顶栏/诊断可读。
+    pub auto_start: AutoStartOutcome,
+}
+
+/// 自动开始记录编排状态（09 §9.3 启动结果可见化）：不能只写 stderr——
+/// 失败必须由 UI 可见提示，成功前顶栏显示“正在开始记录…”瞬态。
+/// 纯 Host 侧状态，不进 Specta/DTO 合同；跨 clone 共享。
+#[derive(Debug, Clone, Default)]
+pub struct AutoStartOutcome {
+    inner: std::sync::Arc<std::sync::Mutex<AutoStartSnapshot>>,
+}
+
+/// 顶栏轮询的快照。
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoStartSnapshot {
+    pub state: AutoStartState,
+    pub error: Option<SafeError>,
+}
+
+/// 编排阶段：idle=未启用（偏好关闭/smoke）；starting=正在确保记录；
+/// recording=启动成功；failed=启动失败（含安全错误码与用户可见消息）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoStartState {
+    #[default]
+    Idle,
+    Starting,
+    Recording,
+    Failed,
+}
+
+impl AutoStartOutcome {
+    fn set(&self, state: AutoStartState, error: Option<SafeError>) {
+        *self.inner.lock().expect("auto-start outcome mutex") = AutoStartSnapshot { state, error };
+    }
+
+    pub(crate) fn mark_starting(&self) {
+        self.set(AutoStartState::Starting, None);
+    }
+
+    pub(crate) fn mark_recording(&self) {
+        self.set(AutoStartState::Recording, None);
+    }
+
+    pub(crate) fn mark_failed(&self, error: SafeError) {
+        self.set(AutoStartState::Failed, Some(error));
+    }
+
+    /// 用户手动接管成功：清除自动启动失败提示（审核 P2：重试成功后红色
+    /// 提示不得永久残留）。
+    pub(crate) fn mark_idle(&self) {
+        self.set(AutoStartState::Idle, None);
+    }
+
+    /// 顶栏与托盘共用的手动控制结果对账：只有用户意图真正被接受，才清除
+    /// 自动启动失败；永久 monitor fault 的 `Ok(Paused)` 必须继续保留提示。
+    pub(crate) fn reconcile_manual_control(&self, status: &AgentStatusDto, expected: CaptureState) {
+        self.reconcile_manual_result(expected, status.capture_state, status.safe_error_code);
+    }
+
+    fn reconcile_manual_result(
+        &self,
+        expected: CaptureState,
+        actual: CaptureState,
+        safe_error_code: Option<SafeErrorCode>,
+    ) {
+        if manual_control_took_over(expected, actual, safe_error_code) {
+            self.mark_idle();
+        }
+    }
+
+    pub fn snapshot(&self) -> AutoStartSnapshot {
+        self.inner.lock().expect("auto-start outcome mutex").clone()
+    }
+}
+
+/// 手动控制只有真正接管自动启动意图后，才可清除此前的失败提示。
+///
+/// `start/resume` 在 Lock/Sleep 临时抑制下会合法返回 `Paused`，此时没有
+/// `safe_error_code`，用户意图已经被接受、解除抑制后会自动恢复；永久 monitor
+/// fault 同样会返回 `Ok(Paused)`，但保留 `safe_error_code`，必须继续显示失败，
+/// 不能把“命令返回 Ok”误当成“故障已恢复”。
+fn manual_control_took_over(
+    expected: CaptureState,
+    actual: CaptureState,
+    safe_error_code: Option<SafeErrorCode>,
+) -> bool {
+    actual == expected
+        || (expected == CaptureState::Running
+            && actual == CaptureState::Paused
+            && safe_error_code.is_none())
 }
 
 /// Diagnostics 摘要（09 §10.5：高级信息默认折叠且路径脱敏）。
@@ -37,44 +130,12 @@ pub struct DiagnosticsDto {
     pub agent_exe_masked: String,
 }
 
-const AGENT_STOP_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
-const AGENT_STOP_POLL: std::time::Duration = std::time::Duration::from_millis(100);
-
-fn parse_status(value: Value) -> Result<AgentStatusDto, SafeError> {
-    if !value["ok"].as_bool().unwrap_or(false) {
-        let code = value["error"]["code"].as_str().unwrap_or_default();
-        let message = value["error"]["message"].as_str().unwrap_or("命令失败");
-        let mapped: SafeErrorCode = serde_json::from_str(&format!("\"{code}\""))
-            .unwrap_or(SafeErrorCode::InternalSafeError);
-        return Err(SafeError::new(mapped, message));
-    }
-    serde_json::from_value::<AgentStatusDto>(value["result"].clone())
-        .map_err(|_| SafeError::new(SafeErrorCode::InternalSafeError, "状态响应解析失败"))
-}
-
-async fn call_status(ipc: &AgentIpcClient, command: &str) -> Result<AgentStatusDto, SafeError> {
-    let response = ipc.call(command, serde_json::json!({})).await?;
-    parse_status(response)
-}
-
-fn offline_status(runtime: &wuji_storage::RuntimeRow) -> Result<AgentStatusDto, SafeError> {
-    let mut dto = wuji_storage::reader::status_dto_from_runtime(
-        runtime,
-        String::new(),
-        &wuji_core::dto::RuntimeId::parse(&runtime.runtime_id)?,
-    );
-    // IPC 不可达时，历史快照不能证明进程或采集仍在运行。
-    dto.process_state = ProcessState::Stopped;
-    dto.capture_state = CaptureState::Stopped;
-    Ok(dto)
-}
-
 /// 实时状态优先来自 IPC；Agent 离线时回退到 DB 最后已知快照（09 §10.5）。
 #[tauri::command]
 pub async fn agent_get_status(
     services: State<'_, AppServices>,
 ) -> Result<AgentStatusDto, SafeError> {
-    match call_status(&services.ipc, "status_get").await {
+    match services.control.status().await {
         Ok(status) => Ok(status),
         Err(_) => {
             let runtime = services.query.latest_runtime()?.ok_or_else(|| {
@@ -83,51 +144,43 @@ pub async fn agent_get_status(
                     "无法连接 Agent，且没有历史运行记录",
                 )
             })?;
-            offline_status(&runtime)
+            crate::control::offline_status(&runtime)
         }
     }
 }
 
 #[tauri::command]
 pub async fn capture_start(services: State<'_, AppServices>) -> Result<AgentStatusDto, SafeError> {
-    // Agent 已被显式停止时，Start 负责重新创建进程并等待 hello，再开始记录。
-    services.controller.ensure_running().await?;
-    call_status(&services.ipc, "capture_start").await
+    let status = services.control.capture_start().await?;
+    services
+        .auto_start
+        .reconcile_manual_control(&status, CaptureState::Running);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn capture_pause(services: State<'_, AppServices>) -> Result<AgentStatusDto, SafeError> {
-    call_status(&services.ipc, "capture_pause").await
+    let status = services.control.capture_pause().await?;
+    services
+        .auto_start
+        .reconcile_manual_control(&status, CaptureState::Paused);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn capture_resume(services: State<'_, AppServices>) -> Result<AgentStatusDto, SafeError> {
-    call_status(&services.ipc, "capture_resume").await
+    let status = services.control.capture_resume().await?;
+    services
+        .auto_start
+        .reconcile_manual_control(&status, CaptureState::Running);
+    Ok(status)
 }
 
 #[tauri::command]
 pub async fn agent_process_stop(
     services: State<'_, AppServices>,
 ) -> Result<AgentStatusDto, SafeError> {
-    services.controller.stop_agent().await?;
-
-    // willExit 是接受确认，不是退出证明。等待 Writer 把 runtime 标记为 stopped，
-    // 证明 capture_stopped + AgentShutdown 已按顺序提交完毕。
-    let deadline = tokio::time::Instant::now() + AGENT_STOP_WAIT;
-    loop {
-        if let Some(runtime) = services.query.latest_runtime()?
-            && runtime.process_state == ProcessState::Stopped
-        {
-            return offline_status(&runtime);
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return Err(SafeError::new(
-                SafeErrorCode::InternalSafeError,
-                "Agent 已接受退出请求，但未在限时内完成关闭",
-            ));
-        }
-        tokio::time::sleep(AGENT_STOP_POLL).await;
-    }
+    services.control.stop_agent(&services.query).await
 }
 
 #[tauri::command]
@@ -174,11 +227,37 @@ pub async fn settings_resync_login_startup(
     services.settings.resync_login_startup(&services.query)
 }
 
+/// `desktop_prefs_get`：Desktop 本地偏好（09 §9.4），与 Agent effectivity
+/// Settings 分离，不参与 digest/CAS/LKG/数据库。
+#[tauri::command]
+pub async fn desktop_prefs_get(
+    services: State<'_, AppServices>,
+) -> Result<DesktopPrefs, SafeError> {
+    services.desktop_prefs.get()
+}
+
+#[tauri::command]
+pub async fn desktop_prefs_update(
+    services: State<'_, AppServices>,
+    patch: DesktopPrefsPatch,
+) -> Result<DesktopPrefs, SafeError> {
+    services.desktop_prefs.update(patch).await
+}
+
+/// `auto_start_status`：自动开始记录编排状态（09 §9.3）。顶栏用它显示
+/// “正在开始记录…”瞬态与启动失败提示；Host 侧状态，不进 React 控制面。
+#[tauri::command]
+pub async fn auto_start_status(
+    services: State<'_, AppServices>,
+) -> Result<AutoStartSnapshot, SafeError> {
+    Ok(services.auto_start.snapshot())
+}
+
 #[tauri::command]
 pub async fn diagnostics_get_summary(
     services: State<'_, AppServices>,
 ) -> Result<DiagnosticsDto, SafeError> {
-    let status = call_status(&services.ipc, "status_get").await.ok();
+    let status = services.control.status().await.ok();
     let persisted = services.settings.path().exists();
     let applied = services
         .query
@@ -198,9 +277,7 @@ pub async fn diagnostics_get_summary(
                 .map(|p| p.display().to_string())
                 .unwrap_or_default(),
         ),
-        agent_exe_masked: mask_local_app_data(
-            &services.controller.agent_exe().display().to_string(),
-        ),
+        agent_exe_masked: mask_local_app_data(&services.control.agent_exe().display().to_string()),
     })
 }
 
@@ -213,4 +290,94 @@ fn mask_local_app_data(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 启动结果状态机（09 §9.3）：idle → starting → recording；失败保留
+    /// 安全错误且不伪装成功；snapshot 与序列化形状供顶栏消费。
+    #[test]
+    fn auto_start_outcome_transitions() {
+        let outcome = AutoStartOutcome::default();
+        assert_eq!(outcome.snapshot().state, AutoStartState::Idle);
+        assert!(outcome.snapshot().error.is_none());
+
+        outcome.mark_starting();
+        assert_eq!(outcome.snapshot().state, AutoStartState::Starting);
+
+        outcome.mark_recording();
+        assert_eq!(outcome.snapshot().state, AutoStartState::Recording);
+
+        outcome.mark_failed(SafeError::new(
+            SafeErrorCode::AgentWriterFaulted,
+            "写入器故障且无法恢复，采集保持停止",
+        ));
+        let snapshot = outcome.snapshot();
+        assert_eq!(snapshot.state, AutoStartState::Failed);
+        assert_eq!(
+            snapshot.error.as_ref().expect("失败必须携带错误").code,
+            SafeErrorCode::AgentWriterFaulted
+        );
+
+        // 序列化形状（camelCase state + error envelope）由前端 client.ts 消费。
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["state"], "failed");
+        assert_eq!(json["error"]["code"], "AGENT_WRITER_FAULTED");
+
+        // 用户手动接管成功 → mark_idle：失败提示不得永久残留（审核 P2）。
+        outcome.mark_idle();
+        let idle = outcome.snapshot();
+        assert_eq!(idle.state, AutoStartState::Idle);
+        assert!(idle.error.is_none());
+    }
+
+    #[test]
+    fn permanent_monitor_fault_is_not_hidden_by_ok_paused_manual_start() {
+        let outcome = AutoStartOutcome::default();
+        outcome.mark_failed(SafeError::new(
+            SafeErrorCode::InternalSafeError,
+            "事件监视已永久失效，无法开始采集",
+        ));
+
+        outcome.reconcile_manual_result(
+            CaptureState::Running,
+            CaptureState::Paused,
+            Some(SafeErrorCode::InternalSafeError),
+        );
+        let snapshot = outcome.snapshot();
+        assert_eq!(snapshot.state, AutoStartState::Failed);
+        assert_eq!(
+            snapshot.error.expect("永久故障提示必须保留").message,
+            "事件监视已永久失效，无法开始采集"
+        );
+    }
+
+    #[test]
+    fn manual_control_clears_failure_only_after_intent_is_accepted() {
+        // 已真正恢复 Running：即使状态仍带历史诊断，也已经完成手动接管。
+        assert!(manual_control_took_over(
+            CaptureState::Running,
+            CaptureState::Running,
+            Some(SafeErrorCode::InternalSafeError),
+        ));
+        // Lock/Sleep 临时抑制：返回 Paused 且无故障码，意图已被接受。
+        assert!(manual_control_took_over(
+            CaptureState::Running,
+            CaptureState::Paused,
+            None,
+        ));
+        // pause 只有实际进入 Paused 才算接管完成。
+        assert!(manual_control_took_over(
+            CaptureState::Paused,
+            CaptureState::Paused,
+            None,
+        ));
+        assert!(!manual_control_took_over(
+            CaptureState::Paused,
+            CaptureState::Stopped,
+            None,
+        ));
+    }
 }

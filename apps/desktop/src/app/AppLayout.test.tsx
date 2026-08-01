@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { vi } from 'vitest';
 import AppLayout from './AppLayout';
@@ -50,8 +50,127 @@ describe('AppLayout 顶栏', () => {
       if (command === 'agent_get_status') {
         return Promise.resolve(statusFixture('stopped', 'stopped'));
       }
+      if (command === 'auto_start_status') {
+        return Promise.resolve({ state: 'idle', error: null });
+      }
       return Promise.reject(new Error(`unexpected: ${command}`));
     });
+  });
+
+  it('启动编排进行中显示“正在开始记录…”瞬态', async () => {
+    // Agent 尚未可达（status 为 stopped/stopped），但 Host 侧 auto_start_status
+    // 提供 starting 瞬态：只有收到 Agent 确认后顶栏才显示记录中。
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(statusFixture('stopped', 'stopped'));
+      }
+      if (command === 'auto_start_status') {
+        return Promise.resolve({ state: 'starting', error: null });
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
+    renderLayout();
+    await waitFor(() => {
+      expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('正在开始记录…');
+    });
+  });
+
+  it('自动开始记录失败显示可见提示（不只在 stderr）', async () => {
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(statusFixture('stopped', 'stopped'));
+      }
+      if (command === 'auto_start_status') {
+        return Promise.resolve({
+          state: 'failed',
+          error: { code: 'AGENT_WRITER_FAULTED', message: '写入器故障且无法恢复，采集保持停止' },
+        });
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
+    renderLayout();
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('自动开始记录失败：写入器故障且无法恢复');
+    });
+    // 失败不伪装成功：启动按钮仍然可用，用户可手动重试。
+    expect(screen.getByRole('button', { name: '启动并记录' })).toBeInTheDocument();
+  });
+
+  it('自动启动失败后手动重试成功，红色提示消失', async () => {
+    let retried = false;
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(
+          retried ? statusFixture('running') : statusFixture('stopped', 'stopped'),
+        );
+      }
+      if (command === 'auto_start_status') {
+        // Host 侧：手动 capture_start 成功后 AutoStartOutcome 被清除（mark_idle）。
+        return Promise.resolve(
+          retried ? { state: 'idle', error: null } : {
+            state: 'failed',
+            error: { code: 'AGENT_WRITER_FAULTED', message: '写入器故障且无法恢复，采集保持停止' },
+          },
+        );
+      }
+      if (command === 'capture_start') {
+        retried = true;
+        return Promise.resolve(statusFixture('running'));
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
+    renderLayout();
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent('自动开始记录失败');
+    });
+    screen.getByRole('button', { name: '启动并记录' }).click();
+    // 重试成功后：错误提示消失，状态如实显示“正在记录”。
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('正在记录');
+    });
+  });
+
+  it('手动重试后的新状态不被更早发出的迟到轮询覆盖', async () => {
+    let resolveStale: ((value: unknown) => void) | null = null;
+    const stale = new Promise<unknown>((resolve) => {
+      resolveStale = resolve;
+    });
+    let autoStatusCalls = 0;
+    invoke.mockImplementation((command: string) => {
+      if (command === 'agent_get_status') {
+        return Promise.resolve(statusFixture('stopped', 'stopped'));
+      }
+      if (command === 'auto_start_status') {
+        autoStatusCalls += 1;
+        return autoStatusCalls === 1
+          ? stale
+          : Promise.resolve({ state: 'idle', error: null });
+      }
+      if (command === 'capture_start') {
+        return Promise.resolve(statusFixture('running'));
+      }
+      return Promise.reject(new Error(`unexpected: ${command}`));
+    });
+
+    renderLayout();
+    const start = await screen.findByRole('button', { name: '启动并记录' });
+    start.click();
+    await waitFor(() => {
+      expect(autoStatusCalls).toBeGreaterThanOrEqual(2);
+      expect(screen.getByTestId('capture-state-badge')).toHaveTextContent('正在记录');
+    });
+
+    await act(async () => {
+      resolveStale?.({
+        state: 'failed',
+        error: { code: 'AGENT_WRITER_FAULTED', message: '迟到的旧失败' },
+      });
+      await stale;
+    });
+    expect(screen.queryByText(/迟到的旧失败/)).not.toBeInTheDocument();
   });
 
   it('Agent 未运行时显示启动并记录按钮、主题切换', async () => {

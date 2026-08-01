@@ -227,7 +227,7 @@ impl SettingsService {
 }
 
 #[cfg(windows)]
-fn rename_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn rename_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     use windows_sys::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
     };
@@ -255,6 +255,6 @@ fn rename_replace(from: &Path, to: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(not(windows))]
-fn rename_replace(from: &Path, to: &Path) -> std::io::Result<()> {
+pub(crate) fn rename_replace(from: &Path, to: &Path) -> std::io::Result<()> {
     std::fs::rename(from, to)
 }

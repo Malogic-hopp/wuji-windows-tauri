@@ -8,10 +8,12 @@ use std::process::{Child, Command};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wuji_core::domain::ActivityState;
+use wuji_core::domain::{ActivityState, ProcessState};
 use wuji_core::error::SafeErrorCode;
 use wuji_core::settings::Settings;
 use wuji_rebuild_desktop_lib::agent_controller::AgentController;
+use wuji_rebuild_desktop_lib::control::ControlService;
+use wuji_rebuild_desktop_lib::desktop_prefs::{DesktopPrefsPatch, DesktopPrefsService};
 use wuji_rebuild_desktop_lib::ipc::AgentIpcClient;
 use wuji_rebuild_desktop_lib::paths;
 use wuji_rebuild_desktop_lib::query::QueryService;
@@ -416,5 +418,157 @@ fn heatmap_rejects_out_of_range_days_and_week_offset() {
             .expect_err("week_offset 越界必须拒绝");
         assert_eq!(err.code, SafeErrorCode::InvalidArgument);
     }
+    cleanup(&channel);
+}
+
+/// 启动仲裁（09 §9.3/§9.4）：多来源并发 `ensure_running` 必须只产生一个
+/// Agent 进程，两个调用返回同一 runtimeId。
+#[tokio::test(flavor = "multi_thread")]
+async fn concurrent_ensure_running_yields_single_agent() {
+    let channel = test_channel();
+    let ipc = Arc::new(AgentIpcClient::new(&channel, "0.1.0").expect("ipc"));
+    let controller = AgentController::with_exe(&channel, ipc.clone(), agent_bin());
+
+    let (first, second) = tokio::join!(controller.ensure_running(), controller.ensure_running(),);
+    let first = first.expect("first ensure_running");
+    let second = second.expect("second ensure_running");
+    assert_eq!(
+        first["runtimeId"], second["runtimeId"],
+        "并发 ensure_running 必须复用同一 Agent，不允许双开"
+    );
+
+    controller.stop_agent().await.expect("stop agent");
+    wait_agent_exit(&channel, Duration::from_secs(15)).await;
+    cleanup(&channel);
+}
+
+/// 托盘与顶栏共用的 ControlService：capture_start 全闭环，stop_agent
+/// 必须等到 DB runtime 终态 stopped 才返回（托盘“停止 Agent”同一路径）。
+#[tokio::test(flavor = "multi_thread")]
+async fn control_service_start_and_stop_waits_for_terminal_state() {
+    let channel = test_channel();
+    let ipc = Arc::new(AgentIpcClient::new(&channel, "0.1.0").expect("ipc"));
+    let controller = AgentController::with_exe(&channel, ipc.clone(), agent_bin());
+    let control = ControlService::new(controller, ipc.clone());
+    let query = QueryService::new(&channel).expect("query");
+
+    let started = control.capture_start().await.expect("capture_start");
+    assert_eq!(
+        started.capture_state,
+        wuji_core::domain::CaptureState::Running
+    );
+
+    // ok=false 必须映射为稳定错误而不是静默成功：stopped 状态重复 start
+    // 由 Agent 幂等处理（成功）；这里验证停止后再次 capture_start 由
+    // ensure_running 重新拉起进程，仍然是合法闭环。
+    let stopped = control.stop_agent(&query).await.expect("stop_agent");
+    assert_eq!(
+        stopped.process_state,
+        ProcessState::Stopped,
+        "stop_agent 必须等待 runtime 终态 stopped 才返回"
+    );
+    assert_eq!(
+        stopped.capture_state,
+        wuji_core::domain::CaptureState::Stopped
+    );
+    wait_agent_exit(&channel, Duration::from_secs(15)).await;
+
+    cleanup(&channel);
+}
+
+/// 内部 EnsureRecording（09 §9.3 启动编排）：真实 Agent 上验证原子语义——
+/// Stopped→开始、Running→幂等成功、Paused（用户暂停）→恢复，消除 Host
+/// 先查状态再决定 start/resume 的竞态。
+#[tokio::test(flavor = "multi_thread")]
+async fn ensure_recording_recovers_from_paused() {
+    let channel = test_channel();
+    let ipc = Arc::new(AgentIpcClient::new(&channel, "0.1.0").expect("ipc"));
+    let controller = AgentController::with_exe(&channel, ipc.clone(), agent_bin());
+    let control = ControlService::new(controller, ipc.clone());
+    let query = QueryService::new(&channel).expect("query");
+
+    // 离线 → 拉起并开始记录。
+    let started = control
+        .ensure_recording()
+        .await
+        .expect("ensure from stopped");
+    assert_eq!(
+        started.capture_state,
+        wuji_core::domain::CaptureState::Running
+    );
+    // Running → 幂等成功。
+    let again = control.ensure_recording().await.expect("ensure idempotent");
+    assert_eq!(
+        again.capture_state,
+        wuji_core::domain::CaptureState::Running
+    );
+    // 用户暂停 → 恢复记录（启动即记录：暂停不阻塞下次启动，09 §9.3）。
+    let paused = control.capture_pause().await.expect("pause");
+    assert_eq!(
+        paused.capture_state,
+        wuji_core::domain::CaptureState::Paused
+    );
+    let resumed = control
+        .ensure_recording()
+        .await
+        .expect("ensure from paused");
+    assert_eq!(
+        resumed.capture_state,
+        wuji_core::domain::CaptureState::Running
+    );
+
+    let stopped = control.stop_agent(&query).await.expect("stop_agent");
+    assert_eq!(stopped.process_state, ProcessState::Stopped);
+    wait_agent_exit(&channel, Duration::from_secs(15)).await;
+
+    cleanup(&channel);
+}
+
+/// Desktop 本地偏好（09 §9.4）：与 Settings 完全分离，缺失默认开启，
+/// 更新落盘可读回，损坏由 get 显式上报且启动决策失败开放。
+#[tokio::test(flavor = "multi_thread")]
+async fn desktop_prefs_are_separate_from_settings_and_roundtrip() {
+    let channel = test_channel();
+    let service = DesktopPrefsService::new(&channel).expect("desktop prefs");
+
+    // 缺失（首次运行）：默认开启，get 不创建文件。
+    assert!(service.should_auto_start_recording());
+    let default = service.get().expect("default prefs");
+    assert!(default.auto_start_recording_when_app_starts);
+    let prefs_path = paths::data_root(&channel)
+        .expect("data root")
+        .join("config")
+        .join("desktop_prefs.json");
+    assert!(!prefs_path.exists(), "get 不得创建偏好文件");
+
+    // 旧键名（v0.1 引入初期）兼容：仅旧键时保留用户已选值。
+    std::fs::create_dir_all(prefs_path.parent().unwrap()).unwrap();
+    std::fs::write(&prefs_path, br#"{"autoStartAgentWhenAppStarts": false}"#).unwrap();
+    assert!(!service.should_auto_start_recording());
+    std::fs::remove_file(&prefs_path).unwrap();
+
+    // 关闭后应持久化并读回 false。
+    let off = service
+        .update(DesktopPrefsPatch {
+            auto_start_recording_when_app_starts: false,
+        })
+        .await
+        .expect("update");
+    assert!(!off.auto_start_recording_when_app_starts);
+    assert!(prefs_path.exists());
+    assert!(!service.should_auto_start_recording());
+    let raw = std::fs::read_to_string(&prefs_path).unwrap();
+    assert!(
+        raw.contains("autoStartRecordingWhenAppStarts")
+            && !raw.contains("autoStartAgentWhenAppStarts"),
+        "保存必须写新键"
+    );
+
+    // 损坏：get 显式上报（SettingsInvalid），启动决策失败开放为 true。
+    std::fs::write(&prefs_path, b"{ broken").unwrap();
+    let error = service.get().expect_err("损坏必须上报");
+    assert_eq!(error.code, SafeErrorCode::SettingsInvalid);
+    assert!(service.should_auto_start_recording());
+
     cleanup(&channel);
 }

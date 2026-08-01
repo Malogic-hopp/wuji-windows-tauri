@@ -44,6 +44,25 @@ export interface SettingsPatchInput {
   startCaptureOnLogin: boolean;
 }
 
+/** Desktop 本地偏好（09 §9.4）：与 Agent effectivity Settings 分离，
+ *  不参与 digest/CAS/LKG/数据库，无 expectedRevision。
+ *  语义：启动吾迹时自动开始记录（ensure_running 后提交内部
+ *  capture_ensure_recording：Stopped→开始 / Paused→恢复 / Running→幂等）。 */
+export interface DesktopPrefsDto {
+  autoStartRecordingWhenAppStarts: boolean;
+}
+
+export interface DesktopPrefsPatchInput {
+  autoStartRecordingWhenAppStarts: boolean;
+}
+
+/** 自动开始记录编排状态（09 §9.3，Host 侧 AutoStartSnapshot）：
+ *  idle=未启用 / starting=正在开始记录 / recording=成功 / failed=失败（含错误）。 */
+export interface AutoStartDto {
+  state: 'idle' | 'starting' | 'recording' | 'failed';
+  error: SafeError | null;
+}
+
 export const bridgeClient = {
   agentProcessStop: () => invoke<AgentStatusDto>('agent_process_stop'),
   agentGetStatus: () => invoke<AgentStatusDto>('agent_get_status'),
@@ -67,5 +86,9 @@ export const bridgeClient = {
     invoke<SettingsDto>('settings_update', { patch }),
   settingsResyncLoginStartup: () =>
     invoke<SettingsDto>('settings_resync_login_startup'),
+  desktopPrefsGet: () => invoke<DesktopPrefsDto>('desktop_prefs_get'),
+  desktopPrefsUpdate: (patch: DesktopPrefsPatchInput) =>
+    invoke<DesktopPrefsDto>('desktop_prefs_update', { patch }),
+  autoStartStatus: () => invoke<AutoStartDto>('auto_start_status'),
   diagnosticsGetSummary: () => invoke<DiagnosticsDto>('diagnostics_get_summary'),
 };
