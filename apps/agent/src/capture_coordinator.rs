@@ -160,6 +160,12 @@ pub fn capture_transition(
         ("capture_resume", CaptureState::Running) => Err(Some(CaptureState::Running)),
         ("capture_stop", CaptureState::Running | CaptureState::Paused) => Ok(CaptureState::Stopped),
         ("capture_stop", CaptureState::Stopped) => Err(Some(CaptureState::Stopped)),
+        // 内部 EnsureRecording（09 §9.3：仅 Desktop 启动编排使用，不暴露给 React）：
+        // stopped → start、paused → resume、running → 幂等成功。由 Agent 在唯一
+        // transition lock 内原子判定状态，消除 Host 查状态再决定命令的竞态。
+        ("capture_ensure_recording", CaptureState::Stopped) => Ok(CaptureState::Running),
+        ("capture_ensure_recording", CaptureState::Paused) => Ok(CaptureState::Running),
+        ("capture_ensure_recording", CaptureState::Running) => Err(Some(CaptureState::Running)),
         _ => Err(None),
     }
 }
@@ -364,8 +370,9 @@ impl CaptureCoordinator {
         self.lock.try_lock()
     }
 
-    /// IPC capture 命令统一入口（capture_start/pause/resume/stop）。
-    /// 成功返回发布后的 effective state；幂等命令按 09 §8.2 返回成功。
+    /// IPC capture 命令统一入口（capture_start/pause/resume/stop，以及内部
+    /// capture_ensure_recording）。成功返回发布后的 effective state；
+    /// 幂等命令按 09 §8.2 返回成功。
     pub async fn apply_capture_command(
         &self,
         command: &str,
@@ -376,14 +383,32 @@ impl CaptureCoordinator {
 
         // 复审 P1-01：Writer/Process fatal 不可由用户 capture 命令复活；
         // 拒绝时 desired/effective/watch/shared/DTO 全部保持 Stopped，零副作用。
-        if matches!(command, "capture_start" | "capture_resume") && self.writer_faulted() {
+        if matches!(
+            command,
+            "capture_start" | "capture_resume" | "capture_ensure_recording"
+        ) && self.writer_faulted()
+        {
             return Err(SafeError::new(
                 SafeErrorCode::AgentWriterFaulted,
                 "写入器故障且无法恢复，采集保持停止",
             ));
         }
+        // EnsureRecording 专用 fence：lifecycle monitor 永久失效（仅重启可恢复）
+        // 时不得把 desired 置为 Running——Lock/Sleep 是临时抑制（允许 Ok(Paused)、
+        // 解除后自动恢复），monitor fault 是永久故障，自动启动必须显式失败，
+        // 让 AutoStartOutcome 标记 failed，不得误判为成功（审核 P1）。
+        // 用户显式 start/resume 仍保留“允许但受 gate 抑制”的既有合同（L17）。
+        if command == "capture_ensure_recording" && self.monitor_faulted() {
+            return Err(SafeError::new(
+                SafeErrorCode::InternalSafeError,
+                "事件监视已永久失效，无法开始采集",
+            ));
+        }
         // 启动对账无法恢复可信 settings 时禁止开始采集（R04：不静默回 revision 0）。
-        if command == "capture_start" && self.shared.capture_blocked() {
+        // EnsureRecording 目标同样是 Running，无论从 stopped 还是 paused 都禁止。
+        if matches!(command, "capture_start" | "capture_ensure_recording")
+            && self.shared.capture_blocked()
+        {
             return Err(SafeError::new(
                 SafeErrorCode::SettingsInvalid,
                 "设置不可用且无法恢复最后已应用值，已禁止采集",
@@ -1152,6 +1177,20 @@ mod tests {
         assert_eq!(
             capture_transition(CaptureState::Stopped, "capture_stop"),
             Err(Some(CaptureState::Stopped))
+        );
+        // ensure（内部 EnsureRecording，09 §9.3）：stopped → start、paused → resume、
+        // running → 幂等成功；语义等价 start/resume 合成，由 Agent 原子判定。
+        assert_eq!(
+            capture_transition(CaptureState::Stopped, "capture_ensure_recording"),
+            Ok(CaptureState::Running)
+        );
+        assert_eq!(
+            capture_transition(CaptureState::Paused, "capture_ensure_recording"),
+            Ok(CaptureState::Running)
+        );
+        assert_eq!(
+            capture_transition(CaptureState::Running, "capture_ensure_recording"),
+            Err(Some(CaptureState::Running))
         );
     }
 

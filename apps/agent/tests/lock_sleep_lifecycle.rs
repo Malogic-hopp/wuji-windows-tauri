@@ -529,6 +529,61 @@ async fn aux_monitor_fault_suppression_cannot_be_cleared_by_user_commands() {
     assert_eq!(err.code, SafeErrorCode::InternalSafeError);
 }
 
+// ===== EnsureRecording（09 §9.3）与抑制源的区分 =====
+// Lock/Sleep 是临时抑制：ensure 返回 Ok(Paused)、desired=Running、解除后自动恢复；
+// lifecycle_monitor_fault 是永久故障：ensure 必须显式失败且零副作用（审核 P1）。
+#[tokio::test(start_paused = true)]
+async fn ensure_recording_under_lock_returns_paused_and_recovers() {
+    let w = wiring(Settings::default());
+    w.capture_start().await;
+    w.produce_sample().await;
+    w.apply_lock().await.expect("Lock");
+    assert_eq!(*w.capture_rx.borrow(), CaptureState::Paused);
+
+    // Lock 抑制：ensure 允许，desired 置为 Running，effective 保持 Paused。
+    let result = w
+        .coordinator
+        .apply_capture_command("capture_ensure_recording", T0)
+        .await
+        .expect("Lock 临时抑制下 ensure 必须成功，不报错");
+    assert_eq!(result, CaptureState::Paused);
+    assert_eq!(
+        w.coordinator.desired_state(),
+        CaptureState::Running,
+        "desired 必须为 Running，解除后自动恢复"
+    );
+
+    // Unlock 后自动恢复记录（用户暂停语义在 L10/L12 覆盖，不受影响）。
+    w.apply_unlock().await.expect("Unlock");
+    assert_eq!(*w.capture_rx.borrow(), CaptureState::Running);
+    w.shutdown().await;
+}
+
+#[tokio::test]
+async fn ensure_recording_fails_on_lifecycle_monitor_fault() {
+    let h = coord_harness();
+    h.coordinator.latch_monitor_fault();
+    assert_eq!(*h.capture_rx.borrow(), CaptureState::Stopped);
+
+    // 永久故障必须显式失败：自动启动不得把 desired 置为 Running 后返回
+    // Ok(Paused) 伪装成功（顶栏会显示“已暂停”而非失败提示）。
+    let error = h
+        .coordinator
+        .apply_capture_command("capture_ensure_recording", T0)
+        .await
+        .expect_err("monitor fault 后 ensure 必须失败");
+    assert_eq!(error.code, SafeErrorCode::InternalSafeError);
+    assert!(
+        error.message.contains("事件监视已永久失效"),
+        "错误消息必须说明永久失效原因: {}",
+        error.message
+    );
+    // 零副作用：desired/watch/shared 全部保持 Stopped。
+    assert_eq!(h.coordinator.desired_state(), CaptureState::Stopped);
+    assert_eq!(*h.capture_rx.borrow(), CaptureState::Stopped);
+    assert_eq!(h.shared.capture_state(), CaptureState::Stopped);
+}
+
 // 旧 L18 已删除——改为复用生产 bridge helper 的端到端测试（见文件末尾）。
 
 // ===== L04: Sleep→Lock→Unlock→Resume（反向叠加） =====

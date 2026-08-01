@@ -455,6 +455,40 @@ async fn capture_start_blocked_when_settings_unrecoverable() {
     assert!(h.control_rx.is_empty());
 }
 
+/// EnsureRecording（09 §9.3）：settings 不可恢复时同样拒绝，零副作用——
+/// desired/watch/shared 保持 Stopped，无 barrier/control。
+#[tokio::test]
+async fn ensure_recording_blocked_when_settings_unrecoverable() {
+    let h = harness(CaptureState::Stopped);
+    h.shared.set_capture_blocked(true);
+    let error = h
+        .coordinator
+        .apply_capture_command("capture_ensure_recording", T0)
+        .await
+        .expect_err("blocked 必须拒绝");
+    assert_eq!(error.code, SafeErrorCode::SettingsInvalid);
+    assert_eq!(*h.capture_rx.borrow(), CaptureState::Stopped);
+    assert!(h.barrier_rx.is_empty());
+    assert!(h.control_rx.is_empty());
+}
+
+/// EnsureRecording（09 §9.3）：writer fatal 并入后拒绝（与 start/resume 同 fence），
+/// 零副作用——五处状态全部 Stopped，无 barrier/control。
+#[tokio::test]
+async fn ensure_recording_rejected_when_writer_faulted() {
+    let h = harness(CaptureState::Stopped);
+    simulate_mark_fatal(&h);
+    let error = h
+        .coordinator
+        .apply_capture_command("capture_ensure_recording", T0)
+        .await
+        .expect_err("fatal 后 ensure 必须拒绝");
+    assert_eq!(error.code, SafeErrorCode::AgentWriterFaulted);
+    assert!(h.barrier_rx.is_empty());
+    assert!(h.control_rx.is_empty());
+    assert_stopped_everywhere(&h.coordinator, &h.shared, &h.capture_rx);
+}
+
 /// revision 降级在 transition lock 内拒绝，不产生任何 barrier/control。
 #[tokio::test]
 async fn settings_downgrade_is_rejected_under_lock() {

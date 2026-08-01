@@ -352,7 +352,14 @@ async fn dispatch(
             ensure_empty_payload(&request.payload)?;
             Ok(serde_json::to_value(context.shared.status_dto()).unwrap())
         }
-        "capture_start" | "capture_pause" | "capture_resume" | "capture_stop" => {
+        // capture_ensure_recording 是内部命令（09 §9.3）：仅 Desktop 启动编排
+        // 使用，不暴露给 React；语义 Stopped→Start / Paused→Resume / Running→幂等，
+        // 全部走唯一 Coordinator，不绕过 Lock/Sleep、writer fault 与 Barrier 不变量。
+        "capture_start"
+        | "capture_pause"
+        | "capture_resume"
+        | "capture_stop"
+        | "capture_ensure_recording" => {
             ensure_empty_payload(&request.payload)?;
             // 阶段 4.3：全部 capture 转换只经唯一 Coordinator（串行化、冻结、
             // Barrier 注入确认与 Writer ack 都在 Coordinator 内完成）。
