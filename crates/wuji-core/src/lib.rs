@@ -11,3 +11,4 @@ pub mod error;
 pub mod pipeline;
 pub mod runtime_names;
 pub mod settings;
+pub mod stats;
