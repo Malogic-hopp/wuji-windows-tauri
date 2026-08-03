@@ -228,10 +228,7 @@ function HeatmapGrid({ heatmap }: { heatmap: HeatmapDto }) {
   const grid = useMemo(() => buildGrid(heatmap), [heatmap]);
   const { dates, today, rows } = grid;
   const dateCount = dates.length;
-  const currentHour = useMemo(
-    () => currentLocalHour(heatmap.reportingTimeZoneId),
-    [heatmap.reportingTimeZoneId],
-  );
+  const currentHour = currentLocalHour(heatmap.reportingTimeZoneId);
   const navigate = useNavigate();
   const gridRef = useRef<HTMLDivElement>(null);
   const [focusPosition, setFocusPosition] = useState<HeatmapFocusPosition>(() =>
