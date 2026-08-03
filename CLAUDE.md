@@ -88,7 +88,7 @@ Cross-boundary errors are `SafeError { code, message }` with a frozen `SafeError
 ## Testing Conventions
 
 - Tests must be deterministic: prefer channels, events, paused Tokio time, or bounded deadlines over arbitrary sleeps.
-- Agent integration tests (`apps/agent/tests/`) spawn real agent processes with **unique test channels** and the shared process guard; they must confirm child exit and leave zero `wuji-rebuild-agent-v01` processes running.
+- Agent integration tests (`apps/agent/tests/`) spawn real agent processes with **unique test channels** and the `TestAgentGuard` process-identity guard (`apps/agent/tests/common/`, regression-tested in `agent_guard.rs`); they must confirm child exit and leave zero `wuji-rebuild-agent-v01` processes running.
 - Windows E2E tests write isolated data under `%LOCALAPPDATA%`; run with normal user permissions when a sandbox blocks that location.
 - Add focused regression tests for state machines, Barrier ordering, revision effectivity, SQLite transactions, IPC idempotency, process lifecycle, and UI states.
 - Do not terminate a process by bare PID without proving its identity — reuse the repo's process-handle and test-guard abstractions.
