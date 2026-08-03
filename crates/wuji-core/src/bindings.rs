@@ -7,8 +7,12 @@ use specta::Types;
 use specta_typescript::Typescript;
 
 use crate::dto::{
-    AgentStatusDto, AppDto, HeatmapDto, SettingsDto, TimelinePageDto, TodayDto, TodayQualityDto,
-    TopAppDto,
+    AgentStatusDto, AppDto, AppPaletteEntryDto, BucketKind, ComparisonDirection,
+    CompositionBucketDto, HeatmapDto, HourlyPointDto, InertiaDto, LiveStatusDto, MilestoneDto,
+    MonthlyPointDto, PeriodKind, ReliabilityKind, SameTimeComparisonDto, SettingsDto, StatsHomeDto,
+    StatsStatusDto, StatusDto, SummaryDirection, SummaryDto, TimelinePageDto, TodayDto,
+    TodayQualityDto, TopAppDto, TopEntryDto, TrendPointDto, UnavailableReason, WeekProgressDto,
+    WeeklyPointDto,
 };
 use crate::error::{SafeError, SafeErrorCode};
 use crate::settings::{FieldError, Settings};
@@ -42,6 +46,29 @@ pub fn type_collection() -> Types {
         .register::<FieldError>()
         .register::<SafeError>()
         .register::<SafeErrorCode>()
+        // 统计主页（10 设计 §5.3；11 实施方案阶段一 1.1）
+        .register::<ComparisonDirection>()
+        .register::<UnavailableReason>()
+        .register::<SummaryDirection>()
+        .register::<PeriodKind>()
+        .register::<ReliabilityKind>()
+        .register::<BucketKind>()
+        .register::<SameTimeComparisonDto>()
+        .register::<LiveStatusDto>()
+        .register::<StatusDto>()
+        .register::<SummaryDto>()
+        .register::<TrendPointDto>()
+        .register::<WeeklyPointDto>()
+        .register::<WeekProgressDto>()
+        .register::<TopEntryDto>()
+        .register::<CompositionBucketDto>()
+        .register::<AppPaletteEntryDto>()
+        .register::<HourlyPointDto>()
+        .register::<InertiaDto>()
+        .register::<MilestoneDto>()
+        .register::<MonthlyPointDto>()
+        .register::<StatsHomeDto>()
+        .register::<StatsStatusDto>()
 }
 
 /// 生成 TypeScript 声明文本（含 Int64String 品牌替换；specta 输出漂移时替换失败即报错）。

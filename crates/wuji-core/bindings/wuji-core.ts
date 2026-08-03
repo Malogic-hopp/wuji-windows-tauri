@@ -29,8 +29,31 @@ export type AppDto = {
 	displayName: string,
 };
 
+/**  周期内固定槽位（10 §4.4）：slot ∈ {0,1,2}，槽位 → 色值由前端 CSS 令牌映射。 */
+export type AppPaletteEntryDto = {
+	app: AppDto,
+	slot: number,
+};
+
+/**  构成桶粒度（10 §4.4：7/14 天 = day，30 天 = week）。 */
+export type BucketKind = "day" | "week";
+
 /**  采集状态（schema `agent_runtime.capture_state`）。 */
 export type CaptureState = "stopped" | "running" | "paused";
+
+/**  同时刻比较方向五态（10 §4.1；TS 字面量 "up"|"down"|"stable"|"upFromZero"|"unavailable"）。 */
+export type ComparisonDirection = "up" | "down" | "stable" | "upFromZero" | "unavailable";
+
+/**  应用构成桶（10 §4.4）：日桶/周桶；hasData 区分"无记录数据"与"有记录但活跃为 0"。 */
+export type CompositionBucketDto = {
+	startDate: LocalDate,
+	endDate: LocalDate,
+	bucketKind: BucketKind,
+	isCurrent: boolean,
+	hasData: boolean,
+	apps: TopEntryDto[],
+	othersActiveMs: Int64String,
+};
 
 /**  字段级安全错误（09 §8.2 `fieldErrors`；message 为中文安全提示）。 */
 export type FieldError = {
@@ -64,14 +87,62 @@ export type HeatmapDto = {
 	cells: HeatmapCellDto[],
 };
 
+/**  惯性每小时均值（10 §4.4）：Rust 统一分母后返回，前端只做柱高归一化。 */
+export type HourlyPointDto = {
+	localHour: number,
+	avgActiveMs: Int64String,
+};
+
+/**  惯性标注（10 §4.4）：全零曲线或 reliability = null 时派生字段全部 null。 */
+export type InertiaDto = {
+	startHour: number | null,
+	peakHour: number | null,
+	endHour: number | null,
+	lunchLowestHour: number | null,
+	effectiveDays: number,
+	totalDays: number,
+	reliability: ReliabilityKind | null,
+};
+
 /**  i64 的十进制字符串表示（branded；serde 只接受字符串，避免 JS number 精度问题）。 */
 export type Int64String = string & { readonly __brand: "Int64String" };
+
+/**  轻量轮询载荷的实时状态（11 阶段零 P0-1）：不含摘要；摘要只在 StatsHomeDto.status 返回。 */
+export type LiveStatusDto = {
+	todayActiveMs: Int64String,
+	workBlockCount: Int64String,
+	cutoffLocalTime: string,
+	yesterdaySame: SameTimeComparisonDto,
+	last7AvgSame: SameTimeComparisonDto,
+};
 
 /**  严格 `YYYY-MM-DD` 本地日期（09 §8.4）。 */
 export type LocalDate = string;
 
+/**  长期里程碑（10 §4.5）：firstRecordedMonth 无任何有效记录时为 null（禁止空字符串）。 */
+export type MilestoneDto = {
+	totalRecordedDays: Int64String,
+	longestConsecutiveDays: Int64String,
+	firstRecordedMonth: string | null,
+};
+
+/**  月度柱点（10 §4.5）：主值 = 每有效记录日均值；当前月进行中，recordedDays/均值不含今日。 */
+export type MonthlyPointDto = {
+	month: string,
+	activeDurationMs: Int64String,
+	recordedDays: number,
+	isCurrentMonth: boolean,
+	avgActiveMsPerRecordedDay: Int64String | null,
+};
+
+/**  主要活跃时段（10 §5.3 primaryPeriod：6-12 morning，12-18 afternoon，18-24 evening，0-6 night）。 */
+export type PeriodKind = "morning" | "afternoon" | "evening" | "night";
+
 /**  Agent 进程状态（schema `agent_runtime.process_state`）。 */
 export type ProcessState = "starting" | "running" | "degraded" | "faulted" | "shutting_down" | "stopped";
+
+/**  惯性可靠性（10 §4.4：有效日 <3 → null，3-6 → preliminary，≥7 → normal）。 */
+export type ReliabilityKind = "preliminary" | "normal";
 
 /**  open/closed 行状态（schema 各 `status` 列）。 */
 export type RowStatus = "open" | "closed";
@@ -88,6 +159,18 @@ export type SafeError = {
 
 /**  09 §8.2 冻结的稳定错误码。 */
 export type SafeErrorCode = "IPC_PROTOCOL_UNSUPPORTED" | "IPC_CHANNEL_MISMATCH" | "IPC_INVALID_MESSAGE" | "IPC_PAYLOAD_TOO_LARGE" | "IPC_REQUEST_ID_REUSED" | "INVALID_ARGUMENT" | "CAPTURE_INVALID_STATE" | "AGENT_WRITER_DEGRADED" | "AGENT_WRITER_FAULTED" | "DB_UNAVAILABLE" | "DB_SCHEMA_UNSUPPORTED" | "TIME_ZONE_UNAVAILABLE" | "SETTINGS_CONFLICT" | "SETTINGS_INVALID" | "SETTINGS_SAVED_NOT_APPLIED" | "STARTUP_REGISTRY_FAILED" | "STARTUP_RECONCILIATION_REQUIRED" | "VERSION_INCOMPATIBLE" | "INTERNAL_SAFE_ERROR";
+
+/**
+ *  同时刻比较对象（10 §5.3）：对象始终存在；`activeDurationMs` 无基线时为 null，
+ *  `deltaPercent` 仅基线 > 0 时如实携带（含 |delta| ≤ 5% 的 stable）。
+ */
+export type SameTimeComparisonDto = {
+	activeDurationMs: Int64String | null,
+	deltaPercent: number | null,
+	direction: ComparisonDirection,
+	sampleDays: number,
+	unavailableReason: UnavailableReason | null,
+};
 
 /**
  *  Settings JSON 完整字段集（09 §9：只允许这五个业务字段加 schemaVersion/revision）。
@@ -115,6 +198,54 @@ export type SettingsDto = {
 	workBreakIdleSeconds: number,
 	excludedProcessNames: string[],
 	startCaptureOnLogin: boolean,
+};
+
+/**  统计主页全量（10 §5.3）：跨日期/切换范围时整页刷新；hasAnyData=false 整页空状态。 */
+export type StatsHomeDto = {
+	hasAnyData: boolean,
+	localDate: LocalDate,
+	reportingTimeZoneId: string,
+	status: StatusDto,
+	trend: TrendPointDto[],
+	weekly: WeeklyPointDto[],
+	weekProgress: WeekProgressDto,
+	composition: CompositionBucketDto[],
+	palette: AppPaletteEntryDto[],
+	hourlyProfile: HourlyPointDto[],
+	inertia: InertiaDto,
+	milestone: MilestoneDto,
+	monthly: MonthlyPointDto[],
+};
+
+/**
+ *  轻量轮询（11 阶段零 P0-1/P0-2）：5s 同拍刷新 liveStatus + weekProgress + todayTrendPoint，
+ *  携带报告时区的 localDate 供前端跨日检测；不含摘要，不触发惯性/月度/里程碑查询。
+ */
+export type StatsStatusDto = {
+	localDate: LocalDate,
+	reportingTimeZoneId: string,
+	liveStatus: LiveStatusDto,
+	weekProgress: WeekProgressDto,
+	todayTrendPoint: TrendPointDto,
+};
+
+/**  状态摘要主卡（仅 StatsHomeDto 使用；10 §5.3 原形：实时五字段 + summary）。 */
+export type StatusDto = {
+	todayActiveMs: Int64String,
+	workBlockCount: Int64String,
+	cutoffLocalTime: string,
+	yesterdaySame: SameTimeComparisonDto,
+	last7AvgSame: SameTimeComparisonDto,
+	summary: SummaryDto,
+};
+
+/**  摘要方向五档（10 §5.3 SummaryDto.direction）。 */
+export type SummaryDirection = "up" | "upSlight" | "flat" | "downSlight" | "down";
+
+/**  一行自然语言摘要（10 §5.3）：direction = 7 日窗口日均比较，primaryPeriod = 14 日惯性峰值时段。 */
+export type SummaryDto = {
+	direction: SummaryDirection | null,
+	primaryPeriod: PeriodKind | null,
 };
 
 export type TimelineGapDto = {
@@ -173,6 +304,43 @@ export type TodayQualityDto = {
 export type TopAppDto = {
 	app: AppDto,
 	activeDurationMs: Int64String,
+};
+
+/**  构成桶内单个应用条目（10 §4.4；与今日页 TopAppDto 同形但独立类型，口径各自演进）。 */
+export type TopEntryDto = {
+	app: AppDto,
+	activeDurationMs: Int64String,
+};
+
+/**  活跃趋势单日点（10 §4.2）：hasData=false 柱留空斜纹；isToday 用进行中样式且不进入均线。 */
+export type TrendPointDto = {
+	localDate: LocalDate,
+	activeDurationMs: Int64String,
+	workBlockCount: Int64String,
+	hasData: boolean,
+	isToday: boolean,
+	movingAvg7ActiveMs: Int64String | null,
+	movingAvg7SampleDays: number,
+};
+
+/**  比较不可用原因（仅 direction = Unavailable 时有值；单轨表达）。 */
+export type UnavailableReason = "noData" | "insufficientSamples";
+
+/**  本周进度卡（10 §4.3）：当前周存在时始终返回，仅 lastWeekSame 基线可空。 */
+export type WeekProgressDto = {
+	currentActiveMs: Int64String,
+	lastWeekSame: SameTimeComparisonDto,
+	recordedDays: number,
+	cutoffLocalTime: string,
+};
+
+/**  周柱点（10 §4.3）：当前周 = 截至同时刻总量 + 进行中样式；虚框参考值仅当前周有值。 */
+export type WeeklyPointDto = {
+	weekStartDate: LocalDate,
+	activeDurationMs: Int64String,
+	isCurrentWeek: boolean,
+	completedRecordedDays: number,
+	currentWeekDailyAvgMs: Int64String | null,
 };
 
 /**  Writer 状态（schema `agent_runtime.writer_state`）。 */
