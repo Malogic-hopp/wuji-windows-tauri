@@ -13,5 +13,5 @@ pub mod writer;
 
 pub use error::{Result, StorageError};
 pub use models::{GapRow, RuntimeRow, SchemaMeta, SegmentRow, WorkBlockRow};
-pub use reader::Reader;
+pub use reader::{AppDayRow, AppTotalRow, DayAtCutoff, DayMetric, Reader, ReaderSnapshot};
 pub use writer::{ObservationInsert, Writer};

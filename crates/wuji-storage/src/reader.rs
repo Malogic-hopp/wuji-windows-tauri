@@ -3,6 +3,7 @@
 //! Reader 以 read-only + query_only 打开并验证 schema_version（09 §7.3）；
 //! 所有时长/ID/毫秒以 Int64String 返回。
 
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -20,7 +21,7 @@ use crate::models::{
     RuntimeRow, SchemaMeta, parse_activity_state, parse_capture_state, parse_gap_kind,
     parse_process_state, parse_row_status, parse_writer_state,
 };
-use crate::timeutil::{local_date_of, local_day_range_utc_ms};
+use crate::timeutil::{local_date_of, local_day_range_utc_ms, same_moment_cutoff_utc_ms};
 
 #[derive(Debug)]
 pub struct Reader {
@@ -570,4 +571,408 @@ pub fn status_dto_from_runtime(
             .as_deref()
             .and_then(wuji_core::error::SafeErrorCode::from_code),
     }
+}
+
+// ===== 统计主页投影原语（10 设计 §5 + 11 实施方案阶段二）=====
+
+/// 读事务快照包装：独占借用 `Reader.conn`（快照存活期间 Reader 本体不可再借用），
+/// 保证一次命令的全部统计子查询在同一读事务（WAL 快照）内执行（11 阶段三 3.1）。
+/// 统计投影原语全部实现在本类型上，类型层面杜绝"事务开着却绕过事务直查连接"的路径。
+pub struct ReaderSnapshot<'a> {
+    tx: rusqlite::Transaction<'a>,
+    meta: &'a SchemaMeta,
+}
+
+/// 单日工作统计投影行（`stats_daily_rows` 输出；Query 层映射为 wuji-core 纯输入
+/// `DailyMetricSample` 后调用纯函数）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayMetric {
+    pub local_date: String,
+    pub active_duration_ms: i64,
+    pub work_block_count: i64,
+    pub has_data: bool,
+}
+
+/// 单日同时刻截断结果（`stats_cutoff_series` 输出）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayAtCutoff {
+    pub local_date: String,
+    pub active_duration_ms: i64,
+    pub work_block_count: i64,
+}
+
+/// 周期内应用总量行（`stats_app_totals` 输出；slot 排名输入）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppTotalRow {
+    pub app_id: i64,
+    pub display_name: String,
+    pub total_active_ms: i64,
+}
+
+/// 逐日逐应用行（`stats_app_rows` 输出；日/周桶聚合输入）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppDayRow {
+    pub local_date: String,
+    pub app_id: i64,
+    pub display_name: String,
+    pub active_ms: i64,
+}
+
+impl Reader {
+    /// 在单一读事务快照内执行统计投影（11 阶段三 3.1）：子查询必须通过
+    /// `ReaderSnapshot` 执行；闭包返回 Err 时事务自动回滚（rusqlite Transaction
+    /// 的 Drop 语义），不影响连接后续使用。
+    pub fn with_snapshot<T>(
+        &mut self,
+        f: impl FnOnce(&ReaderSnapshot<'_>) -> Result<T>,
+    ) -> Result<T> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(StorageError::from_sqlite)?;
+        let snapshot = ReaderSnapshot {
+            tx,
+            meta: &self.meta,
+        };
+        let result = f(&snapshot);
+        if result.is_ok() {
+            snapshot.tx.commit().map_err(StorageError::from_sqlite)?;
+        }
+        result
+    }
+}
+
+impl ReaderSnapshot<'_> {
+    /// reporting 时区（与 Reader 同一 meta）。
+    pub fn reporting_tz(&self) -> Result<chrono_tz::Tz> {
+        self.meta.reporting_tz()
+    }
+
+    /// 每日骨架行（11 阶段二 2.3）：先生成 `[start, end]` 完整本地日期序列，再映射
+    /// `daily_work_metrics` 行；SQL 无行的日期生成零值 `has_data = false`——趋势数组
+    /// 长度恒等 7/14/30，不依赖数据库是否存在该日行。范围上限 366 天（与 heatmap 的
+    /// ≤31 天同一类防御护栏；当前调用方最长为 37 天）。
+    pub fn stats_daily_rows(&self, start: &LocalDate, end: &LocalDate) -> Result<Vec<DayMetric>> {
+        let start_naive = naive_of(start)?;
+        let end_naive = naive_of(end)?;
+        if end_naive < start_naive {
+            return Err(StorageError::new(
+                SafeErrorCode::InvalidArgument,
+                "日期范围无效（end 早于 start）",
+            ));
+        }
+        let span_days = (end_naive - start_naive).num_days() + 1;
+        if span_days > 366 {
+            return Err(StorageError::new(
+                SafeErrorCode::InvalidArgument,
+                "日期范围过长（最多 366 天）",
+            ));
+        }
+        // 完整本地日期骨架。
+        let mut skeleton: Vec<String> = Vec::new();
+        let mut day = start_naive;
+        loop {
+            skeleton.push(day.format("%Y-%m-%d").to_string());
+            if day == end_naive {
+                break;
+            }
+            day = day
+                .succ_opt()
+                .ok_or_else(|| StorageError::internal("日期序列越界"))?;
+        }
+        // 存在的行映射进骨架；缺失日期补零 has_data=false。
+        let mut existing: HashMap<String, (i64, i64)> = HashMap::new();
+        {
+            let mut stmt = self.tx.prepare(
+                "SELECT local_date, active_duration_ms, work_block_count
+                 FROM daily_work_metrics WHERE local_date BETWEEN ?1 AND ?2",
+            )?;
+            let iter = stmt.query_map(params![start.as_str(), end.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            for row in iter {
+                let (date, active, blocks) = row?;
+                existing.insert(date, (active, blocks));
+            }
+        }
+        Ok(skeleton
+            .into_iter()
+            .map(|date| match existing.remove(&date) {
+                Some((active, blocks)) => DayMetric {
+                    local_date: date,
+                    active_duration_ms: active,
+                    work_block_count: blocks,
+                    has_data: true,
+                },
+                None => DayMetric {
+                    local_date: date,
+                    active_duration_ms: 0,
+                    work_block_count: 0,
+                    has_data: false,
+                },
+            })
+            .collect())
+    }
+
+    /// 从 before 向前寻找最近 limit 个有记录日期（11 阶段二 2.3）；**不是固定
+    /// lookback**——历史缺失时返回不足 limit 个，调用方据此判定 `sampleDays < 3`，
+    /// 不擅自补足。
+    pub fn recent_recorded_dates(
+        &self,
+        before: &LocalDate,
+        limit: usize,
+    ) -> Result<Vec<LocalDate>> {
+        let limit = i64::try_from(limit).map_err(|_| StorageError::internal("limit 超出 i64"))?;
+        let mut stmt = self.tx.prepare(
+            "SELECT local_date FROM daily_work_metrics
+             WHERE local_date < ?1
+             ORDER BY local_date DESC LIMIT ?2",
+        )?;
+        let iter = stmt.query_map(params![before.as_str(), limit], |row| {
+            row.get::<_, String>(0)
+        })?;
+        let mut dates = Vec::new();
+        for row in iter {
+            let raw = row?;
+            dates.push(LocalDate::parse(&raw).map_err(|e| StorageError::new(e.code, e.message))?);
+        }
+        dates.reverse(); // DESC → 升序
+        Ok(dates)
+    }
+
+    /// 多日期同时刻截断聚合（11 阶段二 2.3）：一条 VALUES CTE + LEFT JOIN 完成全部
+    /// 日期的活动时长截断（零活动日期返回 0 而非缺失）；今日 workBlockCount 用同快照
+    /// 第二条批量 SQL 从 `work_blocks` 按 `recompute_dates` 口径计数（含未闭合块）。
+    /// **重复日期按首次出现去重查询、按原始输入 `get()` 映射**（不翻倍不归零），
+    /// 结果保持确定性顺序；**不逐日发 SQL**。
+    pub fn stats_cutoff_series(
+        &self,
+        tz: &chrono_tz::Tz,
+        today: &LocalDate,
+        now_utc_ms: i64,
+        dates: &[LocalDate],
+    ) -> Result<Vec<DayAtCutoff>> {
+        if dates.is_empty() {
+            return Ok(Vec::new());
+        }
+        // 按首次出现顺序去重：阶段三组装（昨日 + 近 7 有效日 + 上周同期）可能自然
+        // 产生重复日期（昨日通常也在近 7 有效日内）。CTE 只查询唯一日期，避免
+        // GROUP BY 对重复日期重复累计。
+        let mut cuts: Vec<(String, i64, i64)> = Vec::with_capacity(dates.len());
+        let mut seen: HashSet<String> = HashSet::new();
+        for date in dates {
+            if seen.contains(date.as_str()) {
+                continue;
+            }
+            let (day_start, _day_end) = local_day_range_utc_ms(tz, date)?;
+            let cutoff = same_moment_cutoff_utc_ms(tz, date, now_utc_ms, today)?;
+            seen.insert(date.as_str().to_string());
+            cuts.push((date.as_str().to_string(), day_start, cutoff));
+        }
+        let placeholders: Vec<String> = cuts.iter().map(|_| "(?,?,?)".to_string()).collect();
+        let values_sql = placeholders.join(",");
+        let mut params: Vec<&dyn rusqlite::ToSql> = Vec::new();
+        for (date, start, cutoff) in &cuts {
+            params.push(date);
+            params.push(start);
+            params.push(cutoff);
+        }
+
+        // 批量活动时长（LEFT JOIN：零活动日期仍返回该行并 COALESCE 为 0）。
+        let mut active_ms: HashMap<String, i64> = HashMap::new();
+        {
+            let sql = format!(
+                "WITH cuts(local_date, day_start, cutoff) AS (VALUES {values_sql})
+                 SELECT c.local_date,
+                        COALESCE(SUM(CASE WHEN s.activity_state = 'active'
+                                      THEN MIN(s.end_at_utc_ms, c.cutoff)
+                                         - MAX(s.start_at_utc_ms, c.day_start)
+                                      ELSE 0 END), 0) AS active_duration_ms
+                 FROM cuts c
+                 LEFT JOIN activity_segments s
+                   ON s.end_at_utc_ms > c.day_start AND s.start_at_utc_ms < c.cutoff
+                   AND s.end_at_utc_ms > s.start_at_utc_ms
+                 GROUP BY c.local_date
+                 ORDER BY c.local_date"
+            );
+            let mut stmt = self.tx.prepare(&sql)?;
+            let iter = stmt.query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in iter {
+                let (date, ms) = row?;
+                active_ms.insert(date, ms);
+            }
+        }
+
+        // 批量工作块数（与 recompute_dates 同一口径：块与 [day_start, cutoff] 相交
+        // 且 day_active > 0 才计 1，含当前未闭合块）。
+        let mut block_counts: HashMap<String, i64> = HashMap::new();
+        {
+            let sql = format!(
+                "WITH cuts(local_date, day_start, cutoff) AS (VALUES {values_sql})
+                 SELECT c.local_date, w.work_block_id,
+                        COALESCE(SUM(MIN(s.end_at_utc_ms, c.cutoff)
+                                     - MAX(s.start_at_utc_ms, c.day_start)), 0) AS day_active
+                 FROM cuts c
+                 JOIN work_blocks w
+                   ON w.end_at_utc_ms > c.day_start AND w.start_at_utc_ms < c.cutoff
+                 LEFT JOIN activity_segments s
+                   ON s.start_at_utc_ms >= w.start_at_utc_ms
+                  AND s.end_at_utc_ms <= w.end_at_utc_ms
+                  AND s.activity_state = 'active'
+                  AND s.end_at_utc_ms > c.day_start
+                  AND s.start_at_utc_ms < c.cutoff
+                 GROUP BY c.local_date, w.work_block_id"
+            );
+            let mut stmt = self.tx.prepare(&sql)?;
+            let iter = stmt.query_map(params.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(2)?))
+            })?;
+            for row in iter {
+                let (date, day_active) = row?;
+                if day_active > 0 {
+                    *block_counts.entry(date).or_insert(0) += 1;
+                }
+            }
+        }
+
+        // 按原始输入顺序映射（含重复日期）：同一日期返回同一正确值——不翻倍、不归零。
+        Ok(dates
+            .iter()
+            .map(|date| DayAtCutoff {
+                local_date: date.as_str().to_string(),
+                active_duration_ms: active_ms.get(date.as_str()).copied().unwrap_or(0),
+                work_block_count: block_counts.get(date.as_str()).copied().unwrap_or(0),
+            })
+            .collect())
+    }
+
+    /// 周期内应用总量（slot 排名输入）：身份解析与 `reader.today()` 相同的
+    /// `JOIN app_identities` + `AppDto` 路径，按 SUM DESC、app_id ASC 排序（tie-break）。
+    pub fn stats_app_totals(&self, start: &LocalDate, end: &LocalDate) -> Result<Vec<AppTotalRow>> {
+        let mut stmt = self.tx.prepare(
+            "SELECT u.app_id, a.display_name, SUM(u.active_duration_ms)
+             FROM daily_app_usage u
+             JOIN app_identities a ON a.app_id = u.app_id
+             WHERE u.local_date BETWEEN ?1 AND ?2
+             GROUP BY u.app_id
+             ORDER BY SUM(u.active_duration_ms) DESC, u.app_id ASC",
+        )?;
+        let iter = stmt.query_map(params![start.as_str(), end.as_str()], |row| {
+            Ok(AppTotalRow {
+                app_id: row.get(0)?,
+                display_name: row.get(1)?,
+                total_active_ms: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in iter {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 逐日逐应用行（日/周桶聚合输入）：按 (local_date, app_id) 升序。
+    pub fn stats_app_rows(&self, start: &LocalDate, end: &LocalDate) -> Result<Vec<AppDayRow>> {
+        let mut stmt = self.tx.prepare(
+            "SELECT u.local_date, u.app_id, a.display_name, u.active_duration_ms
+             FROM daily_app_usage u
+             JOIN app_identities a ON a.app_id = u.app_id
+             WHERE u.local_date BETWEEN ?1 AND ?2
+             ORDER BY u.local_date ASC, u.app_id ASC",
+        )?;
+        let iter = stmt.query_map(params![start.as_str(), end.as_str()], |row| {
+            Ok(AppDayRow {
+                local_date: row.get(0)?,
+                app_id: row.get(1)?,
+                display_name: row.get(2)?,
+                active_ms: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in iter {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// 惯性窗口小时均值（11 阶段二 2.3 + 阶段零 P0-4）：**有效日来自
+    /// `daily_work_metrics`**（存在当日工作统计投影的日期），小时总量来自
+    /// `hourly_app_usage`；为每个有效日建立 24 个零值、覆盖已有小时数据，统一除以
+    /// `effectiveDays` 求平均。某日有工作统计投影但小时表无行（零活动/投影边界）时
+    /// 该日必须计入分母。返回 `([每小时均值; 24], 有效日数)`。
+    pub fn stats_hourly_profile(
+        &self,
+        start: &LocalDate,
+        end: &LocalDate,
+    ) -> Result<([i64; 24], u32)> {
+        let mut effective: HashSet<String> = HashSet::new();
+        {
+            let mut stmt = self.tx.prepare(
+                "SELECT local_date FROM daily_work_metrics
+                 WHERE local_date >= ?1 AND local_date <= ?2",
+            )?;
+            let iter = stmt.query_map(params![start.as_str(), end.as_str()], |row| {
+                row.get::<_, String>(0)
+            })?;
+            for row in iter {
+                effective.insert(row?);
+            }
+        }
+        let mut per_hour: [i64; 24] = [0; 24];
+        let effective_days = effective.len() as u32;
+        if effective_days > 0 {
+            let mut stmt = self.tx.prepare(
+                "SELECT local_date, local_hour, SUM(active_duration_ms)
+                 FROM hourly_app_usage
+                 WHERE local_date >= ?1 AND local_date <= ?2
+                 GROUP BY local_date, local_hour",
+            )?;
+            let iter = stmt.query_map(params![start.as_str(), end.as_str()], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            for row in iter {
+                let (date, hour, ms) = row?;
+                // 只累计有效日的贡献；有效日缺失的小时保持 0（统一分母）。
+                if effective.contains(&date) && hour < 24 {
+                    per_hour[hour as usize] = per_hour[hour as usize].saturating_add(ms);
+                }
+            }
+            for value in per_hour.iter_mut() {
+                *value /= i64::from(effective_days);
+            }
+        }
+        Ok((per_hour, effective_days))
+    }
+
+    /// 全部有记录日期（升序去重；里程碑连续天数输入）。
+    pub fn stats_recorded_dates(&self) -> Result<Vec<String>> {
+        let mut stmt = self
+            .tx
+            .prepare("SELECT DISTINCT local_date FROM daily_work_metrics ORDER BY local_date")?;
+        let iter = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in iter {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+}
+
+fn naive_of(date: &LocalDate) -> Result<NaiveDate> {
+    NaiveDate::parse_from_str(date.as_str(), "%Y-%m-%d").map_err(|_| {
+        StorageError::new(
+            SafeErrorCode::InvalidArgument,
+            "日期必须使用 YYYY-MM-DD 格式",
+        )
+    })
 }

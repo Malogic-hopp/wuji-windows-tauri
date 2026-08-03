@@ -108,6 +108,8 @@ impl StorageTransaction<'_> {
                    ON s.start_at_utc_ms >= w.start_at_utc_ms
                   AND s.end_at_utc_ms <= w.end_at_utc_ms
                   AND s.activity_state = 'active'
+                  AND s.end_at_utc_ms > ?1
+                  AND s.start_at_utc_ms < ?2
                  WHERE w.end_at_utc_ms > ?1 AND w.start_at_utc_ms < ?2
                  GROUP BY w.work_block_id",
             )?;
