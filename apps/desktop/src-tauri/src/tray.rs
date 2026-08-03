@@ -217,6 +217,14 @@ async fn run_action(app: AppHandle, action: TrayAction) {
 }
 
 pub fn setup_tray(app: &App) -> tauri::Result<()> {
+    // 手工创建的 TrayIconBuilder 不会自动继承 bundle/default window icon。
+    // 显式复用 Tauri 在 dev 与 package 构建时嵌入的同一份图标，避免 Windows
+    // 托盘区域只出现透明占位。
+    let icon = app
+        .default_window_icon()
+        .cloned()
+        .ok_or_else(|| tauri::Error::AssetNotFound("icons/icon.ico".to_owned()))?;
+
     let menu = TrayMenu {
         status: MenuItem::with_id(app, TRAY_STATUS_ID, "— Agent 未运行", false, None::<&str>)?,
         start: MenuItem::with_id(app, TRAY_START_ID, "启动记录", true, None::<&str>)?,
@@ -252,6 +260,7 @@ pub fn setup_tray(app: &App) -> tauri::Result<()> {
     let menu_for_events = menu.clone();
 
     TrayIconBuilder::with_id("wuji-main")
+        .icon(icon)
         .menu(&tray_menu)
         .tooltip("吾迹 Rebuild v0.1（开发）")
         .show_menu_on_left_click(false)

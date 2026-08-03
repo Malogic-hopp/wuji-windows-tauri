@@ -31,6 +31,7 @@
   "bundle": {
     "active": true,
     "targets": "nsis",
+    "icon": ["icons/icon.ico"],
     "resources": {
       "../../../target/release/wuji-rebuild-agent-v01.exe": "Agent/wuji-rebuild-agent-v01.exe"
     },
