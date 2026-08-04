@@ -2,6 +2,7 @@ import type { HeatmapDto } from '../../../types/wuji-core';
 import {
   buildGrid,
   currentLocalHour,
+  getCellLabel,
   getTimeOfDayLabel,
   heatmapIntensityLabels,
   isHourPeriodEnd,
@@ -53,6 +54,7 @@ export function MiniHeatmap({ heatmap }: { heatmap: HeatmapDto }) {
                   ]
                     .filter(Boolean)
                     .join(' ')}
+                  title={getCellLabel(cell)}
                 />
               ))}
             </div>
