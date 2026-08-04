@@ -56,9 +56,6 @@ export function TrendChart({
   const max = maxOf(points);
   const segments = buildMaSegments(points, max);
   const hasMa = segments.length > 0;
-  // 时间锚点：首点 / 中间点日期（MM-DD）+ 右端"今天"（纯展示，aria-hidden）。
-  const firstPoint = points.length > 0 ? points[0] : undefined;
-  const midPoint = points.length > 0 ? points[Math.floor(points.length / 2)] : undefined;
   return (
     <figure className="chart" aria-label={`近 ${String(days)} 天活跃时长趋势`}>
       <div className="chart__body chart__body--trend">
@@ -111,11 +108,31 @@ export function TrendChart({
           </svg>
         )}
       </div>
-      {firstPoint != null && midPoint != null && (
+      {/* 时间刻度：每根柱一个 span，与柱槽同一 flex 布局（同 gap、flex:1）保证中心对齐；
+          宽度不足时 CSS 按媒体查询降密度（visibility 隐藏保留占位，对齐不变；今天恒显示）。 */}
+      {points.length > 0 && (
         <div className="trend-ticks" aria-hidden="true">
-          <span>{firstPoint.localDate.slice(5)}</span>
-          <span>{midPoint.localDate.slice(5)}</span>
-          <span>今天</span>
+          {points.map((point, index) => {
+            const isToday = point.isToday;
+            const isSparseVisible =
+              isToday ||
+              index === 0 ||
+              index === points.length - 1 ||
+              index === Math.floor(points.length / 2);
+            const cls = [
+              'trend-tick',
+              isToday ? 'trend-tick--today' : '',
+              isToday || index % 2 === 0 ? '' : 'trend-tick--dense',
+              isSparseVisible ? '' : 'trend-tick--sparse',
+            ]
+              .filter(Boolean)
+              .join(' ');
+            return (
+              <span key={point.localDate} className={cls}>
+                {isToday ? '今天' : point.localDate.slice(5)}
+              </span>
+            );
+          })}
         </div>
       )}
       <figcaption className="chart__legend">

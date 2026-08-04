@@ -1,5 +1,8 @@
 import type { Int64String, WeeklyPointDto, WeekProgressDto } from '../../../types/wuji-core';
-import { formatDeltaMs, mapDirectionDisplay } from '../statsModel';
+import { formatDeltaMs, isoWeekOf, mapDirectionDisplay } from '../statsModel';
+
+/** 参考线在此高度（含）以上时标签移到线下，避免溢出图表区与标题重叠。 */
+const LABEL_BELOW_THRESHOLD = 80;
 
 function maxOf(points: readonly WeeklyPointDto[]): number {
   return points.reduce((max, p) => Math.max(max, Number(p.activeDurationMs)), 0);
@@ -46,7 +49,15 @@ export function WeeklyChart({
             style={{ bottom: `${String(refHeight)}%` }}
             title={`按已完成记录日的日均值推算：约 ${formatDeltaMs(String(refValue) as Int64String)}`}
           >
-            <span className="chart__ref-label">本周日均推算</span>
+            <span
+              className={
+                refHeight >= LABEL_BELOW_THRESHOLD
+                  ? 'chart__ref-label chart__ref-label--below'
+                  : 'chart__ref-label'
+              }
+            >
+              本周日均推算
+            </span>
           </div>
         )}
         {points.map((point, index) => {
@@ -97,14 +108,33 @@ export function WeeklyChart({
           );
         })}
       </div>
-      {/* 月份边界刻度：首柱与跨月柱标注"N月"；与柱槽同一 flex 布局保证对齐（纯展示）。 */}
+      {/* 柱下刻度：每根柱显示周序号（W 序号），跨月柱叠加月份；
+          与柱槽同一 flex 布局保证对齐；窄屏按媒体查询降密度（跨月柱恒保留）。 */}
       <div className="week-ticks" aria-hidden="true">
         {points.map((point, index) => {
           const month = Number(point.weekStartDate.slice(5, 7));
           const prevMonth =
             index > 0 ? Number(points[index - 1]?.weekStartDate.slice(5, 7)) : null;
-          const show = index === 0 || month !== prevMonth;
-          return <span key={point.weekStartDate}>{show ? `${String(month)}月` : ''}</span>;
+          // 月份只在跨月柱显示（首柱不再恒显示，时间锚点由 W 序号承担）。
+          const showMonth = index > 0 && month !== prevMonth;
+          const weekNo = isoWeekOf(point.weekStartDate);
+          const cls = [
+            'week-tick',
+            showMonth ? 'week-tick--month' : '',
+            index % 2 === 1 && !showMonth ? 'week-tick--dense' : '',
+            index !== 0 && !showMonth && index !== points.length - 1
+              ? 'week-tick--sparse'
+              : '',
+          ]
+            .filter(Boolean)
+            .join(' ');
+          return (
+            <span key={point.weekStartDate} className={cls}>
+              {/* W 序号在上、月份在下（用户反馈）；跨月柱叠加月份。 */}
+              <span className="week-tick__week">W{String(weekNo)}</span>
+              <span className="week-tick__month">{showMonth ? `${String(month)}月` : ''}</span>
+            </span>
+          );
         })}
       </div>
       <figcaption className="chart__legend">

@@ -174,6 +174,20 @@ export function weeklySummaryLabel(points: readonly WeeklyPointDto[]): string {
   return avg == null ? '' : `周均 ${formatDeltaMs(avg)}`;
 }
 
+/** ISO 周序号（ISO 8601）：以该日期所在周的周四是归属年判据（12 月末可能属次年 W1）；
+ *  归属年的 1 月 4 日所在周的周一为 W1 起点。 */
+export function isoWeekOf(dateStr: string): number {
+  const [year, month, day] = dateStr.split('-').map(Number);
+  const date = Date.UTC(year, month - 1, day);
+  const dow = (utc: number): number => new Date(utc).getUTCDay() || 7; // Mon=1..Sun=7
+  const thursday = date + (4 - dow(date)) * 86_400_000;
+  const thuYear = new Date(thursday).getUTCFullYear();
+  const jan4 = Date.UTC(thuYear, 0, 4);
+  const week1Start = jan4 - (dow(jan4) - 1) * 86_400_000;
+  const days = Math.round((date - week1Start) / 86_400_000);
+  return Math.floor(days / 7) + 1;
+}
+
 /** 紧凑时长 "3h42m" / "12m"（趋势柱 aria、紧凑标注；毫秒输入）。 */
 export function formatDeltaMs(msText: Int64String): string {
   if (!/^-?\d+$/.test(msText)) return '—';

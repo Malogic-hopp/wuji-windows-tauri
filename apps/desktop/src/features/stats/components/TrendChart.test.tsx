@@ -48,12 +48,19 @@ describe('TrendChart 活跃趋势', () => {
     expect(screen.getByText('今日进行中')).toBeInTheDocument();
     expect(screen.getByText('当日无记录数据')).toBeInTheDocument();
     expect(screen.getByText('7 日均线')).toBeInTheDocument();
-    // 时间锚点刻度：首点 / 中间点（MM-DD）/ 今天（aria-hidden 纯展示）
+    // 时间刻度：每根柱一个 span（与柱槽同布局居中对齐），今天恒显示
     const ticks = container.querySelector('.trend-ticks');
     expect(ticks).not.toBeNull();
     expect(ticks?.getAttribute('aria-hidden')).toBe('true');
-    const tickTexts = Array.from(ticks?.querySelectorAll('span') ?? []).map((s) => s.textContent);
-    expect(tickTexts).toEqual(['07-15', '07-17', '今天']);
+    const tickSpans = Array.from(ticks?.querySelectorAll('span') ?? []);
+    const tickTexts = tickSpans.map((s) => s.textContent);
+    expect(tickTexts).toEqual(['07-15', '07-16', '07-17', '今天']);
+    // 今天标签带强调 class；末位（今天）不参与降密度隐藏
+    expect(tickSpans[3]?.className).toContain('trend-tick--today');
+    expect(tickSpans[3]?.className).not.toContain('trend-tick--sparse');
+    // 中间点（index 2 = 07-17）保留；非首/中/今的 index 1（07-16）参与窄屏降密度
+    expect(tickSpans[2]?.className).not.toContain('trend-tick--sparse');
+    expect(tickSpans[1]?.className).toContain('trend-tick--sparse');
   });
 
   it('柱体 inline 高度 = 值/max（P1-01：不会退化成 2px）', () => {

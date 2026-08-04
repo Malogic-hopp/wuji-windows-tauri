@@ -39,7 +39,7 @@ describe('WeeklyChart 近 12 周', () => {
     expect(screen.getAllByText('本周日均推算').length).toBeGreaterThanOrEqual(2);
   });
 
-  it('柱下月份边界刻度：首柱与跨月柱标注"N月"，同月柱留空（aria-hidden）', () => {
+  it('柱下刻度：每根柱 W 序号，跨月柱叠加月份（aria-hidden）', () => {
     const points = [
       week('2026-06-22', '70000000'),
       week('2026-06-29', '65000000'),
@@ -50,8 +50,20 @@ describe('WeeklyChart 近 12 周', () => {
     const ticks = container.querySelector('.week-ticks');
     expect(ticks).not.toBeNull();
     expect(ticks?.getAttribute('aria-hidden')).toBe('true');
-    const labels = Array.from(ticks?.querySelectorAll('span') ?? []).map((s) => s.textContent);
-    expect(labels).toEqual(['6月', '', '7月', '']);
+    const ticksEl = Array.from(ticks?.querySelectorAll('.week-tick') ?? []);
+    expect(ticksEl.length).toBe(4);
+    // 每柱 W 序号；月份只在跨月柱（07-06）显示，首柱不再恒显示
+    const monthTexts = ticksEl.map((s) => s.querySelector('.week-tick__month')?.textContent);
+    expect(monthTexts).toEqual(['', '', '7月', '']);
+    const weekTexts = ticksEl.map((s) => s.querySelector('.week-tick__week')?.textContent);
+    expect(weekTexts).toEqual(['W26', 'W27', 'W28', 'W29']);
+    // 降密度 class：跨月柱（07-06）为锚点恒保留；非跨月且隔一个的柱（06-29）参与中屏隐藏；
+    // 首柱（无月份，W 序号锚点）与末柱不参与窄屏降密度
+    expect(ticksEl[0]?.className).not.toContain('week-tick--month');
+    expect(ticksEl[2]?.className).toContain('week-tick--month');
+    expect(ticksEl[1]?.className).toContain('week-tick--dense');
+    expect(ticksEl[1]?.className).toContain('week-tick--sparse');
+    expect(ticksEl[3]?.className).not.toContain('week-tick--sparse');
   });
 
   it('completedRecordedDays=0 时隐藏虚框参考线，提示"暂无稳定参考"（§9 P0-5）', () => {
@@ -104,6 +116,21 @@ describe('WeeklyChart 近 12 周', () => {
     expect(prev.style.height).toBe('63%');
     const ref = container.querySelector('.chart__ref') as HTMLElement;
     expect(ref.style.bottom).toBe('100%');
+    // 参考线接近顶部时标签移到线下（避免与标题重叠，图表区外溢）：
+    // 100% 场景应带 --below 修饰。
+    const label = container.querySelector('.chart__ref-label') as HTMLElement;
+    expect(label.className).toContain('chart__ref-label--below');
+  });
+
+  it('参考线较低时标签保持线上方（默认定位，不与柱顶/标题冲突）', () => {
+    // 上周 100M 高于参考值 63M → max=100M，refHeight = 63% < 80 → 线上方默认。
+    const points = [
+      week('2026-07-06', '100000000'),
+      week('2026-07-13', '30000000', true, 5, '9000000'),
+    ];
+    const { container } = render(<WeeklyChart points={points} weekProgress={progress} />);
+    const label = container.querySelector('.chart__ref-label') as HTMLElement;
+    expect(label.className).not.toContain('chart__ref-label--below');
   });
 
   it('历史周柱体 inline 高度 = 值/max（P1-01：不会退化成 2px）', () => {

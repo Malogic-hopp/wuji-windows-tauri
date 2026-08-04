@@ -83,10 +83,10 @@ export const bridgeClient = {
       cursor: cursor ?? null,
       limit: limit ?? null,
     }),
-  /** 统计主页全量（10 设计 §5.4）：进入/跨日期/切换范围时调用（阶段四仅签名）。 */
+  /** 统计主页全量（10 设计 §5.4）：进入/跨日期/切换范围时调用（阶段五已接入）。 */
   statsGetHome: (days?: number) =>
     invoke<StatsHomeDto>('stats_get_home', { days: days ?? null }),
-  /** 统计主页轻量轮询（阶段四仅签名）：状态卡/本周进度/今日趋势点随顶栏同拍更新。 */
+  /** 统计主页轻量轮询（阶段五已接入）：状态卡/本周进度/今日趋势点随顶栏同拍更新。 */
   statsGetStatus: () => invoke<StatsStatusDto>('stats_get_status'),
   settingsGet: () => invoke<SettingsDto>('settings_get'),
   settingsUpdate: (patch: SettingsPatchInput) =>

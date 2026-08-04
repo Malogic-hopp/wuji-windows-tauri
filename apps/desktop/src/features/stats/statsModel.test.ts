@@ -10,7 +10,7 @@ import {
   slotToToken,
 } from './statsModel';
 import { comparisonFixture, i64 } from './statsFixture';
-import { trendSummary, trendSummaryLabel, weeklySummary, weeklySummaryLabel } from './statsModel';
+import { isoWeekOf, trendSummary, trendSummaryLabel, weeklySummary, weeklySummaryLabel } from './statsModel';
 
 describe('statsModel 文案映射', () => {
   it('五态：up/down 显示 ▲▼ +X%，stable 基本持平（不含箭头）', () => {
@@ -109,6 +109,15 @@ describe('statsModel 文案映射', () => {
     expect(weeklySummaryLabel(weeks)).toBe('周均 13h53m');
     expect(weeklySummary([weeks[2]])).toBeNull();
     expect(weeklySummaryLabel([weeks[2]])).toBe('');
+  });
+
+  it('ISO 周序号（纯格式化，口径与 weekStartDate 一致）', () => {
+    expect(isoWeekOf('2026-01-01')).toBe(1);
+    expect(isoWeekOf('2025-12-29')).toBe(1);
+    expect(isoWeekOf('2026-06-22')).toBe(26);
+    expect(isoWeekOf('2026-07-06')).toBe(28);
+    expect(isoWeekOf('2026-07-13')).toBe(29);
+    expect(isoWeekOf('2026-12-31')).toBe(53);
   });
 
   it('空状态 / 覆盖标签 / 紧凑时长', () => {
