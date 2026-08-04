@@ -5,7 +5,8 @@ import { bridgeClient, toSafeError, type AutoStartDto, type SafeError } from '..
 import { useDocumentVisible, usePolling } from '../lib/polling';
 
 const NAV_ITEMS: { to: string; label: string; end?: boolean }[] = [
-  { to: '/', label: '今日', end: true },
+  { to: '/', label: '主页', end: true },
+  { to: '/today', label: '今日' },
   { to: '/timeline', label: '时间线' },
   { to: '/heatmap', label: '热力图' },
   { to: '/settings', label: '设置' },
@@ -94,6 +95,14 @@ export default function AppLayout() {
   // 启动编排瞬态：Agent 尚不可达时由 Host 侧 auto_start_status 提供，
   // 只有收到 Agent 确认（状态轮询显示记录中）后自然消失。
   const autoStarting = autoStart?.state === 'starting';
+  // theme === null 时页面跟随系统主题；按钮文案按实际生效主题决定，
+  // 避免系统深色下仍显示"深色"（阶段四 review 代码层 5）。
+  const resolvedTheme: 'light' | 'dark' =
+    theme ??
+    (typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+      ? 'dark'
+      : 'light');
   return (
     <div className="app-shell">
       <header className="app-topbar">
@@ -166,7 +175,7 @@ export default function AppLayout() {
           aria-label="切换主题"
           onClick={() => { setTheme((t) => (t === 'dark' ? 'light' : 'dark')); }}
         >
-          {theme === 'dark' ? '浅色' : '深色'}
+          {resolvedTheme === 'dark' ? '浅色' : '深色'}
         </button>
       </header>
       {autoStart?.state === 'failed' && autoStart.error != null && (

@@ -24,6 +24,15 @@
   --state-unknown: #5a6577;
   --gap-line: #b8c0cc;
   --shadow-raised: 0 2px 8px rgb(28 35 48 / 0.16);
+  /* 统计图表（11 实施方案阶段四 4.1）：构成槽位/进行中/缺数据/参考线/均线 */
+  --chart-app-1: #4c8bf5;
+  --chart-app-2: #7a5ff0;
+  --chart-app-3: #2fa37e;
+  --chart-other: #9aa6b8;
+  --chart-in-progress: #d8a32b;
+  --chart-no-data: #c9d2dd;
+  --chart-ref-line: #5a6577;
+  --chart-ma-line: #1c2330;
 }
 
 [data-theme='dark'] {
@@ -49,6 +58,14 @@
   --state-unknown: #9aa6b8;
   --gap-line: #4c5a70;
   --shadow-raised: 0 2px 8px rgb(0 0 0 / 0.5);
+  --chart-app-1: #6b9bff;
+  --chart-app-2: #9d8cff;
+  --chart-app-3: #43c9a0;
+  --chart-other: #4c5a70;
+  --chart-in-progress: #e0b13f;
+  --chart-no-data: #374050;
+  --chart-ref-line: #9aa6b8;
+  --chart-ma-line: #e8ecf2;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -75,6 +92,14 @@
     --state-unknown: #9aa6b8;
     --gap-line: #4c5a70;
     --shadow-raised: 0 2px 8px rgb(0 0 0 / 0.5);
+    --chart-app-1: #6b9bff;
+    --chart-app-2: #9d8cff;
+    --chart-app-3: #43c9a0;
+    --chart-other: #4c5a70;
+    --chart-in-progress: #e0b13f;
+    --chart-no-data: #374050;
+    --chart-ref-line: #9aa6b8;
+    --chart-ma-line: #e8ecf2;
   }
 }
 

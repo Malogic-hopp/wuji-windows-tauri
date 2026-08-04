@@ -1,0 +1,783 @@
+/* 统计主页（11 实施方案阶段四 4.1）：纯 CSS/SVG 图表，零前端依赖。 */
+
+.stats-page {
+  max-width: 1080px;
+}
+
+.stats-page__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+}
+
+/* 覆盖信息：轻量胶囊（低视觉权重）。 */
+.stats-page__coverage {
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 10px;
+  white-space: nowrap;
+}
+
+.stats-block {
+  margin-top: var(--space-5);
+}
+
+.stats-block__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-bottom: var(--space-3);
+}
+
+/* ④ 双列独立卡：惯性略窄、构成略宽；等高 stretch 使两卡底边对齐（review-2）。 */
+.stats-block--split {
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: var(--space-4);
+  align-items: stretch;
+}
+
+/* ① 主卡：今日状态（左 ~2.4fr）| 本周进度（右 ~0.8fr，最小 220px）。 */
+.card--split {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) minmax(220px, 0.8fr);
+  gap: var(--space-4);
+}
+
+.card--split__main {
+  min-width: 0;
+}
+
+.card--split__side {
+  border-left: 1px solid var(--border);
+  padding-left: var(--space-4);
+}
+
+/* 窄屏双列卡塌缩单列 */
+@media (max-width: 900px) {
+  .stats-block--split,
+  .card--split {
+    grid-template-columns: 1fr;
+  }
+
+  .card--split__side {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+    padding-left: 0;
+    padding-top: var(--space-3);
+  }
+}
+
+/* 7/14/30 切换器（阶段四静态切换主/周 fixture；阶段五接 stats_get_home）。 */
+.stats-block__switcher {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.segmented__item {
+  border: 0;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  padding: 4px 12px;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.segmented__item:last-child {
+  border-right: 0;
+}
+
+.segmented__item[aria-pressed='true'] {
+  background: var(--accent-dim);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.segmented__item {
+  transition: background 0.12s ease;
+}
+
+.segmented__item:hover:not([aria-pressed='true']) {
+  background: var(--surface-dim);
+}
+
+/* ---- ① 今日状态（主卡左区内容） ---- */
+
+.stats-status__head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.stats-status__label {
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+/* 大号核心数字：紧凑格式（3h42m），tabular-nums 保证轮询刷新不跳动。 */
+.stats-status__main {
+  font-size: 30px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 同行右侧辅助信息（dim）。 */
+.stats-status__meta {
+  margin-top: var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.stats-status__compare {
+  display: flex;
+  gap: var(--space-5);
+  flex-wrap: wrap;
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+.stats-status__dir {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.stats-status__cmp--dim {
+  color: var(--text-dim);
+}
+
+.stats-status__summary {
+  margin-top: var(--space-2);
+  color: var(--text);
+}
+
+/* 图表标题右侧的轻量数值锚点（日均/周均/最高；阶段四 review P1-1）。 */
+.chart-summary {
+  margin-left: var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: 400;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* 卡片副标题：解释图名所指（工作惯性 = 按有效样本日平均的 24 小时分布）。 */
+.card__sub {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+/* ---- 图表通用 ---- */
+
+.chart {
+  margin: 0;
+}
+
+.chart__body {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 180px;
+  padding: var(--space-1) 0 0;
+}
+
+.chart__bar-slot {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+}
+
+.chart__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.legend-chip::before {
+  content: '';
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--chip-color, currentColor);
+  background: var(--chip-color, currentColor);
+}
+
+.legend-chip--today::before,
+.legend-chip--nodata::before {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-in-progress),
+    var(--chart-in-progress) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+}
+
+.legend-chip--nodata::before {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-no-data),
+    var(--chart-no-data) 2px,
+    transparent 2px,
+    transparent 4px
+  );
+  border-color: var(--chart-no-data);
+}
+
+.legend-chip--ma::before {
+  width: 14px;
+  height: 0;
+  border: 0;
+  border-top: 2px solid var(--chart-ma-line);
+  background: none;
+}
+
+.legend-chip--ref::before {
+  background: transparent;
+  border: 1px dashed var(--chart-ref-line);
+}
+
+.legend-chip--other::before {
+  background: var(--chart-other);
+  border-color: var(--chart-other);
+}
+
+.legend-chip--prev::before {
+  background: transparent;
+  border: 2px dotted var(--chart-ref-line);
+}
+
+/* ---- ② 趋势（柱 + 均线 overlay）---- */
+
+.chart__body--trend {
+  border-bottom: 1px solid var(--border);
+}
+
+/* 趋势柱下稀疏时间锚点：首点 / 中间点 / 今天（纯展示）。 */
+.trend-ticks {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.trend-bar__slot {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+}
+
+.chart [tabindex='0']:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.trend-bar,
+.week-bar,
+.month-bar,
+.inertia-bar,
+.comp-seg {
+  transition: filter 0.12s ease;
+}
+
+.trend-bar__slot:hover .trend-bar,
+.chart__bar-slot:hover .week-bar,
+.chart__bar-slot:hover .month-bar,
+.inertia-bar:hover,
+.comp-seg:hover {
+  filter: brightness(1.08);
+}
+
+.trend-bar {
+  width: 100%;
+  min-height: 2px;
+  background: var(--chart-app-1);
+  border-radius: 2px 2px 0 0;
+}
+
+.trend-bar--today {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-in-progress),
+    var(--chart-in-progress) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+
+.trend-bar__slot--nodata {
+  height: 100%;
+}
+
+.trend-bar--nodata {
+  width: 100%;
+  height: 8px;
+  min-height: 8px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-no-data),
+    var(--chart-no-data) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+  opacity: 0.8;
+}
+
+/* 均线 overlay：显式 longhand 定位（不依赖 inset 简写），确保覆盖整个图表区。 */
+.chart__ma {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.chart__ma-line {
+  fill: none;
+  stroke: var(--chart-ma-line);
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
+}
+
+/* ---- ③ 周柱 + 虚框参考线 ---- */
+
+.chart__body--weekly {
+  height: 160px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* 周柱下月份边界刻度：与柱槽同一 flex 布局保证对齐（同月度 month-ticks 模式）。 */
+.week-ticks {
+  display: flex;
+  gap: 2px;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.week-ticks span {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+}
+
+.week-bar {
+  width: 100%;
+  min-height: 2px;
+  background: var(--chart-app-2);
+  border-radius: 2px 2px 0 0;
+}
+
+/* 当前周 = 实心（已完成完整日）+ 弱化（今日截至当前时刻）两段式（§9 P0-5） */
+.week-bar--current {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  /* 总量柱高（总量/max）由 inline 提供；两段按总量分摊 */
+  background: transparent;
+  border-radius: 2px 2px 0 0;
+  overflow: hidden;
+}
+
+.week-bar__completed {
+  width: 100%;
+  min-height: 2px;
+  background: var(--chart-app-2);
+}
+
+.week-bar__today {
+  width: 100%;
+  min-height: 2px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-in-progress),
+    var(--chart-in-progress) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+  opacity: 0.7;
+}
+
+/* 上周参照锚点（10 §4.3 视觉参照线） */
+.week-bar--prev {
+  position: relative;
+  border-top: 2px dotted var(--chart-ref-line);
+}
+
+.week-bar__anchor {
+  position: absolute;
+  top: -18px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: var(--text-xs);
+  color: var(--chart-ref-line);
+  white-space: nowrap;
+}
+
+.chart__note {
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+.chart__ref {
+  position: absolute;
+  left: 0;
+  right: 0;
+  border-top: 1px dashed var(--chart-ref-line);
+  pointer-events: none;
+}
+
+.chart__ref-label {
+  position: absolute;
+  /* 放参考线左端，避免与"上周"锚点标签（右上）相撞。 */
+  left: 0;
+  top: -18px;
+  font-size: var(--text-xs);
+  color: var(--chart-ref-line);
+}
+
+/* 本周进度小卡：标签 + 22px 主数字（小于今日 30px，review-2 主卡）。 */
+.week-progress__head {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--text-dim);
+}
+
+.week-progress__main {
+  margin-top: var(--space-1);
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.week-progress__cmp {
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+.week-progress__days {
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+}
+
+/* ---- ④ 惯性 ---- */
+
+.chart--inertia .state-block__title--small {
+  font-size: var(--text-sm);
+  color: var(--text-dim);
+  padding: var(--space-4) 0;
+}
+
+.chart__inertia-wrap {
+  width: 100%;
+}
+
+.chart__inertia-svg {
+  width: 100%;
+  height: 170px;
+  display: block;
+}
+
+.chart__inertia-ticks {
+  position: relative;
+  height: 16px;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.chart__inertia-ticks span {
+  position: absolute;
+  top: 2px;
+  transform: translateX(-50%);
+}
+
+.inertia-bar {
+  fill: var(--chart-app-1);
+}
+
+/* 惯性底部信息条：紧凑 dim 小字（开工/高峰/收工/午休低谷/有效天数），不用图例色块。 */
+.inertia-info {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+/* ---- ④ 应用构成 ---- */
+
+.chart__body--comp-day {
+  flex-direction: column;
+  /* 覆盖 .chart__body 的 align-items: flex-end——列方向下它会让行收缩并右对齐，
+     堆叠条随之坍缩不可见；stretch 让行占满整宽。 */
+  align-items: stretch;
+  gap: 4px;
+  height: auto;
+  padding: var(--space-2) 0;
+}
+
+.comp-row {
+  display: grid;
+  /* 日期在条形左侧（date | bar | total），便于沿左侧纵向扫描（review-2）。 */
+  grid-template-columns: 44px minmax(0, 1fr) 48px;
+  grid-template-areas: 'date bar total';
+  gap: var(--space-2);
+  align-items: center;
+  border-radius: var(--radius-sm);
+}
+
+.comp-row:hover {
+  background: var(--surface-dim);
+}
+
+/* 当前行（进行中）弱化只作用于堆叠条：日期/总时长等文本标签不弱化。 */
+.comp-row[data-current] .comp-row__stack {
+  opacity: 0.65;
+}
+
+.comp-row__stack {
+  grid-area: bar;
+  display: flex;
+  height: 14px;
+  min-width: 0;
+  border-radius: 2px;
+  overflow: hidden;
+  /* 轨道底色：零活跃日显示空轨道（区别于渲染缺失），非满桶可读出占比参照。 */
+  background: var(--surface-dim);
+}
+
+.comp-col {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.comp-col[data-current] {
+  opacity: 0.65;
+}
+
+.comp-col__stack {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  width: 100%;
+  height: 120px;
+  border-radius: 2px;
+  overflow: hidden;
+  background: var(--surface-dim);
+}
+
+.comp-seg {
+  min-height: 2px;
+  min-width: 2px;
+  /* flex-grow 按原始毫秒权重分配（review 代码层 3）；0 权重段缩为 min 尺寸。 */
+  flex-basis: 0;
+}
+
+.comp-seg--other {
+  background: var(--chart-other);
+}
+
+.comp-seg--nodata {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-no-data),
+    var(--chart-no-data) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+  opacity: 0.8;
+  min-width: 2px;
+  min-height: 2px;
+}
+
+.comp-label {
+  font-size: var(--text-xs);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+/* 日桶：日期在条形左侧；周桶标签仍居中。 */
+.comp-row .comp-label {
+  grid-area: date;
+  text-align: left;
+}
+
+.comp-col .comp-label {
+  text-align: center;
+}
+
+/* 日桶日期旁的当日总时长（弱化、等宽数字；grid 右侧列）。 */
+.comp-row__total {
+  grid-area: total;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- ⑤ 里程碑 / 月度 ---- */
+
+.milestones {
+  margin-top: var(--space-6);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+  /* 底部轻量区：无强边框、无卡片，低视觉权重（10 §4.5） */
+}
+
+.milestones__line {
+  color: var(--text-dim);
+  font-size: var(--text-sm);
+  margin-bottom: var(--space-4);
+}
+
+.chart__body--monthly {
+  gap: 4px;
+  height: 120px;
+  border-bottom: 1px solid var(--border);
+}
+
+.month-bar {
+  width: 100%;
+  min-height: 2px;
+  background: var(--chart-app-3);
+  border-radius: 2px 2px 0 0;
+}
+
+/* 无有效记录日月份：与趋势缺数据同一视觉语言的最小斜纹占位。 */
+.month-bar--empty {
+  min-height: 8px;
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-no-data),
+    var(--chart-no-data) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+  opacity: 0.8;
+  border-radius: 0;
+}
+
+.month-bar--current {
+  background: repeating-linear-gradient(
+    -45deg,
+    var(--chart-in-progress),
+    var(--chart-in-progress) 3px,
+    transparent 3px,
+    transparent 6px
+  );
+}
+
+.milestones__legend {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin-top: var(--space-2);
+}
+
+/* 月度柱下的小月份刻度：与柱槽同一 flex 布局保证对齐。 */
+.month-ticks {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.month-ticks span {
+  flex: 1 1 0;
+  min-width: 0;
+  text-align: center;
+}
+
+.milestones__hint {
+  margin-bottom: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+/* ---- Windows High Contrast（forced-colors）：系统色保留可区分性 ----
+   按槽位映射不同系统色（Highlight/CanvasText/GrayText），进行中保留条纹、
+   缺数据与其他用 Canvas + 边框，不抹平成单一 CanvasText（阶段四 P1-5）。 */
+@media (forced-colors: active) {
+  :root {
+    --chart-app-1: Highlight;
+    --chart-app-2: CanvasText;
+    --chart-app-3: GrayText;
+    --chart-other: Canvas;
+    --chart-in-progress: CanvasText;
+    --chart-no-data: Canvas;
+    --chart-ma-line: Highlight;
+    --chart-ref-line: CanvasText;
+  }
+
+  .trend-bar--nodata,
+  .comp-seg--other,
+  .comp-seg--nodata {
+    border: 1px solid CanvasText;
+  }
+
+  .comp-row__stack,
+  .comp-col__stack {
+    border: 1px solid CanvasText;
+  }
+
+  .chart__ma-line {
+    stroke: Highlight;
+  }
+
+  .chart__ref {
+    border-top-color: CanvasText;
+  }
+
+  .legend-chip::before {
+    background: currentColor;
+    border-color: currentColor;
+  }
+
+  .legend-chip--ref::before,
+  .legend-chip--prev::before {
+    background: transparent;
+    border: 1px solid CanvasText;
+  }
+}
