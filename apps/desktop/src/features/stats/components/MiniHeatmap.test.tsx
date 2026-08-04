@@ -32,7 +32,7 @@ const heatmapFixture: HeatmapDto = {
 };
 
 describe('MiniHeatmap 主页缩小版热力图', () => {
-  it('渲染 24 行 × N 天格子，强度 class 与今天列高亮', () => {
+  it('渲染 24 行 × N 天格子，强度 class 与今天列当前小时描边', () => {
     const { container } = render(<MiniHeatmap heatmap={heatmapFixture} />);
     const cells = container.querySelectorAll('.mini-heatmap__cell');
     // 7 天 × 24 小时 = 168 格
@@ -48,5 +48,21 @@ describe('MiniHeatmap 主页缩小版热力图', () => {
     expect(container.querySelectorAll('.mini-heatmap__cell--today').length).toBe(1);
     // 图例少→多
     expect(container.querySelector('.mini-heatmap__legend')).not.toBeNull();
+  });
+
+  it('时段标签与分界线（与原热力图一致）：3/9/15/21 点时段名、5/11/17 点行下分界线', () => {
+    const { container } = render(<MiniHeatmap heatmap={heatmapFixture} />);
+    const lines = container.querySelectorAll('.mini-heatmap__line');
+    expect(lines.length).toBe(24);
+    // 时段标签：凌晨（3）、上午（9）、下午（15）、晚上（21）各一次
+    const timeLabels = Array.from(container.querySelectorAll('.mini-heatmap__time')).map(
+      (s) => s.textContent,
+    );
+    expect(timeLabels[3]).toBe('凌晨');
+    expect(timeLabels[9]).toBe('上午');
+    expect(timeLabels[15]).toBe('下午');
+    expect(timeLabels[21]).toBe('晚上');
+    // 分界线：hour 5/11/17 三行下方
+    expect(container.querySelectorAll('.mini-heatmap__line--divider').length).toBe(3);
   });
 });
