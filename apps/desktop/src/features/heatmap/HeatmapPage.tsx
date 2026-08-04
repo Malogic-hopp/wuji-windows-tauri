@@ -8,6 +8,7 @@ import { useDocumentVisible } from '../../lib/polling';
 import {
   buildGrid,
   clampFocusPosition,
+  currentLocalHour,
   formatShortDate,
   formatWeekday,
   getCellLabel,
@@ -43,17 +44,6 @@ const REFRESH_INTERVAL_MS = 15_000;
 const MIN_WEEK_OFFSET = -520;
 const MAX_WEEK_OFFSET = 0;
 
-/** reporting 时区下的当前小时（0-23）；hour12=false 的 '24' 归一到 0。 */
-function currentLocalHour(timeZoneId: string): number {
-  const hour = new Intl.DateTimeFormat('en-US', {
-    timeZone: timeZoneId,
-    hour: '2-digit',
-    hour12: false,
-  })
-    .formatToParts(new Date())
-    .find((part) => part.type === 'hour')?.value;
-  return Number(hour ?? '0') % 24;
-}
 
 /** 解析 ?week= 查询参数：只允许本周至前 520 周，非法值退到 0。 */
 function parseWeekParam(raw: string | null): number {

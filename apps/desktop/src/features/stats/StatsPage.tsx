@@ -1,11 +1,15 @@
+import { useEffect, useState } from 'react';
+import type { HeatmapDto } from '../../types/wuji-core';
 import { coverageLabel, isHomeEmpty, trendSummaryLabel, weeklySummaryLabel } from './statsModel';
 import { useStatsHome } from './useStatsHome';
+import { bridgeClient, toSafeError, type SafeError } from '../../bridge/client';
 import { StatusCard } from './components/StatusCard';
 import { TrendChart } from './components/TrendChart';
 import { WeeklyChart, WeekProgressCard } from './components/WeeklyChart';
 import { InertiaCurve } from './components/InertiaCurve';
 import { AppComposition } from './components/AppComposition';
 import { Milestones } from './components/Milestones';
+import { MiniHeatmap } from './components/MiniHeatmap';
 import './StatsPage.css';
 
 /**
@@ -18,6 +22,28 @@ import './StatsPage.css';
  */
 export default function StatsPage() {
   const { model, days, switchDays, retry } = useStatsHome();
+
+  // 缩小版热力图（activity 域）：独立低频拉取，不参与 stats 双命令轮询；
+  // 失败只影响本区块（轻提示），不阻塞主页。
+  const [heatmapModel, setHeatmapModel] = useState<
+    | { phase: 'loading' }
+    | { phase: 'ready'; heatmap: HeatmapDto }
+    | { phase: 'error'; error: SafeError }
+  >({ phase: 'loading' });
+  useEffect(() => {
+    let cancelled = false;
+    void bridgeClient.activityGetHeatmap().then(
+      (heatmap) => {
+        if (!cancelled) setHeatmapModel({ phase: 'ready', heatmap });
+      },
+      (cause: unknown) => {
+        if (!cancelled) setHeatmapModel({ phase: 'error', error: toSafeError(cause) });
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   if (model.phase === 'loading') {
     return (
@@ -145,6 +171,21 @@ export default function StatsPage() {
       </section>
       {/* ⑤ 长期记录（底部轻量区，现状保留）。 */}
       <Milestones milestone={home.milestone} monthly={home.monthly} />
+      {/* ⑥ 缩小版热力图（产品扩展）：activity 域低频快照，仅本区块失败提示。 */}
+      <section className="stats-block">
+        {heatmapModel.phase === 'ready' && (
+          <>
+            <h2 className="card__title">近 {String(heatmapModel.heatmap.days)} 天活跃热力图</h2>
+            <MiniHeatmap heatmap={heatmapModel.heatmap} />
+          </>
+        )}
+        {heatmapModel.phase === 'loading' && (
+          <h2 className="card__title">活跃热力图（加载中…）</h2>
+        )}
+        {heatmapModel.phase === 'error' && (
+          <h2 className="card__title">活跃热力图加载失败（{heatmapModel.error.message}）</h2>
+        )}
+      </section>
     </div>
   );
 }

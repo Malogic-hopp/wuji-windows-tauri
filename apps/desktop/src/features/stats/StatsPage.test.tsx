@@ -3,13 +3,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import StatsPage from './StatsPage';
 import { bridgeClient } from '../../bridge/client';
 import { i64, statsHomeEmptyFixture, statsHomeFixture, statsStatusFixture } from './statsFixture';
-import type { StatsHomeDto, StatsStatusDto } from '../../types/wuji-core';
+import type { HeatmapDto, StatsHomeDto, StatsStatusDto } from '../../types/wuji-core';
 
 /** 阶段五：mock 桥接层，仅暴露统计两条命令；toSafeError 结构兼容 SafeError。 */
 vi.mock('../../bridge/client', () => ({
   bridgeClient: {
     statsGetHome: vi.fn(),
     statsGetStatus: vi.fn(),
+    activityGetHeatmap: vi.fn(),
   },
   toSafeError: (cause: unknown) => ({
     code: 'TEST_ERROR',
@@ -38,6 +39,7 @@ describe('StatsPage 统计主页（阶段五双命令刷新）', () => {
     vi.useFakeTimers();
     vi.mocked(bridgeClient.statsGetHome).mockResolvedValue(statsHomeFixture);
     vi.mocked(bridgeClient.statsGetStatus).mockResolvedValue(statsStatusFixture);
+    vi.mocked(bridgeClient.activityGetHeatmap).mockResolvedValue(miniHeatmapFixture);
   });
 
   afterEach(() => {
@@ -266,5 +268,51 @@ describe('StatsPage 统计主页（阶段五双命令刷新）', () => {
     expect(screen.queryByText('1m')).not.toBeInTheDocument();
     // 状态卡仍为 home 派生的 3h42m（未被旧日 live 覆盖）
     expect(screen.getByLabelText('今日截至 15:20 活跃 3 小时 42 分钟')).toBeInTheDocument();
+  });
+});
+
+/** 缩小版热力图区块数据（今日列 level 4，其余零值）。 */
+const miniHeatmapFixture: HeatmapDto = {
+  today: '2026-07-18',
+  rangeEndLocalDate: '2026-07-18',
+  reportingTimeZoneId: 'Asia/Shanghai',
+  days: 7,
+  cells: Array.from({ length: 24 }, (_, h) => ({
+    localDate: '2026-07-18',
+    localHour: h,
+    activeDurationMs: i64('0'),
+    idleDurationMs: i64('0'),
+    unknownDurationMs: i64('0'),
+    intensityLevel: h === 10 ? 4 : 0,
+  })),
+};
+
+describe('StatsPage 缩小版热力图区块', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(bridgeClient.statsGetHome).mockResolvedValue(statsHomeFixture);
+    vi.mocked(bridgeClient.statsGetStatus).mockResolvedValue(statsStatusFixture);
+    vi.mocked(bridgeClient.activityGetHeatmap).mockResolvedValue(miniHeatmapFixture);
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('主页渲染缩小版热力图区块（activity 域独立拉取）', async () => {
+    render(<StatsPage />);
+    expect(vi.mocked(bridgeClient.activityGetHeatmap)).toHaveBeenCalledTimes(1);
+    await settle();
+    expect(screen.getByText('近 7 天活跃热力图')).toBeInTheDocument();
+    expect(screen.getByLabelText(/近 7 天活跃热力图/)).toBeInTheDocument();
+  });
+
+  it('热力图失败只提示本区块，不阻塞主页', async () => {
+    vi.mocked(bridgeClient.activityGetHeatmap).mockRejectedValue(new Error('热力图不可用'));
+    render(<StatsPage />);
+    await settle();
+    expect(screen.getByText(/活跃热力图加载失败（热力图不可用）/)).toBeInTheDocument();
+    expect(screen.getByText(/近 14 天活跃趋势/)).toBeInTheDocument();
   });
 });

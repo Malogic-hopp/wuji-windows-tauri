@@ -60,6 +60,7 @@
 
 /* 窄屏双列卡塌缩单列 */
 @media (max-width: 900px) {
+
   .stats-block--split,
   .card--split {
     grid-template-columns: 1fr;
@@ -230,23 +231,19 @@
 
 .legend-chip--today::before,
 .legend-chip--nodata::before {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-in-progress),
-    var(--chart-in-progress) 2px,
-    transparent 2px,
-    transparent 4px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-in-progress),
+      var(--chart-in-progress) 2px,
+      transparent 2px,
+      transparent 4px);
 }
 
 .legend-chip--nodata::before {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-no-data),
-    var(--chart-no-data) 2px,
-    transparent 2px,
-    transparent 4px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-no-data),
+      var(--chart-no-data) 2px,
+      transparent 2px,
+      transparent 4px);
   border-color: var(--chart-no-data);
 }
 
@@ -359,13 +356,11 @@
 }
 
 .trend-bar--today {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-in-progress),
-    var(--chart-in-progress) 3px,
-    transparent 3px,
-    transparent 6px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-in-progress),
+      var(--chart-in-progress) 3px,
+      transparent 3px,
+      transparent 6px);
 }
 
 .trend-bar__slot--nodata {
@@ -376,13 +371,11 @@
   width: 100%;
   height: 8px;
   min-height: 8px;
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-no-data),
-    var(--chart-no-data) 3px,
-    transparent 3px,
-    transparent 6px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-no-data),
+      var(--chart-no-data) 3px,
+      transparent 3px,
+      transparent 6px);
   opacity: 0.8;
 }
 
@@ -476,13 +469,11 @@
 .week-bar__today {
   width: 100%;
   min-height: 2px;
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-in-progress),
-    var(--chart-in-progress) 3px,
-    transparent 3px,
-    transparent 6px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-in-progress),
+      var(--chart-in-progress) 3px,
+      transparent 3px,
+      transparent 6px);
   opacity: 0.7;
 }
 
@@ -681,13 +672,11 @@
 }
 
 .comp-seg--nodata {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-no-data),
-    var(--chart-no-data) 3px,
-    transparent 3px,
-    transparent 6px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-no-data),
+      var(--chart-no-data) 3px,
+      transparent 3px,
+      transparent 6px);
   opacity: 0.8;
   min-width: 2px;
   min-height: 2px;
@@ -750,25 +739,21 @@
 /* 无有效记录日月份：与趋势缺数据同一视觉语言的最小斜纹占位。 */
 .month-bar--empty {
   min-height: 8px;
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-no-data),
-    var(--chart-no-data) 3px,
-    transparent 3px,
-    transparent 6px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-no-data),
+      var(--chart-no-data) 3px,
+      transparent 3px,
+      transparent 6px);
   opacity: 0.8;
   border-radius: 0;
 }
 
 .month-bar--current {
-  background: repeating-linear-gradient(
-    -45deg,
-    var(--chart-in-progress),
-    var(--chart-in-progress) 3px,
-    transparent 3px,
-    transparent 6px
-  );
+  background: repeating-linear-gradient(-45deg,
+      var(--chart-in-progress),
+      var(--chart-in-progress) 3px,
+      transparent 3px,
+      transparent 6px);
 }
 
 .milestones__legend {
@@ -854,4 +839,39 @@
   border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-size: var(--text-sm);
+}
+
+/* ---- ⑥ 缩小版热力图（产品扩展）：24h × N 天缩略网格，行高 6px 控制总高 ---- */
+
+.mini-heatmap {
+  margin: 0;
+}
+
+.mini-heatmap__grid {
+  display: grid;
+  grid-template-columns: repeat(var(--mini-dates), 1fr);
+  grid-auto-rows: 9px;
+  /* 行/列间隙分开：小时间 1px、天与天之间 4px（每日独立成组，视检后可再调）。 */
+  row-gap: 1px;
+  column-gap: 8px;
+  margin-top: var(--space-2);
+}
+
+.mini-heatmap__cell {
+  border-radius: 1px;
+  min-width: 0;
+}
+
+.mini-heatmap__cell--today {
+  outline: 1px solid var(--text-dim);
+  outline-offset: -1px;
+}
+
+.mini-heatmap__legend {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
 }

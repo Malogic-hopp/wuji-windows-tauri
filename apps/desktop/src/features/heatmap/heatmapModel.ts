@@ -3,6 +3,19 @@ import { formatDuration } from '../../lib/format';
 
 export const heatmapHourCount = 24;
 
+/** reporting 时区下的当前小时（0-23）；hour12=false 的 '24' 归一到 0。
+ *  供热力图页与主页缩小版共用（今天列当前小时描边）。 */
+export function currentLocalHour(timeZoneId: string): number {
+  const hour = new Intl.DateTimeFormat('en-US', {
+    timeZone: timeZoneId,
+    hour: '2-digit',
+    hour12: false,
+  })
+    .formatToParts(new Date())
+    .find((part) => part.type === 'hour')?.value;
+  return Number(hour ?? '0') % 24;
+}
+
 /** 五级强度展示文案（图例与读屏共用）。等级由后端归一化下发，前端不重推。 */
 export const heatmapIntensityLabels = ['无', '低', '中', '高', '极高'] as const;
 
