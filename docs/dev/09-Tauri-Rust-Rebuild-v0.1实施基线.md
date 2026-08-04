@@ -444,11 +444,15 @@ desktop_prefs_get
 desktop_prefs_update
 auto_start_status
 diagnostics_get_summary
+stats_get_home
+stats_get_status
 ```
+
+> 统计主页命令（10 设计 §5.4 + 11 实施方案）：`stats_get_home(days)` 全量（首次进入/跨日/切换范围），`stats_get_status()` 轻量轮询（与顶栏同拍 5s，状态卡/本周进度/今日趋势点，不含摘要、不触发趋势/惯性/月度/里程碑重查询）；命令总数 15 → 17。
 
 React 不直接连接 Pipe、不查询 SQLite、不传入 channel/path，也不计算时长和聚合。`capture_start` 在 Tauri 内先确保固定位置的 Agent 在线，再发送 Capture start；因此 Agent 离线时同一“启动并记录”动作会重新拉起 Agent 并开始采集。启动编排（9.3/9.4）不调用 `capture_start`，而是发送内部 `capture_ensure_recording`（8.2 原子语义，不暴露为 Tauri command）。`agent_process_stop` 在 Tauri 内执行 `capture_stop` 边界提交、`agent_shutdown`、旧 Pipe 断开和 runtime stopped 确认；它不是 `capture_stop` 的别名。顶栏命令与托盘菜单共用同一 `ControlService`（统一解析 `ok=false`、in-flight 互斥、Stop 等待终态），托盘不得复制一份独立的控制语义。`desktop_prefs_get`/`desktop_prefs_update` 对应 9.4 的 Desktop 本地偏好，与 Agent effectivity Settings 分离。`auto_start_status` 返回启动编排状态（9.3 启动结果可见化：`idle/starting/recording/failed` + 安全错误），纯 Host 侧状态，不进 Specta/DTO 合同。`settings_resync_login_startup` 对应 9.2 的 Diagnostics 修复动作：Tauri 按当前 Settings 重放 Run Key 同步流程，返回最终一致状态，不接受任何参数。
 
-v0.1 的实时刷新使用安全低频轮询（Today 约 5 秒、当前周 Heatmap 约 15 秒、Diagnostics 约 2 秒，页面隐藏时停止），不实现事件推送。Heatmap 历史周是静态视图，不启动轮询。轮询失败只影响实时性，不影响历史查询。
+v0.1 的实时刷新使用安全低频轮询（Today 约 5 秒、当前周 Heatmap 约 15 秒、统计主页状态卡与顶栏同拍 5 秒、Diagnostics 约 2 秒，页面隐藏时停止），不实现事件推送。Heatmap 历史周是静态视图，不启动轮询。轮询失败只影响实时性，不影响历史查询。
 
 ### 8.4 Query DTO 与 TypeScript 表示
 
@@ -615,9 +619,18 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 - queue depth、drop count、safe error；
 - 高级信息默认折叠且路径脱敏。
 
+### 10.6 统计主页（11 实施方案阶段零~七）
+
+主页即“活动概览”，路由 `/`（导航置首）。数据合同以 10 设计 §5.3/§5.4 修订后为准（`LiveStatusDto` 拆分、`StatsStatusDto` 携带 `localDate`/`reportingTimeZoneId`、`CompositionBucketDto.hasData`、`StatusDto` 仅存于 home）。
+
+- 区块：①主卡（今日状态 | 本周进度）②近 N 天活跃趋势（7/14/30 切换器）③近 12 周活跃总量 ④双列独立卡（工作惯性 | 应用构成）⑤长期记录 ⑥缩小版热力图（activity 域低频快照，产品扩展）；
+- 双命令刷新：`stats_get_home(days)`（首次/跨日/切范围，命令级读快照单批次 cutoff）+ `stats_get_status()`（5s 轮询只替换 live；`weekProgress.currentActiveMs` 覆盖当前周柱、`todayTrendPoint` 覆盖今日柱）；双通道 generation 防串，跨日 `localDate` 不一致显式双失效自动重查；页面重新聚焦随 home 刷新低频快照；
+- 语义：今日/当前周/当前月进行中斜纹、缺数据斜纹占位、均线 null 断开、当前周参考值（日均×7）纳入纵轴、五态比较与摘要方向精确阈值（i128 交叉相乘，显示舍入独立）、惯性有效日统一分母、月度每有效日均值；
+- 四态统一 `Loading | Empty | Ready | Error`；范围切换失败保留旧图并恢复范围，仅首次失败进整页 Error。
+
 离线判定：`status_get` 失败且数据库 `heartbeat_at_utc_ms` 距今超过 `max(3 × heartbeat 间隔, 15 秒)` 时，显示“无法连接 Agent，最后记录于 …”；仅有 SQLite heartbeat 不得显示实时 Running（口径沿用长期合同 06 §10）。
 
-五个页面统一使用 `Loading | Empty | Ready | Error`。普通 UI 不出现“任务切换”“上下文”“专注”或尚未实现的长期指标。
+全部页面（Today/Timeline/Heatmap/Settings/Diagnostics/统计主页）统一使用 `Loading | Empty | Ready | Error`。普通 UI 不出现“任务切换”“上下文”“专注”或尚未实现的长期指标。
 
 ## 11. 实施顺序
 
