@@ -271,12 +271,12 @@ describe('StatsPage 统计主页（阶段五双命令刷新）', () => {
   });
 });
 
-/** 缩小版热力图区块数据（今日列 level 4，其余零值）。 */
+/** 缩小版热力图区块数据（今日列 level 4，其余零值；31 天窗口）。 */
 const miniHeatmapFixture: HeatmapDto = {
   today: '2026-07-18',
   rangeEndLocalDate: '2026-07-18',
   reportingTimeZoneId: 'Asia/Shanghai',
-  days: 7,
+  days: 31,
   cells: Array.from({ length: 24 }, (_, h) => ({
     localDate: '2026-07-18',
     localHour: h,
@@ -300,12 +300,12 @@ describe('StatsPage 缩小版热力图区块', () => {
     vi.useRealTimers();
   });
 
-  it('主页渲染缩小版热力图区块（activity 域独立拉取）', async () => {
+  it('主页渲染缩小版热力图区块（activity 域独立拉取，31 天窗口）', async () => {
     render(<StatsPage />);
-    expect(vi.mocked(bridgeClient.activityGetHeatmap)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(bridgeClient.activityGetHeatmap)).toHaveBeenCalledWith(31);
     await settle();
-    expect(screen.getByText('近 7 天活跃热力图')).toBeInTheDocument();
-    expect(screen.getByLabelText(/近 7 天活跃热力图/)).toBeInTheDocument();
+    expect(screen.getByText('近 31 天活跃热力图')).toBeInTheDocument();
+    expect(screen.getByLabelText(/近 31 天活跃热力图/)).toBeInTheDocument();
   });
 
   it('热力图失败只提示本区块，不阻塞主页', async () => {

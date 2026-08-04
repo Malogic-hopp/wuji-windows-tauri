@@ -32,7 +32,7 @@ export default function StatsPage() {
   >({ phase: 'loading' });
   useEffect(() => {
     let cancelled = false;
-    void bridgeClient.activityGetHeatmap().then(
+    void bridgeClient.activityGetHeatmap(31).then(
       (heatmap) => {
         if (!cancelled) setHeatmapModel({ phase: 'ready', heatmap });
       },
