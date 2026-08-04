@@ -36,8 +36,9 @@ describe('TrendChart 活跃趋势', () => {
     // 缺数据柱 + 中性文案（斜纹占位）
     expect(container.querySelector('.trend-bar--nodata')).not.toBeNull();
     expect(screen.getByTitle('当日无记录数据')).toBeInTheDocument();
-    // 今日柱"截至 HH:MM"标签（§9 P0-4）
+    // 今日柱"截至 HH:MM"标签（§9 P0-4）；历史柱也有 tooltip（日期 + 时长）
     expect(screen.getByTitle('今日进行中（截至 15:20）')).toBeInTheDocument();
+    expect(screen.getByTitle('2026-07-16 活跃 2h47m')).toBeInTheDocument();
     // 键盘可达：柱可 focus（tabIndex + aria-label）
     const todayBar = container.querySelector('.trend-bar--today');
     expect(todayBar?.getAttribute('tabindex')).toBe('0');

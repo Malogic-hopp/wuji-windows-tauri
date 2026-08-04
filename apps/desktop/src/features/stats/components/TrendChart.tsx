@@ -86,7 +86,11 @@ export function TrendChart({
                 tabIndex={0}
                 role="img"
                 aria-label={`${point.localDate} 活跃 ${formatDeltaMs(point.activeDurationMs)}${todaySuffix}`}
-                title={point.isToday ? `今日进行中（截至 ${cutoffLocalTime}）` : undefined}
+                title={
+                  point.isToday
+                    ? `今日进行中（截至 ${cutoffLocalTime}）`
+                    : `${point.localDate} 活跃 ${formatDeltaMs(point.activeDurationMs)}`
+                }
               />
             </div>
           );

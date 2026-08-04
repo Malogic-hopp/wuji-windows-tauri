@@ -101,6 +101,7 @@ export function WeeklyChart({
                 tabIndex={0}
                 role="img"
                 aria-label={`${point.weekStartDate} 周活跃 ${formatDeltaMs(point.activeDurationMs)}`}
+                title={`${point.weekStartDate} 周活跃 ${formatDeltaMs(point.activeDurationMs)}`}
               >
                 {isPrev && <span className="week-bar__anchor">上周</span>}
               </div>
