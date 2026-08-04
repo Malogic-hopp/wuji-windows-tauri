@@ -4665,6 +4665,7 @@ dependencies = [
 name = "wuji-rebuild-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "chrono-tz",
  "rusqlite",
  "serde",

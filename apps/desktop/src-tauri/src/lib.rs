@@ -12,13 +12,14 @@ pub mod query;
 pub mod settings_service;
 mod single_instance;
 pub mod startup_registry;
+mod stats_assembly;
 mod tray;
 
 use commands::{
     AppServices, activity_get_heatmap, activity_get_timeline, activity_get_today, agent_get_status,
     agent_process_stop, auto_start_status, capture_pause, capture_resume, capture_start,
     desktop_prefs_get, desktop_prefs_update, diagnostics_get_summary, settings_get,
-    settings_resync_login_startup, settings_update,
+    settings_resync_login_startup, settings_update, stats_get_home, stats_get_status,
 };
 use tauri::Manager as _;
 use wuji_core::error::SafeError;
@@ -176,6 +177,8 @@ pub fn run() {
             desktop_prefs_update,
             auto_start_status,
             diagnostics_get_summary,
+            stats_get_home,
+            stats_get_status,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build WUJI Rebuild desktop")

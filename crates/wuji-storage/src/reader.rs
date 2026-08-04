@@ -581,6 +581,8 @@ pub fn status_dto_from_runtime(
 pub struct ReaderSnapshot<'a> {
     tx: rusqlite::Transaction<'a>,
     meta: &'a SchemaMeta,
+    /// 本快照内 `stats_cutoff_series` 调用次数（命令级单批次回归钩子；Cell 单线程）。
+    cutoff_calls: std::cell::Cell<u32>,
 }
 
 /// 单日工作统计投影行（`stats_daily_rows` 输出；Query 层映射为 wuji-core 纯输入
@@ -622,6 +624,19 @@ impl Reader {
     /// 在单一读事务快照内执行统计投影（11 阶段三 3.1）：子查询必须通过
     /// `ReaderSnapshot` 执行；闭包返回 Err 时事务自动回滚（rusqlite Transaction
     /// 的 Drop 语义），不影响连接后续使用。
+    ///
+    /// 快照独占借用 `Reader.conn`，存活期间 Reader 本体不可再借用（编译期保证）：
+    ///
+    /// ```compile_fail
+    /// # use wuji_storage::Reader;
+    /// # fn demo(reader: &mut Reader) -> Result<(), wuji_storage::StorageError> {
+    /// reader.with_snapshot(|_snap| {
+    ///     let _ = reader.schema_meta(); // error[E0502]：快照独占借用 Reader.conn，
+    ///                                   // 存活期间无法再以任何方式访问 Reader 本体
+    ///     Ok(())
+    /// })
+    /// # }
+    /// ```
     pub fn with_snapshot<T>(
         &mut self,
         f: impl FnOnce(&ReaderSnapshot<'_>) -> Result<T>,
@@ -633,6 +648,7 @@ impl Reader {
         let snapshot = ReaderSnapshot {
             tx,
             meta: &self.meta,
+            cutoff_calls: std::cell::Cell::new(0),
         };
         let result = f(&snapshot);
         if result.is_ok() {
@@ -718,6 +734,12 @@ impl ReaderSnapshot<'_> {
             .collect())
     }
 
+    /// 本快照内已执行的 `stats_cutoff_series` 次数（命令级单批次回归钩子；测试用）。
+    #[doc(hidden)]
+    pub fn stats_cutoff_series_calls(&self) -> u32 {
+        self.cutoff_calls.get()
+    }
+
     /// 从 before 向前寻找最近 limit 个有记录日期（11 阶段二 2.3）；**不是固定
     /// lookback**——历史缺失时返回不足 limit 个，调用方据此判定 `sampleDays < 3`，
     /// 不擅自补足。
@@ -756,6 +778,7 @@ impl ReaderSnapshot<'_> {
         now_utc_ms: i64,
         dates: &[LocalDate],
     ) -> Result<Vec<DayAtCutoff>> {
+        self.cutoff_calls.set(self.cutoff_calls.get() + 1);
         if dates.is_empty() {
             return Ok(Vec::new());
         }

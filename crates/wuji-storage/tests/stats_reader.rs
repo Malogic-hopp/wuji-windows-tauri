@@ -332,6 +332,28 @@ fn recent_recorded_dates_searches_forward_not_fixed_lookback() {
 // ---- stats_cutoff_series：LEFT JOIN 零活动日 + 未闭合块 ----
 
 #[test]
+fn cutoff_series_counter_tracks_every_call_until_snapshot_end() {
+    let dir = TempDir::new().unwrap();
+    let writer = bootstrap(&dir);
+    let tz = writer.schema_meta().reporting_tz().unwrap();
+    let today = local("2026-07-18");
+    let mut reader = open_reader(&dir);
+
+    let counts = reader
+        .with_snapshot(|snap| {
+            let before = snap.stats_cutoff_series_calls();
+            snap.stats_cutoff_series(&tz, &today, T0, std::slice::from_ref(&today))?;
+            let after_first = snap.stats_cutoff_series_calls();
+            snap.stats_cutoff_series(&tz, &today, T0, std::slice::from_ref(&today))?;
+            let after_second = snap.stats_cutoff_series_calls();
+            Ok((before, after_first, after_second))
+        })
+        .unwrap();
+
+    assert_eq!(counts, (0, 1, 2), "第二次 cutoff 调用必须可观测");
+}
+
+#[test]
 fn cutoff_series_cross_midnight_block_not_offset_by_previous_day_segment() {
     // P1 回归：跨午夜工作块的"前一日 Segment"不得抵消今日 Segment。
     // 上海 block [07-17T15:00Z, 07-18T01:00Z]（07-17 23:00 本地 → 07-18 09:00 本地）：

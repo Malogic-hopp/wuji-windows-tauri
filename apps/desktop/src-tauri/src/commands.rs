@@ -6,7 +6,10 @@
 use serde::Serialize;
 use tauri::State;
 use wuji_core::domain::CaptureState;
-use wuji_core::dto::{AgentStatusDto, HeatmapDto, SettingsDto, TimelinePageDto, TodayDto};
+use wuji_core::dto::{
+    AgentStatusDto, HeatmapDto, SettingsDto, StatsHomeDto, StatsStatusDto, TimelinePageDto,
+    TodayDto,
+};
 use wuji_core::error::{SafeError, SafeErrorCode};
 
 use crate::control::ControlService;
@@ -205,6 +208,24 @@ pub async fn activity_get_heatmap(
     week_offset: Option<i32>,
 ) -> Result<HeatmapDto, SafeError> {
     services.query.heatmap(days, week_offset)
+}
+
+/// `stats_get_home`（10 设计 §5.4 + 11 实施方案阶段三）：全量统计主页。
+/// 非法/缺失 days 规范化回 14；命令级读事务快照保证全区块同视图。
+#[tauri::command]
+pub async fn stats_get_home(
+    services: State<'_, AppServices>,
+    days: Option<i32>,
+) -> Result<StatsHomeDto, SafeError> {
+    services.query.stats_home(days)
+}
+
+/// `stats_get_status`：轻量轮询（与顶栏同一拍），不含摘要，不触发趋势/惯性/月度/里程碑。
+#[tauri::command]
+pub async fn stats_get_status(
+    services: State<'_, AppServices>,
+) -> Result<StatsStatusDto, SafeError> {
+    services.query.stats_status()
 }
 
 #[tauri::command]

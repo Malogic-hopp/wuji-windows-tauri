@@ -83,13 +83,14 @@ Rust Agent ── single writer ───► SQLite v0.1
 
 ### Tauri Command Allowlist
 
-All 15 Tauri commands are declared in `invoke_handler` in `apps/desktop/src-tauri/src/lib.rs`:
+All 17 Tauri commands are declared in `invoke_handler` in `apps/desktop/src-tauri/src/lib.rs`:
 
 | Category | Commands |
 |----------|----------|
 | Agent lifecycle | `agent_process_stop`, `agent_get_status` |
 | Capture control | `capture_start`, `capture_pause`, `capture_resume` |
 | Activity queries | `activity_get_today`, `activity_get_timeline`, `activity_get_heatmap` |
+| Stats homepage | `stats_get_home`, `stats_get_status` |
 | Settings | `settings_get`, `settings_update`, `settings_resync_login_startup` |
 | Desktop prefs | `desktop_prefs_get`, `desktop_prefs_update`, `auto_start_status` |
 | Diagnostics | `diagnostics_get_summary` |
