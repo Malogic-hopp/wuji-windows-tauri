@@ -732,25 +732,32 @@ v0.1 对长期文档（01–06）做了以下有意的语义简化。本表是�
 
 ### 16.1 Settings last-known-good 持久化与启动对账
 
-`settings_revisions` 增加 `content_json`（规范 JSON 全文）。每次成功应用 revision 时与 digest 同事务写入，作为跨进程重启的 last-known-good。
+`settings_revisions` 只保留元数据（`revision` / `content_digest` / `applied_at_utc_ms`），
+**不含设置全文**。last-known-good 完整内容（含 excludedProcessNames）存储于独立私密
+**双槽备份文件**（DB 感知双槽原子协议：写入绝不覆盖唯一匹配当前 DB revision/digest
+的槽），不得写入行为 SQLite（09 §12.3 隐私一票否决；schema 内嵌 DDL 已约束）。
 
-Agent 启动对账（`reconcile_startup_settings`）：
+Agent 启动对账（`reconcile_startup_settings`，DB metadata + 设置文件 + 双槽备份
+三输入交叉验证）：
 
 - 文件缺失且 DB 最大已应用 revision 为 0：允许 revision 0 内建默认值（全新库）。
-- 文件缺失且最大已应用 revision > 0：从 DB `content_json` 恢复并上报 `SETTINGS_INVALID` 诊断；不得静默回 revision 0。
-- 文件损坏/验证失败：同上从 DB 恢复，上报 `SETTINGS_INVALID`。
-- 文件 revision 低于已应用值，或同 revision 但 digest 冲突：拒绝该文件，从 DB 恢复，上报 `SETTINGS_CONFLICT`。
-- DB 中 last-known-good 内容自身不可恢复（解析/验证/digest 任一失败）：禁止进入 Running，`capture_start` 返回 `SETTINGS_INVALID`，Agent 保持 IPC 在线等待人工处理。
+- 文件缺失且最大已应用 revision > 0：从双槽备份恢复并上报 `SETTINGS_INVALID` 诊断；不得静默回 revision 0。
+- 文件损坏/验证失败：同上从双槽备份恢复，上报 `SETTINGS_INVALID`。
+- 文件 revision 低于已应用值，或同 revision 但 digest 冲突：拒绝该文件，从备份恢复，上报 `SETTINGS_CONFLICT`。
+- 双槽备份内容自身不可恢复（解析/验证/digest 任一失败）：禁止进入 Running，`capture_start` 返回 `SETTINGS_INVALID`，Agent 保持 IPC 在线等待人工处理。
 
 revision 单调性在三个位置强制：启动对账、IPC `settings_reload`（低于 `appliedRevision` 拒绝）、引擎 `apply_settings`（低于当前内存 revision 拒绝）。后台 reconciler 每 2 秒检查文件，仅在文件 revision 严格大于已应用值时经 control lane 重新应用（saved-not-applied 的自动重试）。
 
 Desktop 侧：`settings_get`/`settings_update` 遇到损坏文件返回 `SETTINGS_INVALID`，不得伪装成默认值；`settings_resync_login_startup` 返回的 `appliedRevision` 来自数据库最大已应用 revision，不得误报为 saved revision。
 
-### 16.2 生命周期与 Settings 的 sequence watermark
+### 16.2 生命周期与 Settings 的 Barrier 边界
 
-`ContinuityState.latest_sequence` 记录采集循环最近一次分配的 Capture Sequence。CommandServer 接受 Pause/Stop 时：先冻结 capture watch，再取 `watermark = latest_sequence`，随 Lifecycle 控制进入 control lane。Writer 先把 data lane 排到有 watermark 为止（seq ≤ watermark 的 backlog 全部按边界前提交；迟到样本按 09 §6.7 作为边界后首条 Observation 关闭 gap），才应用边界。处理侧失联时 Writer 最多等待 1.5 秒，记录安全诊断后保守放行。
-
-`settings_reload` 与 reconciler 同样携带 watermark：seq ≤ watermark 的 Observation 保持旧 settings revision，之后采集的样本使用新 revision（“只影响未来数据”的可执行定义）。
+生命周期（Lock/Sleep）与 Settings 边界使用 **BarrierRequest（BarrierId + injected ack）**：
+唯一 `CaptureCoordinator` 串行化 capture/settings/系统事件三类路径；进入边界时先冻结
+effective capture，注入 Barrier（含 expected revision）进入 Capture FIFO，再经
+Writer control lane 提交边界并等待 Writer ack。Writer 侧 `PendingBarriers`（容量/TTL/
+三要素匹配）保证先到的 Barrier 不被普通 data 分支吞掉，drain 后边界恰好提交一次；
+迟到样本按 09 §6.7 作为边界后首条 Observation 关闭 gap。
 
 ### 16.3 IPC 副作用与严格协议
 
@@ -777,4 +784,6 @@ Desktop 侧：`settings_get`/`settings_update` 遇到损坏文件返回 `SETTING
 
 ### 16.6 Schema 增补
 
-`settings_revisions` 增加 `content_json TEXT NOT NULL CHECK (length(content_json) > 2)`（§16.1）。v0.1 是全新数据库，直接修改内嵌 DDL；不提供旧 dev 库迁移。
+`settings_revisions` 只保留元数据（`revision` / `content_digest` / `applied_at_utc_ms`，§16.1），
+完整设置内容存独立双槽备份文件、不得入 SQLite（隐私一票否决）。v0.1 是全新数据库，直接
+修改内嵌 DDL；不提供旧 dev 库迁移。
