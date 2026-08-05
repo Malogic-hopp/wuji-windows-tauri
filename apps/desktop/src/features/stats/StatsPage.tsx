@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import type { HeatmapDto } from '../../types/wuji-core';
 import { coverageLabel, isHomeEmpty, trendSummaryLabel, weeklySummaryLabel } from './statsModel';
 import { useStatsHome } from './useStatsHome';
 import { bridgeClient, toSafeError, type SafeError } from '../../bridge/client';
+import { useDocumentVisible, usePolling } from '../../lib/polling';
 import { StatusCard } from './components/StatusCard';
 import { TrendChart } from './components/TrendChart';
 import { WeeklyChart, WeekProgressCard } from './components/WeeklyChart';
@@ -11,6 +12,9 @@ import { AppComposition } from './components/AppComposition';
 import { Milestones } from './components/Milestones';
 import { MiniHeatmap } from './components/MiniHeatmap';
 import './StatsPage.css';
+
+/** 缩小版热力图刷新间隔（低频，与热力图页"当前周约 15 秒"同档；31 天聚合成本中等）。 */
+const HEATMAP_POLL_MS = 60_000;
 
 /**
  * 统计主页（10 设计 §5、11 实施方案阶段五）：双命令刷新容器。
@@ -22,28 +26,26 @@ import './StatsPage.css';
  */
 export default function StatsPage() {
   const { model, days, switchDays, retry } = useStatsHome();
-
-  // 缩小版热力图（activity 域）：独立低频拉取，不参与 stats 双命令轮询；
-  // 失败只影响本区块（轻提示），不阻塞主页。
+  // 缩小版热力图（activity 域）：60 秒低频轮询（与热力图页"当前周约 15 秒"同档低频），
+  // 跟随页面可见性（隐藏停止、聚焦立即刷新）；失败保留旧图不阻塞主页。
+  // 说明：今天列当前小时描边是本地计算（随渲染更新），颜色深浅必须靠重拉数据刷新。
+  const visible = useDocumentVisible();
   const [heatmapModel, setHeatmapModel] = useState<
     | { phase: 'loading' }
     | { phase: 'ready'; heatmap: HeatmapDto }
     | { phase: 'error'; error: SafeError }
   >({ phase: 'loading' });
-  useEffect(() => {
-    let cancelled = false;
-    void bridgeClient.activityGetHeatmap(31).then(
-      (heatmap) => {
-        if (!cancelled) setHeatmapModel({ phase: 'ready', heatmap });
-      },
-      (cause: unknown) => {
-        if (!cancelled) setHeatmapModel({ phase: 'error', error: toSafeError(cause) });
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
+  const refreshHeatmap = useCallback(async () => {
+    try {
+      const heatmap = await bridgeClient.activityGetHeatmap(31);
+      setHeatmapModel({ phase: 'ready', heatmap });
+    } catch (cause) {
+      setHeatmapModel((current) =>
+        current.phase === 'ready' ? current : { phase: 'error', error: toSafeError(cause) },
+      );
+    }
   }, []);
+  usePolling(refreshHeatmap, HEATMAP_POLL_MS, visible);
 
   if (model.phase === 'loading') {
     return (

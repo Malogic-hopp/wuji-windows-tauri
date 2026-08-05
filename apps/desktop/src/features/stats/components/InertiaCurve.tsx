@@ -1,7 +1,7 @@
 import type { HourlyPointDto, InertiaDto } from '../../../types/wuji-core';
 import { formatDeltaMs, mapReliabilityText } from '../statsModel';
 
-const HOUR_TICKS = [0, 6, 12, 18, 24];
+const HOUR_TICKS = [0, 6, 12, 18, 23];
 
 /**
  * ④ 工作惯性（10 §4.4）：24 小时均值曲线（SVG 面积）+ 标注。
@@ -56,7 +56,13 @@ export function InertiaCurve({
             </svg>
             <div className="chart__inertia-ticks" aria-hidden="true">
               {HOUR_TICKS.map((hour) => (
-                <span key={hour} style={{ left: `${String((hour / 24) * 100)}%` }}>
+                <span
+                  key={hour}
+                  style={{
+                    // 刻度对齐柱体中心：柱 H 代表 [H, H+1) 小时，中心 = H+0.5。
+                    left: `${String(((hour + 0.5) / 24) * 100)}%`,
+                  }}
+                >
                   {hour}
                 </span>
               ))}

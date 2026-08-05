@@ -302,10 +302,35 @@ describe('StatsPage 缩小版热力图区块', () => {
 
   it('主页渲染缩小版热力图区块（activity 域独立拉取，31 天窗口）', async () => {
     render(<StatsPage />);
-    expect(vi.mocked(bridgeClient.activityGetHeatmap)).toHaveBeenCalledWith(31);
     await settle();
+    expect(vi.mocked(bridgeClient.activityGetHeatmap)).toHaveBeenCalledWith(31);
     expect(screen.getByText('近 31 天活跃热力图')).toBeInTheDocument();
     expect(screen.getByLabelText(/近 31 天活跃热力图/)).toBeInTheDocument();
+  });
+
+  it('60 秒低频轮询刷新颜色深浅（时间块数据随当前小时活跃更新）', async () => {
+    const { container } = render(<StatsPage />);
+    await settle();
+    const callsAfterMount = vi.mocked(bridgeClient.activityGetHeatmap).mock.calls.length;
+    const level4Before = container.querySelectorAll('.heatmap-level--4').length;
+    // 当前小时活跃增长：今天 10 点起全部 level 4（数据刷新后颜色深浅应变化）
+    const updated: HeatmapDto = {
+      ...miniHeatmapFixture,
+      cells: Array.from({ length: 24 }, (_, h) => ({
+        localDate: '2026-07-18',
+        localHour: h,
+        activeDurationMs: i64('0'),
+        idleDurationMs: i64('0'),
+        unknownDurationMs: i64('0'),
+        intensityLevel: h >= 10 ? 4 : 0,
+      })),
+    };
+    vi.mocked(bridgeClient.activityGetHeatmap).mockResolvedValue(updated);
+    await tick(60_000);
+    await settle();
+    expect(vi.mocked(bridgeClient.activityGetHeatmap).mock.calls.length).toBe(callsAfterMount + 1);
+    // 颜色深浅已刷新：level 4 格子随数据增加（原只有今天 10 点 1 格）
+    expect(container.querySelectorAll('.heatmap-level--4').length).toBeGreaterThan(level4Before);
   });
 
   it('热力图失败只提示本区块，不阻塞主页', async () => {

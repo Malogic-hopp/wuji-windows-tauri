@@ -63,4 +63,18 @@ describe('InertiaCurve 工作惯性', () => {
     // 小时刻度
     expect(container.querySelector('.chart__inertia-ticks')).not.toBeNull();
   });
+
+  it('小时刻度对齐柱体中心（0 不在容器左缘、23 对应最后一根柱）', () => {
+    const { container } = render(<InertiaCurve points={hours(normalActives)} inertia={inertiaAllZeroFixture()} />);
+    const ticks = Array.from(container.querySelectorAll('.chart__inertia-ticks span'));
+    const lefts = ticks.map((s) => Number((s as HTMLElement).style.left.replace('%', '')));
+    // 0 点刻度在首柱中心（约 2.08%），不在 0%；23 点对齐末柱中心（约 97.9%），不在 100%
+    expect(lefts[0]).toBeGreaterThan(1.5);
+    expect(lefts[0]).toBeLessThan(3);
+    expect(lefts[1]).toBeGreaterThan(26);
+    expect(lefts[1]).toBeLessThan(28); // 6 点刻度 = 6.5/24 ≈ 27.1%
+    expect(ticks[4]?.textContent).toBe('23');
+    expect(lefts[4]).toBeGreaterThan(96);
+    expect(lefts[4]).toBeLessThan(99); // 23 点 = 23.5/24 ≈ 97.9%
+  });
 });
