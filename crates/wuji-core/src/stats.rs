@@ -223,8 +223,11 @@ pub fn compute_moving_avg7(points: &[DailyMetricSample], idx: usize) -> (Option<
 /// - `profile` 为 24 个整点（localHour 0-23）的每小时均值，已由 Query 层统一除以 effectiveDays；
 /// - **reliability = null（有效日 < 3）时派生字段全部 null**（10 §4.4/§9 P0-8），即使曲线非零；
 /// - 24 小时全零 → 派生字段同样全部 null（reliability 仍按 effectiveDays 取值）；
-/// - peakHour = argmax（并列取最早）；startHour = 首个 v*100 ≥ peak*30（并列取最早）；
-///   endHour = 最后一个（并列取最晚）；
+/// - peakHour = argmax（并列取最早）；startHour/endHour = 含峰值的连续活跃段
+///   （环形，跨午夜相连）：从峰值向两端找 v*100 < peak*30 的断点，开工 = 峰值前最近
+///   断点的下一小时、收工 = 峰值后最近断点的前一小时（实现纠错 2026-08-04：原线性
+///   "首个/最后一个 ≥30%"把凌晨熬夜尾巴当开工、分离次段计入收工——改为主时段语义，
+///   熬夜 20:00→次日 3:00 得到开工 20 / 收工 3；全圈活跃退化到开工=收工=peak）；
 /// - lunchLowestHour：候选小时**固定 {12,13,14}**（11 阶段一 1.2），区间内最小值且**严格低于** 11 点与 15 点
 ///   均值（整数比较 `min*2 < hour11 + hour15`），否则 null；并列取最早。
 #[must_use]
@@ -250,16 +253,37 @@ pub fn derive_inertia(profile: &[i64; 24], effective_days: u32) -> InertiaDto {
             reliability,
         };
     }
-    let peak_hour = profile.iter().position(|v| *v == peak).unwrap_or(0) as i32;
+    let peak_hour = profile.iter().position(|v| *v == peak).unwrap_or(0);
     let threshold = i128::from(peak) * 30;
-    let start_hour = profile
-        .iter()
-        .position(|v| i128::from(*v) * 100 >= threshold)
-        .map(|h| h as i32);
-    let end_hour = profile
-        .iter()
-        .rposition(|v| i128::from(*v) * 100 >= threshold)
-        .map(|h| h as i32);
+    // 开工/收工 = 含峰值的连续活跃段（环形，跨午夜相连）：从峰值向两端找
+    // fraction < 30%×peak 的断点；开工 = 峰值前最近断点的下一小时，收工 =
+    // 峰值后最近断点的前一小时。修复：凌晨 0-5 点的"熬夜尾巴"不再被当成开工
+    // （熬夜 20:00→次日 3:00 的曲线在环形上与晚上段连成 [20..3]，开工 20、
+    // 收工 3）；全圈活跃（防御）退化到开工=收工=peak。
+    let start_hour = {
+        let mut i = (peak_hour + 23) % 24; // peak 前一小时
+        let mut start = peak_hour as i32;
+        for _ in 0..24 {
+            if i128::from(profile[i]) * 100 < threshold {
+                start = ((i + 1) % 24) as i32;
+                break;
+            }
+            i = (i + 23) % 24;
+        }
+        start
+    };
+    let end_hour = {
+        let mut i = (peak_hour + 1) % 24; // peak 后一小时
+        let mut end = peak_hour as i32;
+        for _ in 0..24 {
+            if i128::from(profile[i]) * 100 < threshold {
+                end = ((i + 23) % 24) as i32; // 断点前一小时
+                break;
+            }
+            i = (i + 1) % 24;
+        }
+        end
+    };
     let lunch_min = [profile[12], profile[13], profile[14]]
         .into_iter()
         .min()
@@ -271,9 +295,9 @@ pub fn derive_inertia(profile: &[i64; 24], effective_days: u32) -> InertiaDto {
         None
     };
     InertiaDto {
-        start_hour,
-        peak_hour: Some(peak_hour),
-        end_hour,
+        start_hour: Some(start_hour),
+        peak_hour: Some(peak_hour as i32),
+        end_hour: Some(end_hour),
         lunch_lowest_hour,
         effective_days: effective_days as i32,
         total_days: 14,
@@ -708,7 +732,9 @@ mod tests {
         assert_eq!(inertia.reliability, Some(ReliabilityKind::Preliminary));
         assert_eq!(inertia.peak_hour, Some(10));
         assert_eq!(inertia.start_hour, Some(9));
-        assert_eq!(inertia.end_hour, Some(19));
+        // 环形主时段：峰值 10 点向后 11 点（25 < 30）断 → 收工 10；
+        // 19 点 35 是分离次段，不再计入收工（修复后语义：收工 = 主时段结束）。
+        assert_eq!(inertia.end_hour, Some(10));
     }
 
     #[test]
@@ -722,10 +748,30 @@ mod tests {
         profile[20] = 20;
         let inertia = derive_inertia(&profile, 11);
         assert_eq!(inertia.peak_hour, Some(10));
-        assert_eq!(inertia.start_hour, Some(9)); // 首个 ≥ 30%×100
-        assert_eq!(inertia.end_hour, Some(19)); // 最后一个 ≥ 30%×100（20 点 20% 不够）
+        assert_eq!(inertia.start_hour, Some(9)); // 主时段首个 ≥ 30%×100
+        // 环形主时段：11 点（25 < 30）断 → 收工 10；19 点 35 分离次段不再计入。
+        assert_eq!(inertia.end_hour, Some(10));
         // 12/13/14 全零而 11 点有值：0 严格低于 (25+0)/2 → 判为午休低谷（候选小时写死 {12,13,14}）
         assert_eq!(inertia.lunch_lowest_hour, Some(12));
+    }
+
+    #[test]
+    fn inertia_cross_midnight_main_window() {
+        // 熬夜 20:00→次日 3:00：晚上 20-23 高活跃（峰值 22）、凌晨 0-3 活跃（≥30%）。
+        // 环形主时段把 20..23 与 0..3 连成一段 → 开工 20、收工 3（修复前：开工 0、收工 23）。
+        let mut profile = zeros24();
+        profile[20] = 80;
+        profile[21] = 90;
+        profile[22] = 100; // 峰值
+        profile[23] = 70;
+        profile[0] = 50;
+        profile[1] = 45;
+        profile[2] = 40;
+        profile[3] = 35;
+        let inertia = derive_inertia(&profile, 11);
+        assert_eq!(inertia.peak_hour, Some(22));
+        assert_eq!(inertia.start_hour, Some(20), "熬夜开工应为 20 点，凌晨尾巴不再当开工");
+        assert_eq!(inertia.end_hour, Some(3), "熬夜收工应跨午夜到凌晨 3 点");
     }
 
     #[test]
