@@ -193,10 +193,11 @@ def _pipe_roundtrip(pipe, request: dict) -> dict:
     return json.loads(buffer.split(b"\n", 1)[0].decode("utf-8"))
 
 
-def ipc_graceful_shutdown(channel: str) -> tuple[bool, str]:
-    """先 hello 再 agent_shutdown_dev，解析两次响应（审核 R06）。
+def ipc_graceful_shutdown(channel: str) -> tuple[bool, bool, bool, str]:
+    """先 hello 再 agent_shutdown_dev，解析两次响应（审核 R06 + P2-03）。
 
-    返回 (成功与否, 说明)。只证明服务端接受了退出命令；退出码由调用方另行校验。
+    返回 (hello_ok, shutdown_ok, will_exit, 说明)。三个受控退出条件分别显式记录：
+    hello 是否 ok、shutdown 是否 ok、响应 willExit 是否 true；退出码由调用方另行校验。
     """
     name = pipe_name(channel)
     try:
@@ -213,7 +214,7 @@ def ipc_graceful_shutdown(channel: str) -> tuple[bool, str]:
                 },
             })
             if not hello.get("ok"):
-                return False, f"hello 被拒绝: {hello.get('error')}"
+                return False, False, False, f"hello 被拒绝: {hello.get('error')}"
             shutdown = _pipe_roundtrip(pipe, {
                 "protocolVersion": 1,
                 "requestId": ulid(),
@@ -222,12 +223,49 @@ def ipc_graceful_shutdown(channel: str) -> tuple[bool, str]:
                 "payload": {},
             })
             if not shutdown.get("ok"):
-                return False, f"shutdown 被拒绝: {shutdown.get('error')}"
+                return True, False, False, f"shutdown 被拒绝: {shutdown.get('error')}"
             if shutdown.get("result", {}).get("willExit") is not True:
-                return False, f"shutdown 响应缺少 willExit: {shutdown}"
-        return True, "hello + shutdown 均被接受"
+                return True, True, False, f"shutdown 响应缺少 willExit: {shutdown}"
+        return True, True, True, "hello + shutdown 均被接受（willExit=true）"
     except (OSError, json.JSONDecodeError) as error:
-        return False, f"IPC 传输失败: {error}"
+        return False, False, False, f"IPC 传输失败: {error}"
+
+
+def controlled_exit_failures(
+    *,
+    shutdown_attempted: bool,
+    hello_ok: bool,
+    shutdown_ok: bool,
+    will_exit: bool,
+    exit_code: int | None,
+    forced_kill: bool,
+    agent_exited_early: bool,
+) -> list[str]:
+    """受控退出判定纯函数（P2-03 修复）：任一受控退出条件失败都返回失败项（空 = pass）。
+
+    - 提前 exit 0 也不能通过：Agent 必须等到 shutdown 命令并以受控路径优雅退出；
+    - Agent 提前自行退出（任何 exit code）直接失败，不再检查 hello/shutdown/willExit；
+    - 超时强杀视为失败（forced_kill）；正常路径下 exit code 非 0 视为失败。
+    """
+    failures: list[str] = []
+    if agent_exited_early:
+        failures.append(
+            f"Agent 在 shutdown 前提前退出（exit code={exit_code}，任何 code 均失败）"
+        )
+        return failures
+    if not shutdown_attempted:
+        failures.append("未尝试优雅退出（shutdown 命令未发出）")
+    if not hello_ok:
+        failures.append("hello 响应未 ok")
+    if not shutdown_ok:
+        failures.append("shutdown 响应未 ok")
+    if not will_exit:
+        failures.append("shutdown 响应缺少 willExit=true")
+    if forced_kill:
+        failures.append("未在限时内优雅退出，发生强杀")
+    elif exit_code != 0:
+        failures.append(f"Agent exit code 非 0：{exit_code}")
+    return failures
 
 
 def git_commit() -> str:
@@ -288,6 +326,11 @@ def main() -> int:
     started_at = time.time()
     samples = []
     crashes = 0
+    agent_exited_early = False
+    shutdown_attempted = False
+    hello_ok = False
+    shutdown_ok = False
+    will_exit = False
     forced_kill = False
     shutdown_note = "未执行（Agent 已提前退出）"
 
@@ -296,6 +339,7 @@ def main() -> int:
             time.sleep(args.interval)
             if agent.poll() is not None:
                 crashes += 1
+                agent_exited_early = True
                 samples.append({"t": time.time(), "event": "agent_exited", "code": agent.returncode})
                 break
             stats = db_stats(db_path)
@@ -314,12 +358,12 @@ def main() -> int:
                 flush=True,
             )
 
-        # 优雅退出：hello → agent_shutdown_dev → 校验响应与 exit code 0；强杀判失败。
+        # 优雅退出：hello → agent_shutdown_dev → 校验三个受控条件 + exit code 0；强杀判失败。
         if agent.poll() is None:
-            ok, note = ipc_graceful_shutdown(channel)
-            shutdown_note = note
-            if not ok:
-                print(f"优雅退出失败：{note}", flush=True)
+            shutdown_attempted = True
+            hello_ok, shutdown_ok, will_exit, shutdown_note = ipc_graceful_shutdown(channel)
+            if not (hello_ok and shutdown_ok and will_exit):
+                print(f"优雅退出失败：{shutdown_note}", flush=True)
             try:
                 agent.wait(timeout=SHUTDOWN_GRACE_SECONDS)
             except subprocess.TimeoutExpired:
@@ -360,12 +404,18 @@ def main() -> int:
     any_old_db_present = any(s["present"] for s in before.values())
 
     failures = []
-    if crashes:
-        failures.append(f"Agent 在 soak 中退出（code={exit_code}）")
-    if forced_kill:
-        failures.append("Agent 未在限时内优雅退出，发生强杀")
-    if not crashes and exit_code != 0:
-        failures.append(f"Agent exit code 非 0：{exit_code}")
+    # 受控退出判定（P2-03）：任一条件失败都进入 failures；提前 exit 0 也失败。
+    failures.extend(
+        controlled_exit_failures(
+            shutdown_attempted=shutdown_attempted,
+            hello_ok=hello_ok,
+            shutdown_ok=shutdown_ok,
+            will_exit=will_exit,
+            exit_code=exit_code,
+            forced_kill=forced_kill,
+            agent_exited_early=agent_exited_early,
+        )
+    )
     # S2-07：RSS 增长超过任一上限即失败（OR 非 AND）。
     if rss_growth >= MAX_RSS_GROWTH_BYTES or rss_growth_ratio >= MAX_RSS_GROWTH_RATIO:
         failures.append(f"RSS 无界增长迹象：+{rss_growth // 1024 // 1024} MiB ({rss_growth_ratio:.0%})")
@@ -402,6 +452,10 @@ def main() -> int:
         "durationSeconds": int(elapsed),
         "samples": len(samples),
         "gracefulShutdown": {
+            "shutdownAttempted": shutdown_attempted,
+            "helloOk": hello_ok,
+            "shutdownOk": shutdown_ok,
+            "willExit": will_exit,
             "note": shutdown_note,
             "exitCode": exit_code,
             "forcedKill": forced_kill,
