@@ -147,8 +147,10 @@ v0.1 剩余事项（按审核 §10 的 V01-8 重新关闭准入）：
 2. ~~在最终工作区重新构建安装包并归档 `package-validation.json`~~（2026-08-05：`rebuild-package.ps1` DEV PACKAGE OK——旧库 verified_stable、资产扫描无 Bridge/.NET、package-smoke 真实断言 capture_state=stopped 且 Observation=0、manifest 已生成）；
 3. ~~在 4.7 对最终工作区重新执行 8 小时 soak~~（2026-08-05 完成：480 分钟/480 采样、受控退出七项全过、RSS+2.3MiB/WAL 收敛 8KB/心跳单调/零 dropped/quick_check ok、旧库 verified_stable、verdict=pass，报告 `dist/soak-report.json`）；
 4. ~~完成 09 §12.2 手工门禁~~（2026-08-04：真实锁屏/休眠已验证；30 分钟受控对照、键盘导航/读屏、离线历史显示五页通过；尺寸/DPI/HC 按用户决定跳过——统计主页阶段四 fixture 视检已覆盖 HC）；
-5. 完成 disk-full 手工注入核对（busy/corruption/checkpoint 已自动覆盖；Pending）；
-6. 全部自动与手工项关闭后复核 `migration-status.md` 内部一致，才允许重新声明 Rebuild v0.1 验收完成；09 Draft 的正式接受仍留待产品评审。
+5. ~~disk-full 手工注入核对~~（2026-08-05 用户决定跳过：busy/corruption/checkpoint 判定已有自动测试覆盖，风险低；如实记录）；
+6. ~~全部自动与手工项关闭后复核 `migration-status.md` 内部一致~~（2026-08-05 复核完成：统计主页阶段零~七、第四阶段整改 4.1–4.7、8h soak、正式 package、09 §12.2 手工门禁全部关闭；状态表 8 处过时项已修正）。
+
+**Rebuild v0.1 开发验收完成声明（2026-08-05，产品负责人确认）**：以上全部自动与手工项关闭、migration-status 复核内部一致——v0.1（dev-only bridge-free React/Tauri/Rust Agent/SQLite 链路）开发验收完成。边界如实保留：09 Draft 的正式接受仍留待产品评审；production hardening（二进制/进程签名认证、正式安装升级、Schema migration、prod cutover、旧数据退役）属独立生产化线（09 §33/§14），未随 v0.1 验收达成；正式发布需产品评审后另立生产版本。
 
 长期方向（v0.1 验收后不自动启动）：按 09 §14 选择 v0.2/v0.3/v0.4；长期 manifest、Importer、Snapshot/Lease 和 production cutover 保持延期；旧系统回滚来源为 ADR-003 冻结提交。
 **主页新增 ⑥ 缩小版热力图（2026-08-04 产品扩展，已实施）**：长期记录区之后新增 24 小时 × N 天缩略热力图（行高 6px、总高约 170px），数据来自 activity 域 `activity_get_heatmap`（默认范围）独立低频拉取，不参与 stats 双命令 5s 轮询；失败仅本区块轻提示、不阻塞主页；复用 heatmapModel 纯函数与全局 heatmap-level 颜色，今天列高亮，不带键盘格子导航（缩略图语义）。注意：该区块超出设计 10 §5 五区块冻结范围（stats 域混入 activity 域快照），已随用户产品决策实施；设计 10 回写与正式纳入统计主页合同留待产品评审/阶段六确认。
