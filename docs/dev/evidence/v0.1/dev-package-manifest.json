@@ -1,0 +1,47 @@
+{
+  "channel": "rebuild-v01-dev",
+  "productName": "吾迹 Rebuild v0.1（开发）",
+  "createdAtUtc": "2026-08-06T04:47:04Z",
+  "desktop": {
+    "name": "wuji-rebuild-desktop-v01.exe",
+    "version": "0.1.0",
+    "sha256": "539e3379c12e2c45ba83185e4183d869892b4d781902d60e4f3af418fbe2d703"
+  },
+  "agent": {
+    "name": "wuji-rebuild-agent-v01.exe",
+    "version": "0.1.0",
+    "sha256": "7bac3516b84578bc90afc6294d49aecadd1ef6e521bd447118e5121952ac40c7"
+  },
+  "installer": {
+    "name": "吾迹 Rebuild v0.1（开发）_0.1.0_x64-setup.exe",
+    "sha256": "3e66eec36b6aea6bdb259a88a2de42fde4015a23bb65fdabe60fc84299cb115c"
+  },
+  "validation": {
+    "layout": [
+      "wuji-rebuild-desktop-v01.exe",
+      "Agent/wuji-rebuild-agent-v01.exe"
+    ],
+    "forbiddenAssetScan": "pass",
+    "installedLaunch": {
+      "performed": true,
+      "installedAgentSpawned": true,
+      "databaseCreated": true,
+      "captureStayedStopped": true,
+      "observationCount": 0,
+      "stableSamples": 5,
+      "stableWindowSeconds": 4.0,
+      "note": "安装版 Desktop 通过 package-smoke test channel 调用 AgentController，拉起安装目录内 Agent 并完成 bootstrap；smoke 只验证拉起链路，自动开始记录由 Desktop 本地偏好（09 §9.4）决定；实测最新 runtime process_state=running、capture_state=stopped、Observation 数 0，连续稳定观察 4.0 秒"
+    },
+    "oldDatabases": {
+      "prod": {
+        "present": true,
+        "sha256": "1191c8ba4b925b767c4331c2a9acf5510b6c71e4235b895313af85d98b4604af"
+      },
+      "dev": {
+        "present": true,
+        "sha256": "a81ca248c89b772810bd72fd1c6b75c48691d1de466b2f39ef2c01de653f39fe"
+      }
+    },
+    "note": "dev-only 校验 hash，不充当生产身份认证（09 §9.3）；desktop exe 经 bundler 写入 bundle 元数据，错版校验以 Agent 为准"
+  }
+}

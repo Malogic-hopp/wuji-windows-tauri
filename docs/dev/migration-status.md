@@ -5,7 +5,7 @@
 最近更新：2026-08-03（统计主页（10/11）阶段一、二实施收口，见 §2。2026-08-01 记录：第二轮审核 P1 整改与评审优化：启动决策三态枚举且 package-smoke 优先只拉起不自动开录、Settings 与 Desktop 偏好按 dirty 状态独立提交、托盘按进程状态分别建模且故障态保留停止、偏好 I/O 错误与文件缺失区分且严格拒绝未知字段；启动动作升级为 Coordinator 内原子的内部 `capture_ensure_recording`（Stopped→开始/Paused→恢复/Running→幂等），启动结果经 `auto_start_status` 顶栏可见化，文案改为“启动吾迹时自动开始记录”；第三轮复审补修：ensure 区分 lifecycle monitor 永久故障（显式失败）与 Lock/Sleep 临时抑制（Ok(Paused) 自动恢复）、手动重试成功清除失败提示、打包烟测真实断言 smoke 保持 capture_state=stopped 且零 Observation，全部对齐 09 §8.2/§8.3/§9.3/§9.4）
 本次核对方式：仓库结构与源码检查 + 本轮提交前根 workspace `fmt`/`check`/`clippy`/`cargo test --workspace` 实跑；2026-07-22 的旧 .NET 与 soak 结果仅保留为历史证据，不代表覆盖本轮工作区
 当前实施依据：[09-Tauri-Rust-Rebuild-v0.1实施基线.md](./09-Tauri-Rust-Rebuild-v0.1实施基线.md)（含 §16 审核整改增补合同）
-审核报告：[Rebuild-v0.1-代码与验收审核报告.md](./Rebuild-v0.1-代码与验收审核报告.md)
+审核报告：[Rebuild-v0.1-代码与验收审核报告.md](./archive/历史审核/Rebuild-v0.1-代码与验收审核报告.md)
 长期目标依据：[ADR-002](./ADR-002-React-Tauri-Rust目标架构.md) 与 [01–08](./README.md#1-文档层级与适用范围)
 
 ## 1. 使用规则
@@ -33,7 +33,7 @@ WUJI 旧系统（WPF App、C# Agent、.NET Bridge 与 React/Tauri 过渡 dev she
 按当前第四阶段整改计划核对后的状态：
 
 - **阶段 4.1–4.4 已复审通过。** Settings 恢复/双槽备份、可靠 Barrier、唯一 CaptureCoordinator、control/ack 有界失败、pipeline supervisor、Settings effectivity/revision 一致性已带确定性回归；P1-04 已关闭。阶段 4.4 最终基线为 workspace 265/265，关键 E11c 连续 10/10，Agent 残留 0/0。
-- **阶段 4.5 自动化实现与第六轮缺口补修完成，2026-08-04 独立复审通过（假测试排查 + 逐路径核对 + 实跑门禁全绿）；真实锁屏→恢复、睡眠→唤醒人工验收通过；P1-05/S2-03 的阶段 4.5 部分关闭。** Lock/Sleep/Unlock/Resume 已通过唯一 Coordinator 形成 desired + per-source suppression + effective gate；隐藏顶层窗口在 `WM_NCCREATE` 安装上下文，受监督 pump/bridge/consumer、事务式启动回滚、可靠 Barrier/Writer ack、首次事件时间重试与有界 shutdown 均已接入。L01–L20、Windows pump/bridge 启动失败、shutdown stop 失败/pump timeout/bridge timeout/consumer timeout/panic 已有确定性测试。真实 Windows 锁屏/休眠人工验收仍为关闭条件，不能仅凭自动门禁关闭 S2-03。当前说明见[阶段 4.5 完成说明 §15](./下一步计划-2026-07-23-Rebuild-v0.1第二轮审核第四阶段整改/阶段4.5-完成说明-2026-07-27.md#15-第六轮复审缺口补修2026-07-29)。
+- **阶段 4.5 自动化实现与第六轮缺口补修完成，2026-08-04 独立复审通过（假测试排查 + 逐路径核对 + 实跑门禁全绿）；真实锁屏→恢复、睡眠→唤醒人工验收通过；P1-05/S2-03 的阶段 4.5 部分关闭。** Lock/Sleep/Unlock/Resume 已通过唯一 Coordinator 形成 desired + per-source suppression + effective gate；隐藏顶层窗口在 `WM_NCCREATE` 安装上下文，受监督 pump/bridge/consumer、事务式启动回滚、可靠 Barrier/Writer ack、首次事件时间重试与有界 shutdown 均已接入。L01–L20、Windows pump/bridge 启动失败、shutdown stop 失败/pump timeout/bridge timeout/consumer timeout/panic 已有确定性测试。真实 Windows 锁屏/休眠人工验收仍为关闭条件，不能仅凭自动门禁关闭 S2-03。当前说明见[阶段 4.5 完成说明 §15](./archive/第四阶段整改-2026-07-23/下一步计划-2026-07-23-Rebuild-v0.1第二轮审核第四阶段整改/阶段4.5-完成说明-2026-07-27.md#15-第六轮复审缺口补修2026-07-29)。
 - **V01-8 仍为重新打开，但当前工作区 package 已重验收。** 2026-07-30 已从新根目录完成 release、React/Tauri/NSIS、静默安装、固定 Agent 布局、禁资产、安装版 Desktop→AgentController→安装目录 Agent 启动、隔离 bootstrap、manifest 与旧 prod/dev 数据库 checksum 前后不变门禁。8 小时 soak 已重跑通过（2026-08-05，480 分钟全判据、旧库 verified_stable）；09 §12.2 手工门禁已通过（锁屏/睡眠、30 分钟对照、键盘/读屏、离线历史；尺寸/DPI/HC 按用户决定跳过）；disk-full 人工项仍 Pending（可选）。
 - 09 基线仍为 Draft，已补 §16 审核整改增补合同（last-known-good、watermark、IPC 副作用、checkpoint busy、soak 判据、Schema 增补）；按审核 §10，v0.1 当前只宣称**实现完成**，不宣称验收完成。
 - **统计主页（10 设计 / 11 实施方案）阶段一、二已实现并收口。** 阶段一（DTO + 枚举 + 纯函数 + specta 双副本 drift 门禁）与阶段二（`ReaderSnapshot` 读事务快照 + 7 个统计投影原语）已通过各自 DoD：`cargo test -p wuji-core` 57 项、`cargo test -p wuji-storage` 49 项全绿（阶段二原有 48 + 阶段三 cutoff 计数器回归 1；另有 `compile_fail` doctest 1）；DST 三类（含 fall-back 无匹配取较早、歧义窗口先断言防假通过）、cutoff LEFT JOIN 零活动日、**重复日期去重（不翻倍不归零）**、工作块跨午夜/未闭合计数（与 `recompute_dates` 统一相交口径）、惯性有效日（`daily_work_metrics` 口径 + gap-only 日计入分母）、WAL 写并发同快照一致、行类型跨 crate 导出纠错等回归齐备。

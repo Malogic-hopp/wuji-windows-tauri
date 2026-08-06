@@ -1,0 +1,61 @@
+{
+  "schema": "wuji-rebuild-soak-report/2",
+  "channel": "rebuild-v01-test-soak18c8eafa0c91c9b8000000",
+  "agentExe": "target/release/wuji-rebuild-agent-v01.exe",
+  "agentSha256": "7bac3516b84578bc90afc6294d49aecadd1ef6e521bd447118e5121952ac40c7",
+  "durationSeconds": 28802,
+  "samples": 480,
+  "gracefulShutdown": {
+    "shutdownAttempted": true,
+    "helloOk": true,
+    "shutdownOk": true,
+    "willExit": true,
+    "note": "hello + shutdown 均被接受（willExit=true）",
+    "exitCode": 0,
+    "forcedKill": false
+  },
+  "rssStartBytes": 16453632,
+  "rssMaxBytes": 18767872,
+  "rssGrowthBytes": 2314240,
+  "walMaxBytes": 1277232,
+  "walEndBytes": 8272,
+  "dbBytes": 1290240,
+  "droppedTotal": 0,
+  "continuityEpoch": 0,
+  "heartbeatSamples": 480,
+  "observations": 7583,
+  "quickCheck": "ok",
+  "oldDatabases": {
+    "prod": {
+      "present": true,
+      "sha256Before": "1191c8ba4b925b767c4331c2a9acf5510b6c71e4235b895313af85d98b4604af",
+      "sha256After": "1191c8ba4b925b767c4331c2a9acf5510b6c71e4235b895313af85d98b4604af"
+    },
+    "dev": {
+      "present": true,
+      "sha256Before": "a81ca248c89b772810bd72fd1c6b75c48691d1de466b2f39ef2c01de653f39fe",
+      "sha256After": "a81ca248c89b772810bd72fd1c6b75c48691d1de466b2f39ef2c01de653f39fe"
+    }
+  },
+  "oldDbChecksumStatus": "verified_stable",
+  "evidence": {
+    "gitCommit": "6d25e90ed016be979dd4fb803707f7cb0344e916",
+    "cargoLockSha256": "b462bff75b16be8588806401b5fb78afc5beef21c0afa5d6fd0caa834e0a4135",
+    "os": "Windows-11-10.0.26200-SP0",
+    "python": "3.14.3",
+    "command": "scripts/soak.py --minutes 480.0 --interval 60.0",
+    "startedAtUtc": "2026-08-05T13:13:31.946327+00:00",
+    "criteria": [
+      "no_crash: 进程全程存活，exit code 0 优雅退出，不允许强杀",
+      "rss_bounded: RSS 增长 < 64 MiB 且 < 50%",
+      "wal_trend: 结束时 WAL <= 4 MiB，且末段均值 <= 前段均值*2 + 1 MiB（无趋势性增长）",
+      "heartbeat_monotonic: 全程心跳采样严格单调递增",
+      "writer_never_faulted: 任一采样点 writer_state 不得为 faulted",
+      "quick_check: PRAGMA quick_check = ok",
+      "old_db_stable: 存在的旧库 checksum 前后不变；不存在的旧库如实记录 missing",
+      "observations: >= 1 分钟 soak 必须有 Observation 落库"
+    ]
+  },
+  "failures": [],
+  "verdict": "pass"
+}
