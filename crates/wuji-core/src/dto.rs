@@ -501,6 +501,56 @@ pub struct HourlyPointDto {
     pub avg_active_ms: Int64String,
 }
 
+/// 工作节奏每小时在工位覆盖均值（v0.2 候选，10 §4.4 之外新增）：该小时落在
+/// 任意 Work Block 覆盖内的毫秒均值（有效记录日分母，含块内短 idle）。与惯性
+/// 强度曲线同轴不同口径：惯性是活跃强度，本点是"在工位"覆盖。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct CoveragePointDto {
+    pub local_hour: u32,
+    pub avg_coverage_ms: Int64String,
+}
+
+/// 休息时段类型（v0.2 候选：工作节奏）。Night 为跨午夜大块（收工后→开工前，
+/// 由每日 24:00 收尾段与 00:00 起始段拼接）；Midday 为覆盖间含 11–14 点的段；
+/// Between 为其余覆盖间隙。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "lowercase")]
+pub enum RestIntervalKind {
+    Night,
+    Midday,
+    Between,
+}
+
+/// 一个"整块未工作时间段"（v0.2 候选：14 天聚合均值）。分钟粒度 0..=1440；
+/// Night 块跨午夜（start 在下午/晚上、end 在次日凌晨）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct RestIntervalDto {
+    pub kind: RestIntervalKind,
+    pub start_minutes: i32,
+    pub end_minutes: i32,
+    pub avg_duration_minutes: i32,
+}
+
+/// 工作节奏（v0.2 候选：工作惯性卡片融合）：工作 = Work Block 覆盖并集（含块内
+/// 短 idle），未工作 = 24h 补集，两者互补凑满一天；仅有效记录日参与均值。
+/// reliability 与惯性同门禁（有效日 < 3 → null，此时派生字段全零/空，不得伪造）。
+/// 常见开工/收工只统计"当天窗口内真实覆盖段"（熬夜尾巴不参与开工，收工截到
+/// 24:00），避免熬夜映射把"凌晨开工"/"27:05 开工"式伪值拉进中位数。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkPaceDto {
+    pub hourly_coverage_ms: Vec<CoveragePointDto>,
+    pub work_ratio_percent: i32,
+    pub common_start_minutes: Option<i32>,
+    pub common_end_minutes: Option<i32>,
+    pub morning_work_days: i32,
+    pub effective_days: i32,
+    pub total_days: i32,
+    pub reliability: Option<ReliabilityKind>,
+}
+
 /// 惯性标注（10 §4.4）：全零曲线或 reliability = null 时派生字段全部 null。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -549,6 +599,7 @@ pub struct StatsHomeDto {
     pub palette: Vec<AppPaletteEntryDto>,
     pub hourly_profile: Vec<HourlyPointDto>,
     pub inertia: InertiaDto,
+    pub work_pace: WorkPaceDto,
     pub milestone: MilestoneDto,
     pub monthly: Vec<MonthlyPointDto>,
 }
@@ -866,6 +917,21 @@ mod tests {
                 peak_hour: Some(10),
                 end_hour: Some(19),
                 lunch_lowest_hour: Some(13),
+                effective_days: 11,
+                total_days: 14,
+                reliability: Some(ReliabilityKind::Normal),
+            },
+            work_pace: WorkPaceDto {
+                hourly_coverage_ms: (0..24)
+                    .map(|local_hour| CoveragePointDto {
+                        local_hour,
+                        avg_coverage_ms: Int64String(1_800_000),
+                    })
+                    .collect(),
+                work_ratio_percent: 50,
+                common_start_minutes: Some(1320),
+                common_end_minutes: Some(480),
+                morning_work_days: 3,
                 effective_days: 11,
                 total_days: 14,
                 reliability: Some(ReliabilityKind::Normal),

@@ -9,12 +9,12 @@ use wuji_core::dto::{
     AppPaletteEntryDto, CompositionBucketDto, HeatmapDto, HourlyPointDto, InertiaDto, Int64String,
     LiveStatusDto, LocalDate, MilestoneDto, MonthlyPointDto, SameTimeComparisonDto, StatsHomeDto,
     StatsStatusDto, StatusDto, SummaryDto, TimelineCursor, TimelinePageDto, TodayDto,
-    TrendPointDto, WeekProgressDto, WeeklyPointDto,
+    TrendPointDto, WeekProgressDto, WeeklyPointDto, WorkPaceDto,
 };
 use wuji_core::error::{SafeError, SafeErrorCode};
 use wuji_core::stats::{
     ComparisonPolicy, DailyMetricSample, build_summary, compare_direction, compute_moving_avg7,
-    derive_inertia, longest_consecutive, normalize_days, summary_direction,
+    derive_inertia, derive_work_pace, longest_consecutive, normalize_days, summary_direction,
 };
 use wuji_storage::Reader;
 use wuji_storage::error::StorageError;
@@ -196,6 +196,7 @@ impl QueryService {
             let (weekly, week_progress) = stats_weekly(&ctx, &plan)?;
             let (composition, palette) = stats_composition(&ctx, days, &daily)?;
             let (hourly_profile, inertia) = stats_hourly_profile(&ctx)?;
+            let work_pace = stats_work_pace(&ctx)?;
             let (monthly, milestone) = stats_monthly(&ctx, &plan)?;
             let summary = build_summary_from_daily(&ctx, &daily, &inertia)?;
             let dto = StatsHomeDto {
@@ -217,6 +218,7 @@ impl QueryService {
                 palette,
                 hourly_profile,
                 inertia,
+                work_pace,
                 milestone,
                 monthly,
             };
@@ -688,6 +690,16 @@ fn stats_hourly_profile(
         .collect();
     let inertia = derive_inertia(&profile, effective_days);
     Ok((points, inertia))
+}
+
+/// 工作节奏（v0.2 候选：惯性卡片融合）。窗口与惯性一致（today-14 → today-1，
+/// 不含今日——与 10 §4.4"惯性窗口排除今日"同一口径，reliability 同门禁）。
+fn stats_work_pace(ctx: &StatsQueryContext) -> Result<WorkPaceDto, StorageError> {
+    let today_naive = naive_of(&ctx.local_date)?;
+    let start = local_of(today_naive - Days::new(14))?;
+    let end = local_of(today_naive - Days::new(1))?;
+    let (days, _effective_days) = ctx.snapshot.stats_work_pace_days(&start, &end)?;
+    Ok(derive_work_pace(&days, 14))
 }
 
 /// 月度（近 6 个日历月）+ 里程碑（10 §4.5）：当前月 recordedDays/均值不含今日。

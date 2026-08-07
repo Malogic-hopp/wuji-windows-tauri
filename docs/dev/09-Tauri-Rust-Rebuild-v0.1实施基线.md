@@ -624,6 +624,7 @@ V01-8 必须把 Tauri `bundle.active` 改为 `true`，将 Agent 放入固定 `Ag
 主页即“活动概览”，路由 `/`（导航置首）。数据合同以 10 设计 §5.3/§5.4 修订后为准（`LiveStatusDto` 拆分、`StatsStatusDto` 携带 `localDate`/`reportingTimeZoneId`、`CompositionBucketDto.hasData`、`StatusDto` 仅存于 home）。
 
 - 区块：①主卡（今日状态 | 本周进度）②近 N 天活跃趋势（7/14/30 切换器）③近 12 周活跃总量 ④双列独立卡（工作惯性 | 应用构成）⑤长期记录 ⑥缩小版热力图（activity 域低频快照，产品扩展）；
+- **工作节奏（实现增补 2026-08-07，产品确认收进 v0.1）**：惯性卡片内由 `stats_get_home` 返回 `workPace` 字段（不新增命令）——工作/未工作占比例条 + 常见工作时段 + 上午利用率。口径：工作 = Work Block 覆盖并集（含块内短 idle），未工作 = 24h 补集，占比自洽；仅有效记录日参与均值（同惯性窗口 [today-14, today-1] 与 reliability 门禁）；**本地 00:00–06:00 开始的块一律归前一天**（熬夜，人不会凌晨开工；即使 Agent 断连也按熬夜归前日），跨午夜块整体归属开始日；常见开工/收工 = 当天窗口内真实覆盖段的上中位数（熬夜尾巴不参与开工、收工截到 24:00，避免"凌晨开工"/"27:05 开工"式伪值）；`morningWorkDays` = 8-12 点有覆盖的有效日数；前端不叠加色带、不伪造休息块。实现：`reader.stats_work_pace_days`（跨午夜/凌晨归属、窗口裁剪）+ `wuji_core::stats::derive_work_pace`（中位数/上午判定/熬夜映射，单测锁定）。
 - 双命令刷新：`stats_get_home(days)`（首次/跨日/切范围，命令级读快照单批次 cutoff）+ `stats_get_status()`（5s 轮询只替换 live；`weekProgress.currentActiveMs` 覆盖当前周柱、`todayTrendPoint` 覆盖今日柱）；双通道 generation 防串，跨日 `localDate` 不一致显式双失效自动重查；页面重新聚焦随 home 刷新低频快照；
 - 语义：今日/当前周/当前月进行中斜纹、缺数据斜纹占位、均线 null 断开、当前周参考值（日均×7）纳入纵轴、五态比较与摘要方向精确阈值（i128 交叉相乘，显示舍入独立）、惯性有效日统一分母、月度每有效日均值；
 - 四态统一 `Loading | Empty | Ready | Error`；范围切换失败保留旧图并恢复范围，仅首次失败进整页 Error。

@@ -160,7 +160,7 @@ export default function StatsPage() {
         <div className="card">
           <h2 className="card__title">工作惯性（近 14 天）</h2>
           <div className="card__sub">按有效样本日平均的 24 小时活跃分布</div>
-          <InertiaCurve points={home.hourlyProfile} inertia={home.inertia} />
+          <InertiaCurve points={home.hourlyProfile} inertia={home.inertia} workPace={home.workPace} />
         </div>
         <div className="card">
           <h2 className="card__title">近 14 天应用构成</h2>

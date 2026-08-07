@@ -8,8 +8,8 @@
 //! desktop 组装层（11 阶段一 1.2）；本模块只定义纯计算输入（`DailyMetricSample`）。
 
 use crate::dto::{
-    ComparisonDirection, InertiaDto, PeriodKind, ReliabilityKind, SummaryDirection, SummaryDto,
-    UnavailableReason,
+    ComparisonDirection, CoveragePointDto, InertiaDto, PeriodKind, ReliabilityKind,
+    SummaryDirection, SummaryDto, UnavailableReason, WorkPaceDto,
 };
 
 /// 7 日均线的纯计算输入（11 阶段一 1.2）：Query 层把 Reader 的 `DayMetric`
@@ -289,7 +289,10 @@ pub fn derive_inertia(profile: &[i64; 24], effective_days: u32) -> InertiaDto {
         .min()
         .unwrap_or(0);
     let boundary = i128::from(profile[11]) + i128::from(profile[15]);
-    let lunch_lowest_hour = if i128::from(lunch_min) * 2 < boundary {
+    // 午休低谷前置条件：上午（11 点）必须有实质活跃——午休是"工作中间的休息"；
+    // 若 11 点就为 0（上午未开工），12-14 点的低谷是"还没开始工作"而非午休，
+    // 不得标注（修复：真实数据 12 点活跃≈0 但上午未工作 → 此前误标"午休低谷 12 点"）。
+    let lunch_lowest_hour = if profile[11] > 0 && i128::from(lunch_min) * 2 < boundary {
         (12..=14).find(|h| profile[*h as usize] == lunch_min)
     } else {
         None
@@ -301,6 +304,124 @@ pub fn derive_inertia(profile: &[i64; 24], effective_days: u32) -> InertiaDto {
         lunch_lowest_hour,
         effective_days: effective_days as i32,
         total_days: 14,
+        reliability,
+    }
+}
+
+/// 单个有效日的 Work Block 覆盖（v0.2 候选：工作节奏）。段为 0..1440 分钟粒度
+/// 半开区间，升序、不重叠；可为空（当天有记录但无任何工作块 → 全天未工作）。
+/// 由 Reader 按 reporting time zone 把 UTC 块裁剪/归位后构造，本模块只做纯计算。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DayCoverage {
+    pub segments: Vec<(u32, u32)>,
+}
+
+/// 上中位数（对个别天的异常作息稳健；空输入返回 0，调用方保证非空）。
+fn median_u32(vals: &[u32]) -> u32 {
+    if vals.is_empty() {
+        return 0;
+    }
+    let mut sorted = vals.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
+/// 工作节奏纯函数（v0.2 候选：惯性卡片融合，10 §4.4 之外新增）：
+/// - hourly_coverage_ms：每有效日 24 点在工位覆盖毫秒均值（与惯性同轴不同口径，
+///   熬夜尾巴映射回钟点——凌晨在工位如实反映）；
+/// - work_ratio_percent：工作覆盖均值 / 1440 分钟（覆盖 + 补集 = 24h，占比自洽，
+///   跨午夜熬夜全程计入开始日）；
+/// - common_start/end：常见开工/收工 = 当天窗口内真实覆盖段（熬夜尾巴不参与
+///   开工；收工截到 24:00）的钟点中位数——避免熬夜映射把"凌晨开工"/"27:05 开工"
+///   式伪值拉进中位数；
+/// - morning_work_days：8:00-12:00 有覆盖钟点的有效日数（回答"缺上午"）；
+/// - reliability 与惯性同门禁：有效日 < 3 → null，全部派生字段返回零/空。
+#[must_use]
+pub fn derive_work_pace(days: &[DayCoverage], total_days: u32) -> WorkPaceDto {
+    let effective_days = days.len() as u32;
+    let reliability = match effective_days {
+        0..=2 => None,
+        3..=6 => Some(ReliabilityKind::Preliminary),
+        _ => Some(ReliabilityKind::Normal),
+    };
+    let mut per_hour: [i64; 24] = [0; 24];
+    let mut first_works: Vec<u32> = Vec::new();
+    let mut last_works: Vec<u32> = Vec::new();
+    let mut morning_work_days: i32 = 0;
+    let mut total_coverage_ms: i64 = 0;
+    for day in days {
+        // 工作钟点位图：段内 < 1440 部分原样标记；熬夜尾巴（≥ 1440）映射回 0..1440
+        // 钟点（熬夜 00:00-03:00 与任何"当天凌晨工作"同样都是"凌晨在工位"）。
+        let mut cov = [false; 1440];
+        let mut day_first: Option<u32> = None; // 窗口内首个真实覆盖起点（s < 1440）
+        let mut day_last: u32 = 0; // 窗口内最后覆盖终点（≤ 1440）
+        for &(s, e) in &day.segments {
+            let end = e.min(2880);
+            if end <= s {
+                continue;
+            }
+            total_coverage_ms += i64::from(end - s) * 60_000;
+            if s < 1440 {
+                if day_first.is_none() {
+                    day_first = Some(s);
+                }
+                day_last = day_last.max(end.min(1440));
+            }
+            for m in s..end.min(1440) {
+                cov[m as usize] = true;
+            }
+            for m in 1440..end {
+                cov[(m - 1440) as usize] = true;
+            }
+        }
+        if let Some(first) = day_first {
+            first_works.push(first);
+        }
+        if day_last > 0 {
+            last_works.push(day_last);
+        }
+        if cov[480..720].iter().any(|v| *v) {
+            morning_work_days += 1;
+        }
+        for (h, slot) in per_hour.iter_mut().enumerate() {
+            for minute in &cov[(h * 60)..(h * 60 + 60)] {
+                if *minute {
+                    *slot += 60_000;
+                }
+            }
+        }
+    }
+    let (common_start_minutes, common_end_minutes) = if effective_days > 0 {
+        (
+            (!first_works.is_empty()).then(|| median_u32(&first_works) as i32),
+            (!last_works.is_empty()).then(|| median_u32(&last_works) as i32),
+        )
+    } else {
+        (None, None)
+    };
+    let work_ratio_percent = if effective_days > 0 {
+        let mean_ms = total_coverage_ms / i64::from(effective_days);
+        let ratio = (i128::from(mean_ms) * 100 + 43_200_000) / 86_400_000;
+        ratio as i32
+    } else {
+        0
+    };
+    let hourly_coverage_ms: Vec<CoveragePointDto> = (0..24)
+        .map(|h| CoveragePointDto {
+            local_hour: h,
+            avg_coverage_ms: crate::dto::Int64String(
+                per_hour[h as usize] / i64::from(effective_days.max(1)),
+            ),
+        })
+        .collect();
+    WorkPaceDto {
+        hourly_coverage_ms,
+        work_ratio_percent,
+        common_start_minutes,
+        common_end_minutes,
+        morning_work_days,
+        effective_days: effective_days as i32,
+        total_days: total_days as i32,
         reliability,
     }
 }
@@ -770,7 +891,11 @@ mod tests {
         profile[3] = 35;
         let inertia = derive_inertia(&profile, 11);
         assert_eq!(inertia.peak_hour, Some(22));
-        assert_eq!(inertia.start_hour, Some(20), "熬夜开工应为 20 点，凌晨尾巴不再当开工");
+        assert_eq!(
+            inertia.start_hour,
+            Some(20),
+            "熬夜开工应为 20 点，凌晨尾巴不再当开工"
+        );
         assert_eq!(inertia.end_hour, Some(3), "熬夜收工应跨午夜到凌晨 3 点");
     }
 
@@ -914,5 +1039,145 @@ mod tests {
         assert_eq!(normalize_days(None), 14);
         assert_eq!(normalize_days(Some(0)), 14);
         assert_eq!(normalize_days(Some(15)), 14);
+    }
+
+    // ---- derive_work_pace ----
+
+    #[test]
+    fn work_pace_reliability_gate_like_inertia() {
+        // 0 天 → null；1-2 天 → null（不伪造）；3-6 → Preliminary；7+ → Normal。
+        assert_eq!(derive_work_pace(&[], 14).reliability, None);
+        let one = [DayCoverage {
+            segments: vec![(540, 660)],
+        }];
+        assert_eq!(derive_work_pace(&one, 14).reliability, None);
+        let three = [
+            DayCoverage {
+                segments: vec![(540, 660)],
+            },
+            DayCoverage {
+                segments: vec![(540, 660)],
+            },
+            DayCoverage {
+                segments: vec![(540, 660)],
+            },
+        ];
+        assert_eq!(
+            derive_work_pace(&three, 14).reliability,
+            Some(ReliabilityKind::Preliminary)
+        );
+    }
+
+    #[test]
+    fn work_pace_ratio_and_hourly_cover_consistent() {
+        // 每天 9:00-12:00 在工位（覆盖并集含短 idle）：180 分钟 / 1440 = 12.5% → 13%。
+        let days = vec![
+            DayCoverage {
+                segments: vec![(540, 720)],
+            };
+            7
+        ];
+        let pace = derive_work_pace(&days, 14);
+        assert_eq!(pace.reliability, Some(ReliabilityKind::Normal));
+        assert_eq!(pace.effective_days, 7);
+        assert_eq!(pace.total_days, 14);
+        assert_eq!(pace.work_ratio_percent, 13);
+        // 每小时覆盖：9 点 60 分钟、10/11 点各 60、12 点 0（12:00 是半开边界）。
+        let hours: Vec<u32> = pace
+            .hourly_coverage_ms
+            .iter()
+            .filter(|p| p.avg_coverage_ms.0 > 0)
+            .map(|p| p.local_hour)
+            .collect();
+        assert_eq!(hours, vec![9, 10, 11]);
+        for p in &pace.hourly_coverage_ms {
+            if (9..=11).contains(&p.local_hour) {
+                assert_eq!(p.avg_coverage_ms.0, 3_600_000);
+            }
+        }
+    }
+
+    #[test]
+    fn work_pace_common_start_end_and_morning_days() {
+        // 两天开工不同：12:23 与 16:18；收工 23:02 与 24:00。
+        // 中位开工 = 16:18（排序取上中位数）、中位收工 = 23:02；
+        // 上午（8-12 点）有覆盖的天数：无（两天开工都 ≥ 12:23）。
+        let days = vec![
+            DayCoverage {
+                segments: vec![(743, 1382)],
+            },
+            DayCoverage {
+                segments: vec![(978, 1440)],
+            },
+        ];
+        let pace = derive_work_pace(&days, 14);
+        assert_eq!(pace.common_start_minutes, Some(978));
+        assert_eq!(pace.common_end_minutes, Some(1440)); // 上中位数 [1382,1440] → 1440
+        assert_eq!(pace.morning_work_days, 0);
+        // 有上午覆盖的天：段 [480, 720)（8-12 点）。
+        let days2 = vec![DayCoverage {
+            segments: vec![(500, 720)],
+        }];
+        let pace2 = derive_work_pace(&days2, 14);
+        assert_eq!(pace2.morning_work_days, 1);
+        assert_eq!(pace2.common_start_minutes, Some(500));
+        assert_eq!(pace2.common_end_minutes, Some(720));
+    }
+
+    #[test]
+    fn work_pace_cross_midnight_segment_counts_to_start_day() {
+        // 熬夜块 22:00→次日 03:00 整体归属开始日：段 [1320, 1620)。
+        // - 占比：5h / 24 = 21%；
+        // - 工作钟点：22/23 点 + 熬夜映射 0/1/2 点（凌晨在工位）；
+        // - 开工（窗口内真实覆盖首段）= 22:00；收工截到 24:00（熬夜尾巴不参与收工
+        //   中位数，避免"27:05 收工"式伪值）；
+        // - 上午无覆盖 → morning_work_days = 0。
+        let days = vec![
+            DayCoverage {
+                segments: vec![(1320, 1620)],
+            };
+            7
+        ];
+        let pace = derive_work_pace(&days, 14);
+        assert_eq!(pace.reliability, Some(ReliabilityKind::Normal));
+        assert_eq!(pace.work_ratio_percent, 21);
+        let covered: Vec<u32> = pace
+            .hourly_coverage_ms
+            .iter()
+            .filter(|p| p.avg_coverage_ms.0 > 0)
+            .map(|p| p.local_hour)
+            .collect();
+        // 22/23 点（段内）+ 0/1/2 点（熬夜映射）。
+        assert_eq!(covered, vec![0, 1, 2, 22, 23]);
+        for p in &pace.hourly_coverage_ms {
+            if covered.contains(&p.local_hour) {
+                assert_eq!(p.avg_coverage_ms.0, 3_600_000);
+            }
+        }
+        assert_eq!(pace.common_start_minutes, Some(1320));
+        assert_eq!(pace.common_end_minutes, Some(1440)); // 截到 24:00
+        assert_eq!(pace.morning_work_days, 0);
+    }
+
+    #[test]
+    fn inertia_lunch_suppressed_when_morning_has_no_work() {
+        // 上午未开工（11 点为 0）：12-14 点低谷是"还没开始工作"而非午休 → 不标注。
+        // 真实数据场景：12 点活跃≈0、11 点=0、15 点有活跃。
+        let mut profile = zeros24();
+        profile[12] = 20;
+        profile[13] = 10;
+        profile[14] = 15;
+        profile[15] = 70;
+        let inertia = derive_inertia(&profile, 11);
+        assert_eq!(inertia.lunch_lowest_hour, None);
+        // 对照组：11 点有活跃（上午在工作）→ 12-14 低谷是真实午休 → 标注。
+        let mut profile = zeros24();
+        profile[11] = 80;
+        profile[12] = 20;
+        profile[13] = 10;
+        profile[14] = 15;
+        profile[15] = 70;
+        let inertia = derive_inertia(&profile, 11);
+        assert_eq!(inertia.lunch_lowest_hour, Some(13));
     }
 }

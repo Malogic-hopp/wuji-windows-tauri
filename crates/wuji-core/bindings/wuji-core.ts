@@ -55,6 +55,16 @@ export type CompositionBucketDto = {
 	othersActiveMs: Int64String,
 };
 
+/**
+ *  工作节奏每小时在工位覆盖均值（v0.2 候选，10 §4.4 之外新增）：该小时落在
+ *  任意 Work Block 覆盖内的毫秒均值（有效记录日分母，含块内短 idle）。与惯性
+ *  强度曲线同轴不同口径：惯性是活跃强度，本点是"在工位"覆盖。
+ */
+export type CoveragePointDto = {
+	localHour: number,
+	avgCoverageMs: Int64String,
+};
+
 /**  字段级安全错误（09 §8.2 `fieldErrors`；message 为中文安全提示）。 */
 export type FieldError = {
 	field: string,
@@ -213,6 +223,7 @@ export type StatsHomeDto = {
 	palette: AppPaletteEntryDto[],
 	hourlyProfile: HourlyPointDto[],
 	inertia: InertiaDto,
+	workPace: WorkPaceDto,
 	milestone: MilestoneDto,
 	monthly: MonthlyPointDto[],
 };
@@ -341,6 +352,24 @@ export type WeeklyPointDto = {
 	isCurrentWeek: boolean,
 	completedRecordedDays: number,
 	currentWeekDailyAvgMs: Int64String | null,
+};
+
+/**
+ *  工作节奏（v0.2 候选：工作惯性卡片融合）：工作 = Work Block 覆盖并集（含块内
+ *  短 idle），未工作 = 24h 补集，两者互补凑满一天；仅有效记录日参与均值。
+ *  reliability 与惯性同门禁（有效日 < 3 → null，此时派生字段全零/空，不得伪造）。
+ *  常见开工/收工只统计"当天窗口内真实覆盖段"（熬夜尾巴不参与开工，收工截到
+ *  24:00），避免熬夜映射把"凌晨开工"/"27:05 开工"式伪值拉进中位数。
+ */
+export type WorkPaceDto = {
+	hourlyCoverageMs: CoveragePointDto[],
+	workRatioPercent: number,
+	commonStartMinutes: number | null,
+	commonEndMinutes: number | null,
+	morningWorkDays: number,
+	effectiveDays: number,
+	totalDays: number,
+	reliability: ReliabilityKind | null,
 };
 
 /**  Writer 状态（schema `agent_runtime.writer_state`）。 */

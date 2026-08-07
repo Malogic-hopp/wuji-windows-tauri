@@ -585,6 +585,39 @@
   fill: var(--chart-app-1);
 }
 
+/* 工作/未工作占比条：工作段主色、未工作段浅色填充（用户要求未工作段可见）。 */
+.inertia-pace {
+  margin-top: var(--space-2);
+}
+
+.inertia-pace__bar {
+  display: flex;
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  /* 未工作段：chart-no-data（浅灰蓝）填充，保证占大头时可见（之前误用不存在的
+     --border-subtle 导致透明）。 */
+  background: var(--chart-no-data);
+}
+
+.inertia-pace__work {
+  display: block;
+  height: 100%;
+  background: var(--chart-app-1);
+}
+
+.inertia-pace__text {
+  margin-top: var(--space-1);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
+.inertia-pace__rest {
+  margin-top: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--text-xs);
+}
+
 /* 惯性底部信息条：紧凑 dim 小字（开工/高峰/收工/午休低谷/有效天数），不用图例色块。 */
 .inertia-info {
   display: flex;

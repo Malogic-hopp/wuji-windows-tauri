@@ -653,6 +653,66 @@ fn hourly_profile_counts_gap_only_day_in_denominator() {
     assert_eq!(nonzero, vec![9, 11]);
 }
 
+// ---- stats_work_pace_days：Work Block 覆盖分钟段（v0.2 候选：工作节奏）----
+
+#[test]
+fn work_pace_days_covers_work_blocks_and_skips_gap_only_days() {
+    let dir = TempDir::new().unwrap();
+    let mut writer = bootstrap(&dir);
+    let tz = writer.schema_meta().reporting_tz().unwrap();
+    let (tx, runtime) = begin_seed(&mut writer);
+    let app_a = seed_app(&tx, "code", T0);
+    let mut seed = Seed {
+        tx: &tx,
+        runtime,
+        seq: 0,
+    };
+    // 07-15：app A 01:00-03:00Z = 本地 09:00-11:00 覆盖 [540,660)。
+    let d15 = T0 - 3 * 86_400_000;
+    seed.session(app_a, d15 + 3_600_000, d15 + 10_800_000, true);
+    // 07-16：仅一条 gap，无 work block（有效日存在但无覆盖）。
+    let d16 = T0 - 2 * 86_400_000;
+    seed.gap_only(d16, d16 + 1_800_000);
+    // 07-17：app A 11:00Z-次日 01:00Z（本地 19:00-次日 09:00，跨午夜块）。
+    // 跨午夜块整体归属开始日 07-17：段 [1140, 1980)（19:00 延续到次日 09:00）。
+    let d17 = T0 - 86_400_000;
+    seed.session(app_a, d17 + 39_600_000, d17 + 90_000_000, true);
+
+    let mut hours = hour_starts_between(d15 + 3_600_000, d15 + 10_800_000);
+    hours.extend(hour_starts_between(d17 + 39_600_000, d17 + 90_000_000));
+    tx.recompute_hours(&tz, &hours).unwrap();
+    tx.recompute_dates(
+        &tz,
+        &[
+            local("2026-07-15"),
+            local("2026-07-16"),
+            local("2026-07-17"),
+            local("2026-07-18"),
+        ],
+        GAP_CAP_MS,
+    )
+    .unwrap();
+    tx.commit().unwrap();
+
+    let mut reader = open_reader(&dir);
+    let (days, effective) = reader
+        .with_snapshot(|snap| snap.stats_work_pace_days(&local("2026-07-15"), &local("2026-07-18")))
+        .unwrap();
+    // 有效日 = 4（07-15/16/17/18 均有 daily_work_metrics 行；gap-only 日与跨午夜块
+    // 的次日都计入——与惯性同一"有行即有效日"口径）。
+    assert_eq!(effective, 4);
+    assert_eq!(days.len(), 4);
+    // DayCoverage 不携带日期，且 Hash 集顺序不定：按内容断言多重集。
+    // 07-17 跨午夜块整体归属开始日 → 段 [1140, 1980)（19:00 延续到次日 09:00），
+    // 07-18 不再出现"凌晨覆盖"（不产生次日凌晨开工）。
+    let mut segs: Vec<&Vec<(u32, u32)>> = days.iter().map(|d| &d.segments).collect();
+    segs.sort();
+    assert_eq!(segs[0], &vec![]); // 07-16 gap-only
+    assert_eq!(segs[1], &vec![]); // 07-18：无独立凌晨块
+    assert_eq!(segs[2], &vec![(540, 660)]); // 07-15 09:00-11:00
+    assert_eq!(segs[3], &vec![(1140, 1980)]); // 07-17 19:00 → 次日 09:00（熬夜尾巴）
+}
+
 // ---- stats_app_totals / stats_app_rows / stats_recorded_dates ----
 
 #[test]

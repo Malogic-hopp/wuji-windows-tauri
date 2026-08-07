@@ -199,3 +199,21 @@ export function formatDeltaMs(msText: Int64String): string {
   const rest = minutes % 60n;
   return rest === 0n ? `${hours.toString()}h` : `${hours.toString()}h${rest.toString()}m`;
 }
+
+/** 当日分钟数 → "HH:MM"（0..1439；1440 边界显示 24:00）。v0.2 候选：休息时段。 */
+export function formatMinutesOfDay(minutes: number): string {
+  const safe = Math.max(0, Math.min(1440, Math.round(minutes)));
+  if (safe >= 1440) return '24:00';
+  const h = Math.floor(safe / 60);
+  const m = safe % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/** 分钟 → 紧凑时长（"45m" / "8h" / "9h30m"）。v0.2 候选：休息时段。 */
+export function formatMinutesDuration(minutes: number): string {
+  const safe = Math.max(0, Math.round(minutes));
+  if (safe < 60) return `${String(safe)}m`;
+  const h = Math.floor(safe / 60);
+  const rest = safe % 60;
+  return rest === 0 ? `${String(h)}h` : `${String(h)}h${String(rest)}m`;
+}

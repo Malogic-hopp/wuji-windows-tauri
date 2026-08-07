@@ -21,6 +21,7 @@ import type {
   TrendPointDto,
   WeeklyPointDto,
   WeekProgressDto,
+  WorkPaceDto,
 } from '../../types/wuji-core';
 
 /** Int64String 品牌（R07：只接受字符串）。 */
@@ -139,6 +140,30 @@ const inertia: InertiaDto = {
   reliability: 'normal',
 };
 
+// v0.2 候选：工作节奏（占比 + 常见工作时段 + 上午利用率），与惯性同窗口/同可靠性门禁。
+export const workPaceFixture = (): WorkPaceDto => ({
+  hourlyCoverageMs: Array.from({ length: 24 }, (_, hour) => ({
+    localHour: hour,
+    avgCoverageMs: i64(String(
+      hour >= 9 && hour < 12 ? 3600000
+        : hour >= 13 && hour < 18 ? 3600000
+          : hour === 8 ? 1800000
+            : hour === 12 || hour === 18 ? 1800000
+              : 0,
+    )),
+  })),
+  // 覆盖 9-12 + 13-18（8h）＋半小时边界 ≈ 8.5h / 24 = 35%。
+  workRatioPercent: 35,
+  commonStartMinutes: 978, // 16:18
+  commonEndMinutes: 1382, // 23:02
+  morningWorkDays: 0,
+  effectiveDays: 11,
+  totalDays: 14,
+  reliability: 'normal',
+});
+
+const workPace = workPaceFixture();
+
 const milestone: MilestoneDto = {
   // 2026-03-01 至 2026-07-17 自然日 139；138 = 几乎每天有记录（口径自洽）。
   totalRecordedDays: i64('138'),
@@ -195,6 +220,7 @@ export const statsHomeFixture: StatsHomeDto = {
   palette,
   hourlyProfile,
   inertia,
+  workPace,
   milestone,
   monthly,
 };
@@ -281,6 +307,19 @@ export const statsHomeEmptyFixture: StatsHomeDto = {
     peakHour: null,
     endHour: null,
     lunchLowestHour: null,
+    effectiveDays: 0,
+    totalDays: 14,
+    reliability: null,
+  },
+  workPace: {
+    hourlyCoverageMs: Array.from({ length: 24 }, (_, hour) => ({
+      localHour: hour,
+      avgCoverageMs: i64('0'),
+    })),
+    workRatioPercent: 0,
+    commonStartMinutes: null,
+    commonEndMinutes: null,
+    morningWorkDays: 0,
     effectiveDays: 0,
     totalDays: 14,
     reliability: null,

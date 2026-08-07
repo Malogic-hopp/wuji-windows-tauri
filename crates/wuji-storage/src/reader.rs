@@ -3,7 +3,7 @@
 //! Reader 以 read-only + query_only 打开并验证 schema_version（09 §7.3）；
 //! 所有时长/ID/毫秒以 Int64String 返回。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use chrono::NaiveDate;
@@ -21,7 +21,9 @@ use crate::models::{
     RuntimeRow, SchemaMeta, parse_activity_state, parse_capture_state, parse_gap_kind,
     parse_process_state, parse_row_status, parse_writer_state,
 };
-use crate::timeutil::{local_date_of, local_day_range_utc_ms, same_moment_cutoff_utc_ms};
+use crate::timeutil::{
+    local_date_of, local_day_range_utc_ms, local_fields, same_moment_cutoff_utc_ms,
+};
 
 #[derive(Debug)]
 pub struct Reader {
@@ -975,6 +977,111 @@ impl ReaderSnapshot<'_> {
             }
         }
         Ok((per_hour, effective_days))
+    }
+
+    /// 工作节奏（v0.2 候选：惯性卡片融合）：窗口内每个有效日的 Work Block 覆盖
+    /// 分钟段（0..1440 半开区间，按 reporting time zone 归位；跨午夜块裁剪到各
+    /// 日）。有效日口径与 `stats_hourly_profile` 相同（daily_work_metrics 有行）。
+    /// 含 open 块（今日进行中覆盖按当前 end_at 统计，随轮询更新，与状态轮询的
+    /// "今日 provisional" 口径一致）。返回 (每日覆盖段（升序去重日期）, 有效日数)。
+    pub fn stats_work_pace_days(
+        &self,
+        start: &LocalDate,
+        end: &LocalDate,
+    ) -> Result<(Vec<wuji_core::stats::DayCoverage>, u32)> {
+        let tz = self.reporting_tz()?;
+        let mut effective: HashSet<String> = HashSet::new();
+        {
+            let mut stmt = self.tx.prepare(
+                "SELECT local_date FROM daily_work_metrics
+                 WHERE local_date >= ?1 AND local_date <= ?2",
+            )?;
+            let iter = stmt.query_map(params![start.as_str(), end.as_str()], |row| {
+                row.get::<_, String>(0)
+            })?;
+            for row in iter {
+                effective.insert(row?);
+            }
+        }
+        if effective.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let (win_start, _) = local_day_range_utc_ms(&tz, start)?;
+        let (_, win_end) = local_day_range_utc_ms(&tz, end)?;
+        let mut by_date: BTreeMap<String, Vec<(u32, u32)>> = BTreeMap::new();
+        {
+            let mut stmt = self.tx.prepare(
+                "SELECT start_at_utc_ms, end_at_utc_ms FROM work_blocks
+                 WHERE end_at_utc_ms > ?1 AND start_at_utc_ms < ?2",
+            )?;
+            let iter = stmt.query_map(params![win_start, win_end], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in iter {
+                let (block_start, block_end) = row?;
+                let block_end = block_end.max(block_start);
+                // 归属日规则（用户语义）：凌晨（本地 00:00-06:00）开始的块不可能是
+                // "新一天开工"——一律是前一天熬夜的延续，整体归属前一天（即使中间
+                // Agent 未运行而断开，也按熬夜归前日）。非凌晨块归属块开始的本地日，
+                // 跨午夜延伸段允许 end > 1440（防御上限 2880 分钟）。
+                let (start_date_raw, start_hour, _) = local_fields(&tz, block_start)?;
+                let target_date = if start_hour < 6 {
+                    let prev = NaiveDate::parse_from_str(&start_date_raw, "%Y-%m-%d")
+                        .map_err(|_| {
+                            StorageError::new(
+                                wuji_core::error::SafeErrorCode::InternalSafeError,
+                                "日期解析失败",
+                            )
+                        })?
+                        .pred_opt()
+                        .ok_or_else(|| {
+                            StorageError::new(
+                                wuji_core::error::SafeErrorCode::InternalSafeError,
+                                "日期越界",
+                            )
+                        })?;
+                    prev.format("%Y-%m-%d").to_string()
+                } else {
+                    start_date_raw
+                };
+                if !effective.contains(&target_date)
+                    || target_date.as_str() < start.as_str()
+                    || target_date.as_str() > end.as_str()
+                {
+                    continue;
+                }
+                let local = LocalDate::parse(&target_date)
+                    .map_err(|e| StorageError::new(e.code, e.message))?;
+                let (day_start, _day_end) = local_day_range_utc_ms(&tz, &local)?;
+                let clip_start = block_start.max(day_start).max(win_start);
+                let clip_end = block_end.min(win_end).max(clip_start);
+                if clip_end > clip_start {
+                    let sm = ((clip_start - day_start) / 60_000) as u32;
+                    let em = (((clip_end - day_start) / 60_000) as u32).min(2880);
+                    if em > sm {
+                        by_date.entry(target_date).or_default().push((sm, em));
+                    }
+                }
+            }
+        }
+        // 升序合并重叠/邻接段（防御：块理论不重叠，但裁剪后仍保证不变量）。
+        let mut out: Vec<wuji_core::stats::DayCoverage> = Vec::new();
+        for date in effective.iter() {
+            let mut segs = by_date.get(date).cloned().unwrap_or_default();
+            segs.sort_unstable();
+            let mut merged: Vec<(u32, u32)> = Vec::new();
+            for (s, e) in segs {
+                if let Some(last) = merged.last_mut()
+                    && s <= last.1
+                {
+                    last.1 = last.1.max(e);
+                    continue;
+                }
+                merged.push((s, e));
+            }
+            out.push(wuji_core::stats::DayCoverage { segments: merged });
+        }
+        Ok((out, effective.len() as u32))
     }
 
     /// 全部有记录日期（升序去重；里程碑连续天数输入）。
